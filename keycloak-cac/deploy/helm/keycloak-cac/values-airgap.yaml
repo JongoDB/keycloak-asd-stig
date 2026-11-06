@@ -1,0 +1,6 @@
+# Air-gapped cluster: CRLs from a PVC your offline process refreshes; no OCSP.
+crl:
+  mode: file
+  refreshSeconds: 3600
+  volume: {persistentVolumeClaim: {claimName: dod-crls, readOnly: true}}
+ocsp: false

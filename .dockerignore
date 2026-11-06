@@ -1,0 +1,7 @@
+.git
+evals
+lab-evidence
+*.skill
+**/__pycache__
+keycloak-asd-stig/evals
+keycloak-asd-stig/assets/extension/src

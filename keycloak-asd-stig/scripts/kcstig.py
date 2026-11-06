@@ -32,6 +32,7 @@ DEFAULTS = {
     "x509": {
         "mapping_attribute": "cac_upn",
         "mapping_source": "Subject's Alternative Name otherName (UPN)",
+        "regex": "(.*?)(?:$)",          # used by the "Match SubjectDN using regular expression" sources
         "ocsp": True, "ocsp_responder_uri": "",
         "crl": True, "crl_files": ["crl.pem"], "crldp": False,
         "key_usage": "digitalSignature", "extended_key_usage": "",
@@ -50,6 +51,7 @@ DEFAULTS = {
     "clients": [],
     "users": [],
     "admin": {"mfa": "x509", "mapping_attribute": "alt_token_upn", "users": [],
+              "mapping_source": "Subject's Alternative Name otherName (UPN)", "regex": "(.*?)(?:$)",
               "automation_client": "stig-automation", "allow_emergency_password": False},
 }
 
@@ -215,13 +217,15 @@ def realm_settings(p, *, admin_realm=False, event_types=None, extension=True):
         rep["displayName"] = p["realm"]["display_name"]
     return rep
 
-def x509_config(p, attr):
+def x509_config(p, attr, admin_realm=False):
     x = p["x509"]
+    # Alt Tokens identify admins by their own UPN, whatever the user realm maps on.
+    src = p["admin"] if admin_realm else x
     cfg = {
-        "x509-cert-auth.mapping-source-selection": x["mapping_source"],
+        "x509-cert-auth.mapping-source-selection": src["mapping_source"],
         "x509-cert-auth.mapper-selection": "Custom Attribute Mapper",
         "x509-cert-auth.mapper-selection.user-attribute-name": attr,
-        "x509-cert-auth.regular-expression": "(.*?)(?:$)",
+        "x509-cert-auth.regular-expression": src["regex"],
         "x509-cert-auth.timestamp-validation-enabled": "true",
         "x509-cert-auth.crl-checking-enabled": str(bool(x["crl"])).lower(),
         "x509-cert-auth.crldp-checking-enabled": str(bool(x["crldp"])).lower(),
@@ -264,7 +268,7 @@ def browser_flow(p, *, admin_realm):
     single = (use_x509 != use_pw)
     if use_x509:
         authn.append(("exec", "auth-x509-client-username-form", "REQUIRED" if single else "ALTERNATIVE",
-                      {"alias": (prefix + " x509").lower().replace(" ", "-"), "config": x509_config(p, attr)}))
+                      {"alias": (prefix + " x509").lower().replace(" ", "-"), "config": x509_config(p, attr, admin_realm)}))
     if use_pw:
         authn.append(("flow", prefix + " - Password and MFA", "REQUIRED" if single else "ALTERNATIVE", [
             ("exec", "auth-username-password-form", "REQUIRED", None),
@@ -294,7 +298,9 @@ def user_profile_attributes(p, *, admin_realm):
     if admin_realm:
         a(p["admin"]["mapping_attribute"], "Alt Token certificate UPN", ["admin"], ["admin"])
     else:
-        a(p["x509"]["mapping_attribute"], "CAC certificate UPN (EDIPI@mil)", ["admin"], ["admin"])
+        label = {"cac_upn": "CAC certificate UPN (EDIPI@mil)", "cac_edipi": "DoD ID number (EDIPI)",
+                 "cac_cn": "CAC certificate common name", "cac_subject_dn": "CAC certificate subject DN"}
+        a(p["x509"]["mapping_attribute"], label.get(p["x509"]["mapping_attribute"], "CAC certificate identity"), ["admin"], ["admin"])
     a("account_type", "Account type (permanent | temporary | emergency)", ["admin"], ["admin"],
       validations={"options": {"options": ["permanent", "temporary", "emergency"]}},
       annotations={"inputType": "select"})
@@ -416,6 +422,11 @@ class KC:
         self.url = url.rstrip("/")
         self.admin_realm = admin_realm
         self.ctx = ssl.create_default_context(cafile=cacert) if cacert else ssl.create_default_context()
+        host = urllib.parse.urlparse(self.url).hostname
+        if os.environ.get("KCSTIG_LOOPBACK_NOVERIFY") == "1" and host in ("127.0.0.1", "localhost", "::1"):
+            # In-container automation over loopback only (keycloak-cac image): the server certificate names the
+            # public host, not 127.0.0.1. Never honoured for any other host.
+            self.ctx.check_hostname = False; self.ctx.verify_mode = ssl.CERT_NONE
         self.token = None
 
     def login(self):
@@ -514,8 +525,13 @@ def server_capabilities(kc):
 
 def ensure_realm(kc, name):
     if kc.api("GET", "/realms/%s" % q(name), ok404=True) is None:
-        kc.api("POST", "/realms", {"realm": name, "enabled": True})
-        log("created realm %s" % name)
+        try:
+            kc.api("POST", "/realms", {"realm": name, "enabled": True})
+            log("created realm %s" % name)
+        except KCError as e:
+            if " 409 " not in str(e):
+                raise
+            log("realm %s was just created by another node" % name)   # replicas applying at the same time
 
 def build_flow(kc, realm, spec):
     alias, children = spec
@@ -562,6 +578,11 @@ def ensure_user_profile(kc, realm, attrs):
             for i, cur in enumerate(up["attributes"]):
                 if cur["name"] == a["name"] and cur.get("permissions") != a["permissions"]:
                     up["attributes"][i]["permissions"] = a["permissions"]; changed = True
+    for cur in up["attributes"]:
+        # Card holders are identified by the certificate, not by e-mail: an account provisioned with only an
+        # EDIPI/UPN must not be stopped at "update profile" (the STIG does not require an e-mail address).
+        if cur["name"] == "email" and cur.get("required"):
+            cur.pop("required"); changed = True
     if up.get("unmanagedAttributePolicy") == "ENABLED":
         up.pop("unmanagedAttributePolicy"); changed = True  # users must not set arbitrary attributes
     if changed:

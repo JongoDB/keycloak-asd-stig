@@ -42,8 +42,20 @@ are in `references/keycloak-notes.md` - read it before changing generator code o
 
 ## Workflow
 
+### 0. Default: the single `keycloak-cac` image (v2)
+For a new deployment, use the self-configuring image in the repository's `keycloak-cac/` directory
+(github.com/JongoDB/keycloak-asd-stig; clone it if only this skill is installed). It is ONE container configured only with env
+vars - DoD trust anchors baked at build (or dropped in offline), CRL `online|file|ocsp`, the realm applied by
+the container itself, no sidecars/jobs - and it runs the same on Compose, Helm/Kubernetes, ECS (`keycloak-cac/deploy/`).
+Per application you only add a client JSON (`CAC_CLIENTS_DIR`) and point the app at
+`<CAC_PUBLIC_URL>/realms/<CAC_REALM>` as its OIDC issuer. Read `keycloak-cac/README.md` (env reference, username
+sources upn|edipi|cn|subject-dn, what it refuses). The steps below still apply for profile semantics (the
+container's env becomes a kcstig profile; `CAC_PROFILE_JSON` overlays any field), verification (`verify`, e2e),
+integration, findings and crosswalk. Use the multi-container v1 layout (`assets/deploy`, steps 3-4) only for an
+existing Keycloak or when the user asks for it.
+
 ### 1. Establish the situation (ask only for what you cannot infer)
-- **Target**: new deployment from the skill's images (default; Compose, Helm, podman - `references/deployment.md`),
+- **Target**: new deployment from the `keycloak-cac` image (default, step 0), the v1 images (Compose, Helm, podman - `references/deployment.md`),
   or an existing Keycloak (then its image still needs the theme, the extension jar and the build-time options
   `KC_HTTPS_CLIENT_AUTH=request`, `KC_LOG_MDC_ENABLED=true`; reuse `assets/deploy/image/Containerfile` with that
   image as `BASE_IMAGE`).

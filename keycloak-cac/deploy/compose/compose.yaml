@@ -1,0 +1,29 @@
+# Production shape: keycloak-cac only (bring your own PostgreSQL, TLS certificate and secrets).
+#   cp keycloak-cac.env.example keycloak-cac.env   # edit
+#   mkdir -p secrets tls clients && put the files listed below there
+#   docker compose up -d          (podman compose / podman-compose work the same)
+# Scale out: docker compose up -d --scale keycloak=2  (nodes find each other through the database, jdbc-ping)
+name: keycloak-cac
+services:
+  keycloak:
+    image: ${KEYCLOAK_CAC_IMAGE:-keycloak-cac:26.8.2}
+    env_file: keycloak-cac.env
+    environment:
+      KC_HTTPS_CERTIFICATE_FILE: /tls/tls.crt          # server certificate (chain included) for CAC_PUBLIC_URL
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /tls/tls.key
+      KC_DB_PASSWORD_FILE: /run/secrets/db_password
+      KC_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_admin_password   # first start only
+      CAC_AUTOMATION_SECRET_FILE: /run/secrets/automation_secret                # keep it stable
+      CAC_CLIENTS_DIR: /clients                                                  # one <app>.json per relying app
+    ports: ["${CAC_PORT:-443}:8443"]
+    mem_limit: 8g          # ~4.9 GiB measured with all 17 DoD CRLs loaded
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./tls:/tls:ro
+      - ./secrets:/run/secrets:ro
+      - ./clients:/clients:ro
+      - /opt/keycloak/data   # per-replica scratch (anchors, CRLs, Keycloak tmp); all state lives in PostgreSQL
+    restart: unless-stopped

@@ -1,0 +1,36 @@
+# One-command lab: keycloak-cac + PostgreSQL, mock CAC PKI generated inside the container.
+#   docker compose -f compose.lab.yaml up -d        (or: podman compose ...)
+#   docker compose -f compose.lab.yaml cp keycloak:/opt/keycloak/data/cac/lab/users ./lab-cards
+#   import lab-cards/doe.john.p12 (password: changeit) into a browser, open https://localhost:8443/realms/dod-cac/account
+# Lab mode only: never expose it beyond your machine. The mock CA it trusts is generated inside the container.
+name: keycloak-cac-lab
+services:
+  db:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: lab-only-db-password
+    volumes: [db:/var/lib/postgresql/data]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U keycloak"], interval: 5s, retries: 20}
+  keycloak:
+    image: ${KEYCLOAK_CAC_IMAGE:-keycloak-cac:26.8.2}
+    depends_on: {db: {condition: service_healthy}}
+    ports: ["${CAC_PORT:-8443}:8443"]
+    environment:
+      CAC_LAB_MODE: "true"
+      KC_HOSTNAME: https://localhost:${CAC_PORT:-8443}
+      KC_DB_URL: jdbc:postgresql://db/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: lab-only-db-password
+      KC_BOOTSTRAP_ADMIN_USERNAME: bootstrap
+      KC_BOOTSTRAP_ADMIN_PASSWORD: lab-only-bootstrap-password
+      # Your real CAC in the lab too: trust the baked DoD bundle as well and map your card's UPN.
+      # CAC_LAB_TRUST_DOD: "true"
+      # CAC_USERS: "me=1234567890123456@mil"
+      CAC_CLIENTS_JSON: >-
+        [{"client_id":"demo","type":"oidc-public",
+          "redirect_uris":["https://localhost:${CAC_PORT:-8443}/realms/dod-cac/account/"],
+          "post_logout_redirect_uris":["https://localhost:${CAC_PORT:-8443}/realms/dod-cac/account/"]}]
+    volumes: [cac:/opt/keycloak/data]
+volumes: {db: {}, cac: {}}

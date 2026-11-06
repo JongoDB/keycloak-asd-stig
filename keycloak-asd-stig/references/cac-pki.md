@@ -69,3 +69,11 @@ spi-x509cert-lookup--nginx--certificate-chain-length=10
 spi-x509cert-lookup--nginx--trust-proxy-verification=false   # keep false: Keycloak re-validates
 ```
 Strip any client-supplied copy of that header at the proxy, and restrict Keycloak's port to the proxy only.
+
+## Keycloak caches CRLs until their nextUpdate (verified 26.8.2)
+Keycloak's CRL storage keeps each loaded CRL until the CRL's own `nextUpdate` (`cacheTime` only extends it),
+about 7 days for DoD CRLs. Refreshing the files on disk is therefore not enough: newly revoked cards would still
+pass the CRL check until then (OCSP, when reachable, still catches them). After every refresh call
+`POST /admin/realms/<realm>/clear-crl-cache` (cluster-wide). The `keycloak-cac` image does this automatically
+after each refresh; the v1 `pki-refresh` sidecar does NOT, so with v1 schedule that call yourself (the
+automation service account can make it) or rely on OCSP for timely revocation.

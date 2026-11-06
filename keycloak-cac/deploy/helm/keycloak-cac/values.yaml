@@ -1,0 +1,46 @@
+image:
+  repository: registry.example.mil/iam/keycloak-cac
+  tag: "26.8.2"
+  pullPolicy: IfNotPresent
+replicas: 2                      # nodes cluster through the database (jdbc-ping); every replica applies the realm idempotently
+
+publicUrl: https://sso.example.mil   # what browsers and relying apps use (OIDC issuer = <publicUrl>/realms/<realm>)
+realm: dod-cac
+realmDisplayName: DoD CAC Login
+usernameSource: upn              # upn | edipi | cn | subject-dn
+crl:
+  mode: online                   # online | file (air-gapped) | ocsp
+  refreshSeconds: 21600
+  # file mode: a volume your offline process keeps fresh (every CRL is signature-checked before use)
+  volume: {}                     # e.g. {persistentVolumeClaim: {claimName: dod-crls}} or {configMap: {name: dod-crls}}
+ocsp: null                       # null = default for the mode (on for online/ocsp, off for file)
+admins: ""                       # Alt Token admins: "user=altUPN,user2=altUPN2"
+users: ""                        # card holders: "user=<value of usernameSource>,..."
+clients: {}                      # one entry per relying app: {payroll: {client_id: payroll, type: oidc-public, redirect_uris: [...]}}
+extraAnchors: {}                 # extra CA certificates (PEM) to trust besides the baked DoD bundle: {name.pem: "-----BEGIN..."}
+profileOverlay: {}               # any kcstig profile field, e.g. {sessions: {max_hours: 10}}
+
+secrets:                         # existing Secrets (create them with your secret manager / sealed-secrets / ESO)
+  tls: keycloak-cac-tls          # kubernetes.io/tls: tls.crt (chain) + tls.key for publicUrl's host
+  db: keycloak-cac-db            # key: password
+  bootstrap: keycloak-cac-bootstrap   # key: password (first start only)
+  automation: keycloak-cac-automation # key: secret (>= 24 chars, keep stable)
+db:
+  url: jdbc:postgresql://postgres.iam.svc:5432/keycloak?sslmode=verify-full
+  username: keycloak
+bootstrapAdminUsername: bootstrap
+
+service:
+  type: LoadBalancer             # CAC needs TLS to reach Keycloak intact: L4/TCP passthrough (NLB, MetalLB, ...)
+  port: 443
+  annotations: {}
+extraEnv: []                     # e.g. [{name: HTTPS_PROXY, value: http://proxy:3128}]
+resources:                       # measured: ~4.9 GiB with all 17 DoD CRLs loaded (~140 MB on disk), ~0.6 GiB without
+  requests: {cpu: "1", memory: 6Gi}
+  limits: {memory: 8Gi}          # file mode with only your users' issuing-CA CRLs needs far less
+dataSizeLimit: 1Gi
+podDisruptionBudget: {minAvailable: 1}
+networkPolicy: {enabled: true}
+nodeSelector: {}
+tolerations: []
+affinity: {}

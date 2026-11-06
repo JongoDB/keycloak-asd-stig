@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kcc.name" . }}
+  labels: {{- include "kcc.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels: {{- include "kcc.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "kcc.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ toJson .Values | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 0, fsGroup: 0, seccompProfile: {type: RuntimeDefault}}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: keycloak
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        env:
+        - {name: CAC_PUBLIC_URL, value: {{ .Values.publicUrl | quote }}}
+        - {name: CAC_REALM, value: {{ .Values.realm | quote }}}
+        - {name: CAC_REALM_DISPLAY_NAME, value: {{ .Values.realmDisplayName | quote }}}
+        - {name: CAC_USERNAME_SOURCE, value: {{ .Values.usernameSource | quote }}}
+        - {name: CRL_MODE, value: {{ .Values.crl.mode | quote }}}
+        - {name: CAC_CRL_REFRESH_SECONDS, value: {{ .Values.crl.refreshSeconds | quote }}}
+        {{- if eq .Values.crl.mode "file" }}
+        - {name: CAC_CRL_DIR, value: /crl}
+        {{- end }}
+        {{- if not (kindIs "invalid" .Values.ocsp) }}
+        - {name: CAC_OCSP, value: {{ .Values.ocsp | quote }}}
+        {{- end }}
+        - {name: CAC_ADMINS, value: {{ .Values.admins | quote }}}
+        - {name: CAC_USERS, value: {{ .Values.users | quote }}}
+        - {name: CAC_CLIENTS_DIR, value: /clients}
+        {{- if .Values.extraAnchors }}
+        - {name: CAC_EXTRA_ANCHORS_DIR, value: /extra-anchors}
+        {{- end }}
+        {{- if .Values.profileOverlay }}
+        - {name: CAC_PROFILE_JSON, value: {{ toJson .Values.profileOverlay | quote }}}
+        {{- end }}
+        - {name: KC_HTTPS_CERTIFICATE_FILE, value: /run/secrets/tls/tls.crt}
+        - {name: KC_HTTPS_CERTIFICATE_KEY_FILE, value: /run/secrets/tls/tls.key}
+        - {name: KC_DB_URL, value: {{ .Values.db.url | quote }}}
+        - {name: KC_DB_USERNAME, value: {{ .Values.db.username | quote }}}
+        - {name: KC_DB_PASSWORD_FILE, value: /run/secrets/db/password}
+        - {name: KC_BOOTSTRAP_ADMIN_USERNAME, value: {{ .Values.bootstrapAdminUsername | quote }}}
+        - {name: KC_BOOTSTRAP_ADMIN_PASSWORD_FILE, value: /run/secrets/bootstrap/password}
+        - {name: CAC_AUTOMATION_SECRET_FILE, value: /run/secrets/automation/secret}
+        {{- with .Values.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        ports:
+        - {name: https, containerPort: 8443}
+        - {name: management, containerPort: 9000}
+        - {name: jgroups, containerPort: 7800}
+        # ready = Keycloak ready AND the STIG realm applied AND revocation data loaded
+        startupProbe: {exec: {command: ["/opt/keycloak-cac/bin/cac-entrypoint.sh", "health"]}, periodSeconds: 10, timeoutSeconds: 10, failureThreshold: 60}
+        readinessProbe: {exec: {command: ["/opt/keycloak-cac/bin/cac-entrypoint.sh", "health"]}, periodSeconds: 15, timeoutSeconds: 10}
+        livenessProbe: {httpGet: {scheme: HTTPS, path: /health/live, port: 9000}, periodSeconds: 20, failureThreshold: 6}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: [ALL]}
+        resources: {{- toYaml .Values.resources | nindent 10 }}
+        volumeMounts:
+        - {name: data, mountPath: /opt/keycloak/data}
+        - {name: tmp, mountPath: /tmp}
+        - {name: tls, mountPath: /run/secrets/tls, readOnly: true}
+        - {name: db, mountPath: /run/secrets/db, readOnly: true}
+        - {name: bootstrap, mountPath: /run/secrets/bootstrap, readOnly: true}
+        - {name: automation, mountPath: /run/secrets/automation, readOnly: true}
+        - {name: clients, mountPath: /clients, readOnly: true}
+        {{- if .Values.extraAnchors }}
+        - {name: extra-anchors, mountPath: /extra-anchors, readOnly: true}
+        {{- end }}
+        {{- if eq .Values.crl.mode "file" }}
+        - {name: crl, mountPath: /crl, readOnly: true}
+        {{- end }}
+      volumes:
+      - {name: data, emptyDir: {sizeLimit: {{ .Values.dataSizeLimit }}}}
+      - {name: tmp, emptyDir: {}}
+      - {name: tls, secret: {secretName: {{ .Values.secrets.tls }}}}
+      - {name: db, secret: {secretName: {{ .Values.secrets.db }}}}
+      - {name: bootstrap, secret: {secretName: {{ .Values.secrets.bootstrap }}}}
+      - {name: automation, secret: {secretName: {{ .Values.secrets.automation }}}}
+      - {name: clients, configMap: {name: {{ include "kcc.name" . }}-clients}}
+      {{- if .Values.extraAnchors }}
+      - {name: extra-anchors, configMap: {name: {{ include "kcc.name" . }}-anchors}}
+      {{- end }}
+      {{- if eq .Values.crl.mode "file" }}
+      {{- if not .Values.crl.volume }}{{ fail "crl.mode=file needs crl.volume (a PVC/ConfigMap/... holding the CRLs)" }}{{ end }}
+      - name: crl
+        {{- toYaml .Values.crl.volume | nindent 8 }}
+      {{- end }}

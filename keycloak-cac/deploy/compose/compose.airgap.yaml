@@ -1,0 +1,13 @@
+# Air-gapped override: CRLs come from a directory that your offline process refreshes (e.g. daily sneakernet,
+# a cross-domain solution drop, or a sync job). Every CRL is signature-checked against the trust anchors before
+# use, and re-read every CAC_CRL_REFRESH_SECONDS.
+#   docker compose -f compose.yaml -f compose.airgap.yaml up -d
+services:
+  keycloak:
+    environment:
+      CRL_MODE: file
+      CAC_CRL_DIR: /crl
+      CAC_OCSP: "false"
+      CAC_CRL_REFRESH_SECONDS: "3600"
+    volumes:
+      - ./crl:/crl:ro

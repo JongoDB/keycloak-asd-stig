@@ -1,0 +1,6 @@
+keycloak-cac {{ .Chart.AppVersion }}: realm "{{ .Values.realm }}" at {{ .Values.publicUrl }}
+  OIDC issuer for your apps:  {{ .Values.publicUrl }}/realms/{{ .Values.realm }}
+  Pods are Ready only after the STIG realm is applied and revocation data ({{ .Values.crl.mode }}) is loaded.
+  Logs:  kubectl logs -l app.kubernetes.io/instance={{ .Release.Name }} | grep keycloak-cac
+CAC needs end-to-end TLS to Keycloak: expose the Service through an L4/TCP passthrough load balancer, not an
+L7 ingress that terminates TLS (or build the image with X509_LOOKUP=nginx for edge verification).

@@ -1,0 +1,132 @@
+{
+  "family": "keycloak-cac",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "networkMode": "awsvpc",
+  "cpu": "2048",
+  "memory": "8192",
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  },
+  "executionRoleArn": "arn:aws-us-gov:iam::111122223333:role/keycloak-cac-execution",
+  "containerDefinitions": [
+    {
+      "name": "keycloak",
+      "image": "111122223333.dkr.ecr.us-gov-west-1.amazonaws.com/iam/keycloak-cac:26.8.2",
+      "essential": true,
+      "readonlyRootFilesystem": true,
+      "user": "1000",
+      "portMappings": [
+        {
+          "containerPort": 8443,
+          "protocol": "tcp",
+          "name": "https"
+        },
+        {
+          "containerPort": 7800,
+          "protocol": "tcp",
+          "name": "jgroups"
+        }
+      ],
+      "environment": [
+        {
+          "name": "CAC_PUBLIC_URL",
+          "value": "https://sso.example.mil"
+        },
+        {
+          "name": "CAC_REALM",
+          "value": "dod-cac"
+        },
+        {
+          "name": "CAC_USERNAME_SOURCE",
+          "value": "upn"
+        },
+        {
+          "name": "CRL_MODE",
+          "value": "online"
+        },
+        {
+          "name": "CAC_ADMINS",
+          "value": "smith.alex.adm=3456789012.alt@mil"
+        },
+        {
+          "name": "KC_DB_URL",
+          "value": "jdbc:postgresql://keycloak.cluster-xxxx.us-gov-west-1.rds.amazonaws.com:5432/keycloak?sslmode=verify-full"
+        },
+        {
+          "name": "KC_DB_USERNAME",
+          "value": "keycloak"
+        },
+        {
+          "name": "KC_BOOTSTRAP_ADMIN_USERNAME",
+          "value": "bootstrap"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "KC_DB_PASSWORD",
+          "valueFrom": "arn:aws-us-gov:secretsmanager:us-gov-west-1:111122223333:secret:keycloak-cac/db-password"
+        },
+        {
+          "name": "KC_BOOTSTRAP_ADMIN_PASSWORD",
+          "valueFrom": "arn:aws-us-gov:secretsmanager:us-gov-west-1:111122223333:secret:keycloak-cac/bootstrap-password"
+        },
+        {
+          "name": "CAC_AUTOMATION_SECRET",
+          "valueFrom": "arn:aws-us-gov:secretsmanager:us-gov-west-1:111122223333:secret:keycloak-cac/automation-secret"
+        },
+        {
+          "name": "CAC_TLS_CERT_PEM",
+          "valueFrom": "arn:aws-us-gov:secretsmanager:us-gov-west-1:111122223333:secret:keycloak-cac/tls-crt"
+        },
+        {
+          "name": "CAC_TLS_KEY_PEM",
+          "valueFrom": "arn:aws-us-gov:secretsmanager:us-gov-west-1:111122223333:secret:keycloak-cac/tls-key"
+        },
+        {
+          "name": "CAC_CLIENTS_JSON",
+          "valueFrom": "arn:aws-us-gov:ssm:us-gov-west-1:111122223333:parameter/keycloak-cac/clients"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "data",
+          "containerPath": "/opt/keycloak/data"
+        },
+        {
+          "sourceVolume": "tmp",
+          "containerPath": "/tmp"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD",
+          "/opt/keycloak-cac/bin/cac-entrypoint.sh",
+          "health"
+        ],
+        "interval": 15,
+        "timeout": 10,
+        "retries": 4,
+        "startPeriod": 240
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/iam/keycloak-cac",
+          "awslogs-region": "us-gov-west-1",
+          "awslogs-stream-prefix": "kc"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "data"
+    },
+    {
+      "name": "tmp"
+    }
+  ]
+}
