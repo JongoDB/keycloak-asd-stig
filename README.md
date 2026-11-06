@@ -13,6 +13,7 @@ application that uses this login.
 | `keycloak-asd-stig.skill` | The packaged skill. Install it by unzipping into `~/.claude/skills/`. |
 | `kc-cac-setup/` | `kc-cac-setup.sh`: a self-contained, one-command local CAC test stack (Docker or Podman). The README is the runbook. `build.sh` rebuilds it from `header.sh` plus the skill. |
 | `lab-evidence/` | Lab results: verify reports, screenshots, strict-FIPS runs, SBOMs, deployment notes, the 800-53 Rev 5 crosswalk (.md/.csv). |
+| `docs/integrate-cac-in-your-app.md` | **Start here** for adding CAC login to another app: how to install the skill and a fill-in prompt for Claude Code. |
 | `docs/keycloak-gateway-integration-prompt.md` | A prompt for putting apps behind the hardened oauth2-proxy gateway. |
 | `evals/` | Skill-creator eval runs (iterations 1–4, with and without the skill) and the HTML viewers. Iteration 4: 42/42 with the skill, 90% without. |
 
