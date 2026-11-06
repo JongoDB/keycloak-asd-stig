@@ -1,0 +1,21 @@
+PASS  DoD banner gate on login page                  V-222434 V-222435                  login-login
+PASS  CAC (X.509 UPN) login -> authorization code    V-222524 V-222525 V-222552 V-222526 pages=['login-login-x509-info', 'login-login-x509-info']
+PASS  No password/OTP prompted on CAC path           V-222526                           
+PASS  Refresh token rotation (single use)            V-222582                           
+PASS  previous_login claim on subsequent logon       V-222437                           previous_login=2026-11-05T21:03:57.007Z
+PASS  SSO identity cookie is a browser-session cookie V-222578                           cookies with expiry: ['KEYCLOAK_SESSION']
+PASS  SSO cookies carry Secure                       V-222576                           insecure=[]
+PASS  Logout terminates IdP session                  V-222391 V-222578                  after logout -> login-login-x509-info
+PASS  Revoked certificate rejected (CRL/OCSP)        V-222550 V-222553                  pages=['login-login', 'login-login', "stuck:login-login:Certificate validation's failed. Certificate revoked or incorrect."]
+PASS  Unmapped certificate gets no access            V-222522 V-222552                  pages=['login-login', 'login-login', "stuck:login-login:X509 certificate authentication's failed. Invalid user"]
+PASS  Temporary password forces immediate change     V-222547                           pages=['login-terms', 'login-login-config-totp', 'login-login-update-password']
+PASS  Password path requires OTP enrolment           V-222526 V-222530                  
+PASS  Correct password alone does not grant access   V-222526                           login-login-otp
+PASS  OTP code is not reusable                       V-222530 V-222531                  login-login-otp 
+PASS  Password change within 24h blocked             V-222544                           Password was changed too recently. It cannot be changed again until 24 hours have passed since the last change (DoD minimum password lifetime).
+PASS  Concurrent session limit enforced              V-222387                           3 of 4 logins succeeded; last pages=['login-login-x509-info', 'login-login-x509-info', 'error:']
+PASS  Admin console via Alt Token                    V-222523                           pages=['login-login-x509-info', 'login-login-x509-info']
+PASS  Everyday CAC cannot reach admin console        V-222523                           pages=['error', 'error:']
+PASS  Account locked after 3 failures (4th correct fails) V-222432                           
+
+19/19 passed

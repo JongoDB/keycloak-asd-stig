@@ -1,0 +1,9 @@
+schema_version: "1.1"
+name: assess-noncompliant-realm-export
+expected_outcome: |
+  findings.md lists the real ASD STIG violations in the export with correct vuln IDs and CAT levels:
+  30 min idle (V-222389), no brute-force lockout (V-222432, CAT I), 8-char password (V-222536, CAT I),
+  remember-me (V-222578), argon2 hashing / FIPS, password grant + implicit enabled, offline_access by default,
+  self-registration, no MFA/CAC in the browser flow (V-222526/V-222524), no banner (V-222434), and gives the concrete fix for each.
+context:
+  scaffold_script: place-files.sh

@@ -1,0 +1,2694 @@
+{
+ "benchmark": "ASD STIG V6R4",
+ "keycloak_version_tested": "26.8.2",
+ "dispositions": {
+  "KC": "Satisfied by Keycloak configuration this skill applies (automated check)",
+  "KC-EXT": "Satisfied using bundled stig-extensions.jar (automated check)",
+  "SHARED": "Keycloak part automated; relying app/platform must also act",
+  "PLATFORM": "Deployment / infrastructure responsibility",
+  "APP": "Relying application's own code/design",
+  "PROCESS": "Organizational procedure / documentation",
+  "NA-COND": "Usually Not Applicable; condition stated"
+ },
+ "controls": {
+  "V-222387": {
+   "disposition": "KC",
+   "implementation": "Browser flow ends with the 'user-session-limits' authenticator (userRealmLimit=profile.sessions.max_per_user, behavior=Deny new session).",
+   "checks": [
+    "flow.session_limits"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222388": {
+   "disposition": "SHARED",
+   "implementation": "Keycloak clears its AUTH_SESSION_ID/KEYCLOAK_IDENTITY/KEYCLOAK_SESSION cookies at logout and session expiry.",
+   "checks": [
+    "realm.logout_cookies"
+   ],
+   "app_action": "App must clear its own cookies/temporary storage on logout and on back-channel logout.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222389": {
+   "disposition": "SHARED",
+   "implementation": "ssoSessionIdleTimeout=900s (15 min); offline_access removed from default roles so offline tokens cannot outlive the idle limit; refresh tokens revoked on use.",
+   "checks": [
+    "realm.user_idle_15",
+    "realm.offline_access_removed",
+    "realm.refresh_rotation"
+   ],
+   "app_action": "Relying app must end its own local session at the same idle limit; use short-lived tokens, honor back-channel logout.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222390": {
+   "disposition": "SHARED",
+   "implementation": "Admin realm (master) ssoSessionIdleTimeout=600s; 'security-admin-console' in every realm overridden with client.session.idle.timeout=600; profile clients flagged privileged get the same override.",
+   "checks": [
+    "master.admin_idle_10",
+    "realm.admin_console_idle_10"
+   ],
+   "app_action": "Apps with in-app admin roles must enforce a 10 minute idle limit for admin users (or use a dedicated privileged client flagged privileged=true).",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222391": {
+   "disposition": "SHARED",
+   "implementation": "OIDC end_session endpoint / SAML SLO enabled; post-logout redirect URIs restricted per client.",
+   "checks": [
+    "clients.logout_configured"
+   ],
+   "app_action": "App must expose a visible logoff control that calls the IdP logout endpoint.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222392": {
+   "disposition": "SHARED",
+   "implementation": "Keycloak shows a 'You are logged out' page when logout is initiated at the IdP.",
+   "checks": [],
+   "app_action": "App must display an explicit logoff confirmation message.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222393": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222394": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222395": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222396": {
+   "disposition": "SHARED",
+   "implementation": "HTTPS only: sslRequired=all, HTTP listener disabled, TLS 1.3/1.2 with FIPS cipher suites, HSTS; DB connection uses TLS (sslmode=verify-full).",
+   "checks": [
+    "realm.ssl_all",
+    "live.http_disabled",
+    "live.tls_versions",
+    "deploy.db_tls"
+   ],
+   "app_action": "App must also enforce TLS end-to-end.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222397": {
+   "disposition": "SHARED",
+   "implementation": "HTTPS only: sslRequired=all, HTTP listener disabled, TLS 1.3/1.2 with FIPS cipher suites, HSTS; DB connection uses TLS (sslmode=verify-full).",
+   "checks": [
+    "realm.ssl_all",
+    "live.http_disabled",
+    "live.tls_versions",
+    "deploy.db_tls"
+   ],
+   "app_action": "App must also enforce TLS end-to-end.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222398": {
+   "disposition": "NA-COND",
+   "implementation": "Keycloak does not use WS-Security/SOAP messages.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable: no SOAP/WS-Security interfaces.",
+   "inheritable": false
+  },
+  "V-222399": {
+   "disposition": "NA-COND",
+   "implementation": "Keycloak does not use WS-Security/SOAP messages.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable: no SOAP/WS-Security interfaces.",
+   "inheritable": false
+  },
+  "V-222400": {
+   "disposition": "KC",
+   "implementation": "Keycloak SAML assertions always include Conditions NotBefore/NotOnOrAfter and SubjectConfirmationData NotOnOrAfter; assertion lifespan set to 300s for SAML clients.",
+   "checks": [
+    "clients.saml_hardened"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable if no SAML clients.",
+   "inheritable": true
+  },
+  "V-222401": {
+   "disposition": "KC",
+   "implementation": "Assertion IDs are unique random values (built-in).",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable if no SAML clients.",
+   "inheritable": true
+  },
+  "V-222402": {
+   "disposition": "KC",
+   "implementation": "SAML clients: saml.encrypt=true (encrypted assertions) and signed documents/assertions.",
+   "checks": [
+    "clients.saml_hardened"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable if no SAML clients.",
+   "inheritable": true
+  },
+  "V-222403": {
+   "disposition": "KC",
+   "implementation": "Keycloak SAML assertions always include Conditions NotBefore/NotOnOrAfter and SubjectConfirmationData NotOnOrAfter; assertion lifespan set to 300s for SAML clients.",
+   "checks": [
+    "clients.saml_hardened"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable if no SAML clients.",
+   "inheritable": true
+  },
+  "V-222404": {
+   "disposition": "KC",
+   "implementation": "Keycloak SAML assertions always include Conditions NotBefore/NotOnOrAfter and SubjectConfirmationData NotOnOrAfter; assertion lifespan set to 300s for SAML clients.",
+   "checks": [
+    "clients.saml_hardened"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable if no SAML clients.",
+   "inheritable": true
+  },
+  "V-222405": {
+   "disposition": "KC",
+   "implementation": "Keycloak emits at most one OneTimeUse condition (built-in).",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable if no SAML clients.",
+   "inheritable": true
+  },
+  "V-222406": {
+   "disposition": "KC",
+   "implementation": "Assertions encrypted when SAML clients are configured (saml.encrypt=true).",
+   "checks": [
+    "clients.saml_hardened"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable if no SAML clients.",
+   "inheritable": true
+  },
+  "V-222407": {
+   "disposition": "KC",
+   "implementation": "Keycloak admin console / Admin REST API provide automated account management.",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222408": {
+   "disposition": "PROCESS",
+   "implementation": "Shared/group accounts are not provisioned by this profile.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable if no shared/group accounts exist (profile creates none).",
+   "inheritable": false
+  },
+  "V-222409": {
+   "disposition": "KC",
+   "implementation": "Workflow 'stig-temp-account-72h' disables users with account_type=temporary 72h after creation (runner interval 900s).",
+   "checks": [
+    "workflow.temp_72h"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222410": {
+   "disposition": "SHARED",
+   "implementation": "Users with account_type=emergency are excluded from the inactivity workflow; admin role 'stig-emergency-protect' documented.",
+   "checks": [
+    "workflow.inactive_35d"
+   ],
+   "app_action": "ISSO procedure: emergency accounts may only be removed with ISSO approval; restrict manage-users on them via fine-grained admin permissions.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222411": {
+   "disposition": "KC",
+   "implementation": "Workflow 'stig-disable-inactive-35d' disables accounts 35 days after creation or last authentication (restarts on every login).",
+   "checks": [
+    "workflow.inactive_35d"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222412": {
+   "disposition": "SHARED",
+   "implementation": "Bootstrap temporary admin deleted; no default/demo users; verify lists all enabled users with no login in 35 days.",
+   "checks": [
+    "master.no_bootstrap_admin"
+   ],
+   "app_action": "Periodic account review per ISSO.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222413": {
+   "disposition": "KC",
+   "implementation": "Admin events enabled with representation details (adminEventsEnabled, adminEventsDetailsEnabled) and shipped to the log/SIEM via jboss-logging + stig-audit listener.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222414": {
+   "disposition": "KC",
+   "implementation": "Admin events enabled with representation details (adminEventsEnabled, adminEventsDetailsEnabled) and shipped to the log/SIEM via jboss-logging + stig-audit listener.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222415": {
+   "disposition": "KC",
+   "implementation": "Admin events enabled with representation details (adminEventsEnabled, adminEventsDetailsEnabled) and shipped to the log/SIEM via jboss-logging + stig-audit listener.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222416": {
+   "disposition": "KC",
+   "implementation": "Admin events enabled with representation details (adminEventsEnabled, adminEventsDetailsEnabled) and shipped to the log/SIEM via jboss-logging + stig-audit listener.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222417": {
+   "disposition": "KC-EXT",
+   "implementation": "stig-audit listener emits WARN 'STIG-ACCOUNT-EVENT' for every user create/update/delete and can e-mail SA/ISSO addresses (--spi-events-listener--stig-audit--notify-emails).",
+   "checks": [
+    "realm.listener_stig_audit"
+   ],
+   "app_action": "Configure SIEM alert on STIG-ACCOUNT-EVENT or set notify-emails + realm SMTP.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222418": {
+   "disposition": "KC-EXT",
+   "implementation": "stig-audit listener emits WARN 'STIG-ACCOUNT-EVENT' for every user create/update/delete and can e-mail SA/ISSO addresses (--spi-events-listener--stig-audit--notify-emails).",
+   "checks": [
+    "realm.listener_stig_audit"
+   ],
+   "app_action": "Configure SIEM alert on STIG-ACCOUNT-EVENT or set notify-emails + realm SMTP.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222419": {
+   "disposition": "KC-EXT",
+   "implementation": "stig-audit listener emits WARN 'STIG-ACCOUNT-EVENT' for every user create/update/delete and can e-mail SA/ISSO addresses (--spi-events-listener--stig-audit--notify-emails).",
+   "checks": [
+    "realm.listener_stig_audit"
+   ],
+   "app_action": "Configure SIEM alert on STIG-ACCOUNT-EVENT or set notify-emails + realm SMTP.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222420": {
+   "disposition": "KC-EXT",
+   "implementation": "stig-audit listener emits WARN 'STIG-ACCOUNT-EVENT' for every user create/update/delete and can e-mail SA/ISSO addresses (--spi-events-listener--stig-audit--notify-emails).",
+   "checks": [
+    "realm.listener_stig_audit"
+   ],
+   "app_action": "Configure SIEM alert on STIG-ACCOUNT-EVENT or set notify-emails + realm SMTP.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222421": {
+   "disposition": "KC",
+   "implementation": "Admin events enabled with representation details (adminEventsEnabled, adminEventsDetailsEnabled) and shipped to the log/SIEM via jboss-logging + stig-audit listener.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222422": {
+   "disposition": "KC-EXT",
+   "implementation": "stig-audit listener emits WARN 'STIG-ACCOUNT-EVENT' for every user create/update/delete and can e-mail SA/ISSO addresses (--spi-events-listener--stig-audit--notify-emails).",
+   "checks": [
+    "realm.listener_stig_audit"
+   ],
+   "app_action": "Configure SIEM alert on STIG-ACCOUNT-EVENT or set notify-emails + realm SMTP.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222423": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222424": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222425": {
+   "disposition": "SHARED",
+   "implementation": "Authentication does not imply authorization: clients get fullScopeAllowed=false (client policy full-scope-disabled) so tokens only carry roles mapped to the client.",
+   "checks": [
+    "policy.full_scope_disabled"
+   ],
+   "app_action": "App must enforce role/attribute checks on every resource (RBAC/ABAC).",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222426": {
+   "disposition": "APP",
+   "implementation": "Keycloak Authorization Services can model DAC policies if the app uses them.",
+   "checks": [],
+   "app_action": "Enforce discretionary access control in the app.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222427": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222428": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222429": {
+   "disposition": "SHARED",
+   "implementation": "Admin capabilities separated in the master realm; app realm users get no realm-management roles by default.",
+   "checks": [
+    "realm.no_default_admin_roles"
+   ],
+   "app_action": "App must block non-privileged users from privileged functions.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222430": {
+   "disposition": "PLATFORM",
+   "implementation": "Container runs as non-root UID 1000 (Keycloak image default); read-only root FS recommended (deploy/compose.yaml).",
+   "checks": [
+    "deploy.nonroot"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222431": {
+   "disposition": "KC",
+   "implementation": "Admin events record every privileged (admin API) operation with actor, IP, resource and representation.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222432": {
+   "disposition": "KC",
+   "implementation": "Brute-force detection: failureFactor=3, maxDeltaTimeSeconds=900 (15 min window), permanentLockout=true. CAC PIN attempts are additionally limited by the card itself.",
+   "checks": [
+    "realm.bruteforce"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222433": {
+   "disposition": "SHARED",
+   "implementation": "permanentLockout=true: locked users stay locked until an admin unlocks them (Admin console > Users > unlock).",
+   "checks": [
+    "realm.bruteforce"
+   ],
+   "app_action": "ISSO/ISSM-approved unlock procedure including identity validation (see references/operations.md).",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222434": {
+   "disposition": "KC",
+   "implementation": "Login theme 'dod-stig' displays the Standard Mandatory DoD Notice and Consent Banner (exact STIG text) and keeps the login form hidden until the user selects OK; Terms and Conditions required action (same text) is a server-side backstop.",
+   "checks": [
+    "realm.login_theme",
+    "realm.terms_action"
+   ],
+   "app_action": "Apps with their own pre-login pages (outside Keycloak) must also show the banner.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222435": {
+   "disposition": "KC",
+   "implementation": "Login theme 'dod-stig' displays the Standard Mandatory DoD Notice and Consent Banner (exact STIG text) and keeps the login form hidden until the user selects OK; Terms and Conditions required action (same text) is a server-side backstop.",
+   "checks": [
+    "realm.login_theme",
+    "realm.terms_action"
+   ],
+   "app_action": "Apps with their own pre-login pages (outside Keycloak) must also show the banner.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222436": {
+   "disposition": "KC",
+   "implementation": "Login theme 'dod-stig' displays the Standard Mandatory DoD Notice and Consent Banner (exact STIG text) and keeps the login form hidden until the user selects OK; Terms and Conditions required action (same text) is a server-side backstop.",
+   "checks": [
+    "realm.login_theme",
+    "realm.terms_action"
+   ],
+   "app_action": "Apps with their own pre-login pages (outside Keycloak) must also show the banner.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222437": {
+   "disposition": "SHARED",
+   "implementation": "stig-audit listener stores stig_last_login / stig_previous_login on each login; client scope 'stig-claims' publishes 'previous_login' in ID/access tokens.",
+   "checks": [
+    "realm.listener_stig_audit",
+    "realm.stig_claims_scope"
+   ],
+   "app_action": "App UI must display the 'previous_login' claim (date/time of last successful logon) after sign-in.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222438": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222439": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222441": {
+   "disposition": "SHARED",
+   "implementation": "User events LOGIN/CODE_TO_TOKEN/REFRESH_TOKEN/LOGOUT (session create/renew/destroy) enabled with all event types; idle expiry is visible as failed REFRESH_TOKEN_ERROR/INVALID token events.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": "App logs its own session lifecycle.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222442": {
+   "disposition": "SHARED",
+   "implementation": "User events LOGIN/CODE_TO_TOKEN/REFRESH_TOKEN/LOGOUT (session create/renew/destroy) enabled with all event types; idle expiry is visible as failed REFRESH_TOKEN_ERROR/INVALID token events.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": "App logs its own session lifecycle.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222443": {
+   "disposition": "SHARED",
+   "implementation": "User events LOGIN/CODE_TO_TOKEN/REFRESH_TOKEN/LOGOUT (session create/renew/destroy) enabled with all event types; idle expiry is visible as failed REFRESH_TOKEN_ERROR/INVALID token events.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": "App logs its own session lifecycle.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222444": {
+   "disposition": "KC",
+   "implementation": "Keycloak events never record passwords or OTP values; admin event representations exclude credential values.",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": "Apps must not log tokens.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222445": {
+   "disposition": "SHARED",
+   "implementation": "User events LOGIN/CODE_TO_TOKEN/REFRESH_TOKEN/LOGOUT (session create/renew/destroy) enabled with all event types; idle expiry is visible as failed REFRESH_TOKEN_ERROR/INVALID token events.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": "App logs its own session lifecycle.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222446": {
+   "disposition": "KC",
+   "implementation": "Every event record carries an epoch-millisecond timestamp.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222447": {
+   "disposition": "SHARED",
+   "implementation": "HTTP access log enabled (--http-access-log-enabled) with a pattern capturing method, URI, Referer and User-Agent.",
+   "checks": [
+    "deploy.access_log"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222448": {
+   "disposition": "KC",
+   "implementation": "Events record the client IP (ipAddress).",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222449": {
+   "disposition": "KC",
+   "implementation": "Events record userId/username.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222450": {
+   "disposition": "KC",
+   "implementation": "Admin events capture successful privilege/role/security-object changes; failed attempts produce 403 on the admin API, captured by the HTTP access log.",
+   "checks": [
+    "realm.admin_events",
+    "deploy.access_log"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222451": {
+   "disposition": "KC",
+   "implementation": "Admin events capture successful privilege/role/security-object changes; failed attempts produce 403 on the admin API, captured by the HTTP access log.",
+   "checks": [
+    "realm.admin_events",
+    "deploy.access_log"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222452": {
+   "disposition": "NA-COND",
+   "implementation": "Keycloak has no classification levels/categories.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable unless the application implements security levels/categories.",
+   "inheritable": false
+  },
+  "V-222453": {
+   "disposition": "NA-COND",
+   "implementation": "Keycloak has no classification levels/categories.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable unless the application implements security levels/categories.",
+   "inheritable": false
+  },
+  "V-222454": {
+   "disposition": "KC",
+   "implementation": "Admin events capture successful privilege/role/security-object changes; failed attempts produce 403 on the admin API, captured by the HTTP access log.",
+   "checks": [
+    "realm.admin_events",
+    "deploy.access_log"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222455": {
+   "disposition": "KC",
+   "implementation": "Admin events capture successful privilege/role/security-object changes; failed attempts produce 403 on the admin API, captured by the HTTP access log.",
+   "checks": [
+    "realm.admin_events",
+    "deploy.access_log"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222456": {
+   "disposition": "NA-COND",
+   "implementation": "Keycloak has no classification levels/categories.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable unless the application implements security levels/categories.",
+   "inheritable": false
+  },
+  "V-222457": {
+   "disposition": "NA-COND",
+   "implementation": "Keycloak has no classification levels/categories.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable unless the application implements security levels/categories.",
+   "inheritable": false
+  },
+  "V-222458": {
+   "disposition": "KC",
+   "implementation": "Admin events capture successful privilege/role/security-object changes; failed attempts produce 403 on the admin API, captured by the HTTP access log.",
+   "checks": [
+    "realm.admin_events",
+    "deploy.access_log"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222459": {
+   "disposition": "NA-COND",
+   "implementation": "Keycloak has no classification levels/categories.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable unless the application implements security levels/categories.",
+   "inheritable": false
+  },
+  "V-222460": {
+   "disposition": "KC",
+   "implementation": "Admin events capture successful privilege/role/security-object changes; failed attempts produce 403 on the admin API, captured by the HTTP access log.",
+   "checks": [
+    "realm.admin_events",
+    "deploy.access_log"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222461": {
+   "disposition": "NA-COND",
+   "implementation": "Keycloak has no classification levels/categories.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable unless the application implements security levels/categories.",
+   "inheritable": false
+  },
+  "V-222462": {
+   "disposition": "KC",
+   "implementation": "LOGIN and LOGIN_ERROR events enabled.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222463": {
+   "disposition": "KC",
+   "implementation": "Admin events + jboss-logging capture privileged activity.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222464": {
+   "disposition": "KC",
+   "implementation": "LOGIN and LOGOUT events give start and end times of access.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222465": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222466": {
+   "disposition": "KC",
+   "implementation": "All authentication paths go through Keycloak and are logged; direct grant (ROPC) denied.",
+   "checks": [
+    "realm.user_events",
+    "policy.reject_ropc"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222467": {
+   "disposition": "KC",
+   "implementation": "Admin events enabled with representation details (adminEventsEnabled, adminEventsDetailsEnabled) and shipped to the log/SIEM via jboss-logging + stig-audit listener.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222468": {
+   "disposition": "KC",
+   "implementation": "Event logging is active from server start (realm configuration persisted).",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222469": {
+   "disposition": "PLATFORM",
+   "implementation": "Keycloak logs server stop at INFO; console/syslog handler captures it.",
+   "checks": [
+    "deploy.syslog"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222470": {
+   "disposition": "SHARED",
+   "implementation": "Access log records the local endpoint; events record client IP.",
+   "checks": [
+    "deploy.access_log"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222471": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222472": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222473": {
+   "disposition": "KC",
+   "implementation": "Event timestamps (UTC epoch ms).",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222474": {
+   "disposition": "KC",
+   "implementation": "Events record clientId, event type and authenticator details.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222475": {
+   "disposition": "PLATFORM",
+   "implementation": "Log records tagged with service name via --log-syslog-app-name and JSON console output.",
+   "checks": [
+    "deploy.syslog"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222476": {
+   "disposition": "KC",
+   "implementation": "Events distinguish success (type) and failure (*_ERROR with error code).",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222477": {
+   "disposition": "KC",
+   "implementation": "Events record user, client, session and IP.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222478": {
+   "disposition": "KC",
+   "implementation": "Admin events with details record the full representation of privileged changes and the individual admin identity.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222479": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222480": {
+   "disposition": "PLATFORM",
+   "implementation": "Events shipped off-host: jboss-logging listener at INFO/WARN to syslog (--log=console,syslog) for the enterprise SIEM.",
+   "checks": [
+    "realm.listener_jboss",
+    "deploy.syslog"
+   ],
+   "app_action": "Point --log-syslog-endpoint at the SIEM collector.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222481": {
+   "disposition": "PLATFORM",
+   "implementation": "Events shipped off-host: jboss-logging listener at INFO/WARN to syslog (--log=console,syslog) for the enterprise SIEM.",
+   "checks": [
+    "realm.listener_jboss",
+    "deploy.syslog"
+   ],
+   "app_action": "Point --log-syslog-endpoint at the SIEM collector.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222482": {
+   "disposition": "PLATFORM",
+   "implementation": "Events shipped off-host: jboss-logging listener at INFO/WARN to syslog (--log=console,syslog) for the enterprise SIEM.",
+   "checks": [
+    "realm.listener_jboss",
+    "deploy.syslog"
+   ],
+   "app_action": "Point --log-syslog-endpoint at the SIEM collector.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222483": {
+   "disposition": "PLATFORM",
+   "implementation": "SIEM / log platform responsibility (capacity alerts, failure alerts, retention 30 months / 5 years SAMI, weekly backup).",
+   "checks": [],
+   "app_action": "Configure in the SIEM; Keycloak DB event retention (eventsExpiration) is only a local buffer.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222484": {
+   "disposition": "PLATFORM",
+   "implementation": "SIEM / log platform responsibility (capacity alerts, failure alerts, retention 30 months / 5 years SAMI, weekly backup).",
+   "checks": [],
+   "app_action": "Configure in the SIEM; Keycloak DB event retention (eventsExpiration) is only a local buffer.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222485": {
+   "disposition": "PLATFORM",
+   "implementation": "SIEM / log platform responsibility (capacity alerts, failure alerts, retention 30 months / 5 years SAMI, weekly backup).",
+   "checks": [],
+   "app_action": "Configure in the SIEM; Keycloak DB event retention (eventsExpiration) is only a local buffer.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222486": {
+   "disposition": "PLATFORM",
+   "implementation": "SIEM / log platform responsibility (capacity alerts, failure alerts, retention 30 months / 5 years SAMI, weekly backup).",
+   "checks": [],
+   "app_action": "Configure in the SIEM; Keycloak DB event retention (eventsExpiration) is only a local buffer.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222487": {
+   "disposition": "PLATFORM",
+   "implementation": "Events shipped off-host: jboss-logging listener at INFO/WARN to syslog (--log=console,syslog) for the enterprise SIEM.",
+   "checks": [
+    "realm.listener_jboss",
+    "deploy.syslog"
+   ],
+   "app_action": "Point --log-syslog-endpoint at the SIEM collector.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222488": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit reduction/reporting is provided by the SIEM; the admin console Events view offers filtering of the local buffer.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222489": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit reduction/reporting is provided by the SIEM; the admin console Events view offers filtering of the local buffer.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222490": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit reduction/reporting is provided by the SIEM; the admin console Events view offers filtering of the local buffer.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222491": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit reduction/reporting is provided by the SIEM; the admin console Events view offers filtering of the local buffer.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222492": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit reduction/reporting is provided by the SIEM; the admin console Events view offers filtering of the local buffer.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222493": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit reduction/reporting is provided by the SIEM; the admin console Events view offers filtering of the local buffer.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222494": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit reduction/reporting is provided by the SIEM; the admin console Events view offers filtering of the local buffer.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222495": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit reduction/reporting is provided by the SIEM; the admin console Events view offers filtering of the local buffer.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222496": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit reduction/reporting is provided by the SIEM; the admin console Events view offers filtering of the local buffer.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222497": {
+   "disposition": "PLATFORM",
+   "implementation": "Timestamps from the host clock (NTP-synced to DoD time source), recorded UTC in milliseconds.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222498": {
+   "disposition": "PLATFORM",
+   "implementation": "Timestamps from the host clock (NTP-synced to DoD time source), recorded UTC in milliseconds.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222499": {
+   "disposition": "PLATFORM",
+   "implementation": "Timestamps from the host clock (NTP-synced to DoD time source), recorded UTC in milliseconds.",
+   "checks": [
+    "realm.user_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222500": {
+   "disposition": "SHARED",
+   "implementation": "Event read/delete limited to realm admins with view-events/manage-events; logs off-loaded to SIEM.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": "Restrict view-events/manage-events roles to auditors/ISSO.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222501": {
+   "disposition": "SHARED",
+   "implementation": "Event read/delete limited to realm admins with view-events/manage-events; logs off-loaded to SIEM.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": "Restrict view-events/manage-events roles to auditors/ISSO.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222502": {
+   "disposition": "SHARED",
+   "implementation": "Event read/delete limited to realm admins with view-events/manage-events; logs off-loaded to SIEM.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": "Restrict view-events/manage-events roles to auditors/ISSO.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222503": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit tools are the SIEM and admin console; protect/hash per platform STIG.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222504": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit tools are the SIEM and admin console; protect/hash per platform STIG.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222505": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit tools are the SIEM and admin console; protect/hash per platform STIG.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222506": {
+   "disposition": "PLATFORM",
+   "implementation": "SIEM / log platform responsibility (capacity alerts, failure alerts, retention 30 months / 5 years SAMI, weekly backup).",
+   "checks": [],
+   "app_action": "Configure in the SIEM; Keycloak DB event retention (eventsExpiration) is only a local buffer.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222507": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit tools are the SIEM and admin console; protect/hash per platform STIG.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222508": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit tools are the SIEM and admin console; protect/hash per platform STIG.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222509": {
+   "disposition": "PLATFORM",
+   "implementation": "Audit tools are the SIEM and admin console; protect/hash per platform STIG.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222510": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222511": {
+   "disposition": "KC",
+   "implementation": "Configuration changes require realm-admin roles in the admin realm protected by the Alt Token.",
+   "checks": [
+    "master.flow_alt_token"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222512": {
+   "disposition": "KC",
+   "implementation": "Admin events record who changed realm configuration.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222513": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222514": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222515": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222516": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222517": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222518": {
+   "disposition": "KC",
+   "implementation": "Unneeded capabilities disabled: user registration, self-service reset, implicit/ROPC grants, device flow and CIBA per client; HTTP listener off.",
+   "checks": [
+    "realm.registration_off",
+    "policy.reject_implicit",
+    "policy.reject_ropc",
+    "clients.redirects_exact",
+    "live.http_disabled"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222519": {
+   "disposition": "PLATFORM",
+   "implementation": "Only 8443 (HTTPS) exposed; 9000 management bound internally.",
+   "checks": [
+    "live.http_disabled"
+   ],
+   "app_action": "Register ports in PPSM CAL.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222520": {
+   "disposition": "KC",
+   "implementation": "Reauthentication: SSO max lifespan (profile.sessions.max_hours) forces re-login; clients may require max_age/prompt=login for sensitive actions; password changes require recent auth (maxAuthAge).",
+   "checks": [
+    "realm.sso_max"
+   ],
+   "app_action": "Define organization re-authentication triggers (e.g. role change, sensitive transaction) and request prompt=login / max_age for them.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222521": {
+   "disposition": "SHARED",
+   "implementation": "Devices (service accounts) re-authenticate each access-token lifetime (300s) via client credentials.",
+   "checks": [
+    "realm.token_lifespan"
+   ],
+   "app_action": "Define device re-authentication circumstances.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222522": {
+   "disposition": "KC",
+   "implementation": "Every user is a unique Keycloak identity; X.509 maps one certificate UPN to one account (admin-only attribute cac_upn); usernames unique.",
+   "checks": [
+    "flow.x509_or_mfa",
+    "userprofile.cac_upn_admin_only"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222523": {
+   "disposition": "SHARED",
+   "implementation": "Admin realm (master) requires the Alt Token: X.509 mapped through admin-only attribute alt_token_upn (separate from CAC cac_upn), or password + WebAuthn hardware token if profile.admin.mfa=webauthn.",
+   "checks": [
+    "master.flow_alt_token"
+   ],
+   "app_action": "Issue Alt Tokens to administrators; do not map their everyday CAC.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222524": {
+   "disposition": "KC",
+   "implementation": "Browser flow uses auth-x509-client-username-form; TLS client-auth=request with DoD PKI trust store.",
+   "checks": [
+    "flow.x509_or_mfa",
+    "deploy.client_auth"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222525": {
+   "disposition": "KC",
+   "implementation": "X.509 authenticator validates path to DoD roots, checks revocation (OCSP with CRL fallback, fail-closed), validity dates, key usage digitalSignature.",
+   "checks": [
+    "flow.x509_revocation"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222526": {
+   "disposition": "KC",
+   "implementation": "Non-privileged network access requires CAC (auth_mode=cac) or CAC-or-(password+OTP/WebAuthn) (auth_mode=cac_or_mfa); password-only paths do not exist.",
+   "checks": [
+    "flow.x509_or_mfa",
+    "flow.no_password_only"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222527": {
+   "disposition": "SHARED",
+   "implementation": "Same as V-222523 for local access to the admin console.",
+   "checks": [
+    "master.flow_alt_token"
+   ],
+   "app_action": "Local console access must also use the Alt Token.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222528": {
+   "disposition": "SHARED",
+   "implementation": "Same flows apply to local access.",
+   "checks": [
+    "flow.x509_or_mfa"
+   ],
+   "app_action": "Local (on-host) access paths must not bypass Keycloak.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222529": {
+   "disposition": "NA-COND",
+   "implementation": "No group authenticators are provisioned.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable if no group authenticators are used.",
+   "inheritable": false
+  },
+  "V-222530": {
+   "disposition": "KC",
+   "implementation": "Replay-resistant: TLS 1.2+/1.3 channel, PKCE S256, one-time authorization codes (60s), single-use refresh tokens, OTP codes not reusable.",
+   "checks": [
+    "policy.pkce",
+    "realm.refresh_rotation",
+    "realm.otp_policy"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222531": {
+   "disposition": "KC",
+   "implementation": "Same replay-resistant mechanisms for non-privileged accounts.",
+   "checks": [
+    "policy.pkce",
+    "realm.refresh_rotation",
+    "realm.otp_policy"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222532": {
+   "disposition": "PLATFORM",
+   "implementation": "Mutual TLS available (https-client-auth=request; client-x509 client authentication).",
+   "checks": [
+    "deploy.client_auth"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222533": {
+   "disposition": "SHARED",
+   "implementation": "Clients authenticate (confidential: client-jwt/secret; public SPA: PKCE).",
+   "checks": [
+    "clients.authenticated"
+   ],
+   "app_action": "Network devices calling the app must authenticate (mTLS/service account).",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222534": {
+   "disposition": "PLATFORM",
+   "implementation": "Service clients can be forced to client-x509 (mTLS).",
+   "checks": [],
+   "app_action": "Enable client-x509 for service clients handling non-releasable data.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222535": {
+   "disposition": "NA-COND",
+   "implementation": "Device accounts = service-account clients authenticated with client JWT/X.509; inactivity workflow does not cover service accounts.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable when devices authenticate with DoD PKI certificates (client-x509).",
+   "inheritable": false
+  },
+  "V-222536": {
+   "disposition": "KC",
+   "implementation": "Password policy length(15).",
+   "checks": [
+    "realm.pw_policy"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": true
+  },
+  "V-222537": {
+   "disposition": "KC",
+   "implementation": "Password policy upperCase(1).",
+   "checks": [
+    "realm.pw_policy"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": true
+  },
+  "V-222538": {
+   "disposition": "KC",
+   "implementation": "Password policy lowerCase(1).",
+   "checks": [
+    "realm.pw_policy"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": true
+  },
+  "V-222539": {
+   "disposition": "KC",
+   "implementation": "Password policy digits(1).",
+   "checks": [
+    "realm.pw_policy"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": true
+  },
+  "V-222540": {
+   "disposition": "KC",
+   "implementation": "Password policy specialChars(1).",
+   "checks": [
+    "realm.pw_policy"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": true
+  },
+  "V-222541": {
+   "disposition": "SHARED",
+   "implementation": "Keycloak stores only hashes and does not ask for the old password on change, so an 8-character difference cannot be computed. Mitigations: CAC-only (N/A), or long passphrase policy + history(5).",
+   "checks": [
+    "realm.pw_policy"
+   ],
+   "app_action": "POA&M / risk acceptance if passwords are used; otherwise N/A with CAC-only.",
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": false
+  },
+  "V-222542": {
+   "disposition": "KC",
+   "implementation": "Passwords stored only as PBKDF2-SHA512 hashes, 210000 iterations (FIPS-approved; replaces the non-FIPS argon2 default).",
+   "checks": [
+    "realm.pw_policy"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": true
+  },
+  "V-222543": {
+   "disposition": "KC",
+   "implementation": "Passwords only transmitted over TLS (sslRequired=all, HTTP listener disabled); ROPC grant rejected so apps never handle passwords.",
+   "checks": [
+    "realm.ssl_all",
+    "policy.reject_ropc",
+    "live.http_disabled"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222544": {
+   "disposition": "KC-EXT",
+   "implementation": "stig-extensions password policy minimumPasswordAge(24): users cannot change their own password again within 24h (admin resets and forced changes exempt).",
+   "checks": [
+    "realm.pw_policy"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": true
+  },
+  "V-222545": {
+   "disposition": "KC",
+   "implementation": "Password policy forceExpiredPasswordChange(60).",
+   "checks": [
+    "realm.pw_policy"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": true
+  },
+  "V-222546": {
+   "disposition": "KC",
+   "implementation": "Password policy passwordHistory(5).",
+   "checks": [
+    "realm.pw_policy"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": true
+  },
+  "V-222547": {
+   "disposition": "KC",
+   "implementation": "Admin-created/reset passwords are temporary: UPDATE_PASSWORD required action forces an immediate change.",
+   "checks": [
+    "realm.required_actions"
+   ],
+   "app_action": null,
+   "na_condition": "Not Applicable when the realm is CAC/PKI-only (auth_mode=cac): no passwords are used.",
+   "inheritable": true
+  },
+  "V-222548": {
+   "disposition": "KC",
+   "implementation": "Only the user (via required action/account console with re-auth) or an admin can change a password; user registration and self-service e-mail reset disabled.",
+   "checks": [
+    "realm.registration_off",
+    "realm.reset_password_off"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222549": {
+   "disposition": "KC",
+   "implementation": "Deleting a user in Keycloak removes all of that user's sessions immediately; built-in.",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": "Relying app must end its own local session at the same idle limit; use short-lived tokens, honor back-channel logout.",
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222550": {
+   "disposition": "KC",
+   "implementation": "Path building to DoD trust anchors (truststore-paths) with revocation status (OCSP, CRL fallback).",
+   "checks": [
+    "flow.x509_revocation",
+    "deploy.truststore"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222551": {
+   "disposition": "PLATFORM",
+   "implementation": "Server TLS private key file mode 0600/0400 owned by the keycloak UID; mounted read-only.",
+   "checks": [
+    "deploy.key_perms"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222552": {
+   "disposition": "KC",
+   "implementation": "Certificate UPN (EDIPI@mil) is mapped to exactly one user via admin-only attribute cac_upn; events log the username, not just certificate data.",
+   "checks": [
+    "flow.x509_or_mfa",
+    "userprofile.cac_upn_admin_only"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222553": {
+   "disposition": "SHARED",
+   "implementation": "X.509 authenticator: OCSP with CRL fallback from a locally cached CRL file (x509-cert-auth.crl-relative-path); scripts/fetch_dod_pki.sh refreshes CRLs on a schedule.",
+   "checks": [
+    "flow.x509_revocation"
+   ],
+   "app_action": "Run the CRL refresh job (cron/systemd timer) at least daily.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222554": {
+   "disposition": "KC",
+   "implementation": "Login forms use password inputs (masked); built-in theme.",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222555": {
+   "disposition": "PLATFORM",
+   "implementation": "FIPS 140-validated crypto for authentication requires Keycloak FIPS mode (deploy/Dockerfile.fips) on a FIPS-mode RHEL host.",
+   "checks": [
+    "server.fips"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222556": {
+   "disposition": "KC",
+   "implementation": "Non-organizational users get unique accounts the same way (no anonymous/shared access).",
+   "checks": [
+    "flow.no_password_only"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222557": {
+   "disposition": "SHARED",
+   "implementation": "Add other agencies' PIV roots (Federal Common Policy CA G2 bridge) to the trust store; same X.509 flow validates them.",
+   "checks": [
+    "deploy.truststore"
+   ],
+   "app_action": "Decide whether federal PIV is in scope; add FCPCA trust anchors if so.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222558": {
+   "disposition": "SHARED",
+   "implementation": "Add other agencies' PIV roots (Federal Common Policy CA G2 bridge) to the trust store; same X.509 flow validates them.",
+   "checks": [
+    "deploy.truststore"
+   ],
+   "app_action": "Decide whether federal PIV is in scope; add FCPCA trust anchors if so.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222559": {
+   "disposition": "SHARED",
+   "implementation": "Keycloak can broker FICAM-approved IdPs (OIDC/SAML identity providers).",
+   "checks": [],
+   "app_action": "Configure FICAM IdP brokering only if non-DoD users are in scope.",
+   "na_condition": "Not Applicable when only DoD CAC users access the application.",
+   "inheritable": false
+  },
+  "V-222560": {
+   "disposition": "SHARED",
+   "implementation": "Keycloak can broker FICAM-approved IdPs (OIDC/SAML identity providers).",
+   "checks": [],
+   "app_action": "Configure FICAM IdP brokering only if non-DoD users are in scope.",
+   "na_condition": "Not Applicable when only DoD CAC users access the application.",
+   "inheritable": false
+  },
+  "V-222561": {
+   "disposition": "KC",
+   "implementation": "Admin events log all remote admin sessions.",
+   "checks": [
+    "realm.admin_events"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222562": {
+   "disposition": "SHARED",
+   "implementation": "Admin (maintenance) access only over TLS on a separate admin hostname.",
+   "checks": [
+    "live.tls_versions"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222563": {
+   "disposition": "SHARED",
+   "implementation": "Same as V-222562.",
+   "checks": [
+    "live.tls_versions"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222564": {
+   "disposition": "SHARED",
+   "implementation": "Admin console logout terminates the admin session.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222565": {
+   "disposition": "SHARED",
+   "implementation": "Admin realm requires the Alt Token.",
+   "checks": [
+    "master.flow_alt_token"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222566": {
+   "disposition": "SHARED",
+   "implementation": "Admin console session idle 10 minutes.",
+   "checks": [
+    "master.admin_idle_10"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222567": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222568": {
+   "disposition": "SHARED",
+   "implementation": "Keycloak terminates IdP session on logout; back-channel logout URL configured for OIDC clients.",
+   "checks": [
+    "clients.logout_configured"
+   ],
+   "app_action": "App must drop its connections/session on logout.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222570": {
+   "disposition": "PLATFORM",
+   "implementation": "FIPS-validated module requires Keycloak FIPS mode (BCFIPS providers, --features=fips --fips-mode=strict) on a FIPS-enabled OS.",
+   "checks": [
+    "server.fips"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222571": {
+   "disposition": "PLATFORM",
+   "implementation": "FIPS-validated module requires Keycloak FIPS mode (BCFIPS providers, --features=fips --fips-mode=strict) on a FIPS-enabled OS.",
+   "checks": [
+    "server.fips"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222572": {
+   "disposition": "PLATFORM",
+   "implementation": "FIPS-validated module requires Keycloak FIPS mode (BCFIPS providers, --features=fips --fips-mode=strict) on a FIPS-enabled OS.",
+   "checks": [
+    "server.fips"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222573": {
+   "disposition": "PLATFORM",
+   "implementation": "SAML SessionIndex generated by Keycloak's SecureRandom; FIPS DRBG in FIPS mode.",
+   "checks": [
+    "server.fips"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222574": {
+   "disposition": "PLATFORM",
+   "implementation": "Admin console served on a separate hostname (--hostname-admin) reachable only from the admin network; database on a separate tier.",
+   "checks": [
+    "deploy.admin_hostname"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222575": {
+   "disposition": "SHARED",
+   "implementation": "Keycloak session cookies are HttpOnly (verified against the live login page).",
+   "checks": [
+    "live.cookie_flags"
+   ],
+   "app_action": "App session cookie must be HttpOnly.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222576": {
+   "disposition": "SHARED",
+   "implementation": "Keycloak session cookies carry Secure (sslRequired=all, HTTPS only; verified live).",
+   "checks": [
+    "live.cookie_flags",
+    "realm.ssl_all"
+   ],
+   "app_action": "App session cookie must carry Secure.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222577": {
+   "disposition": "KC",
+   "implementation": "Session identifiers are only carried in cookies; sslRequired=all; tokens never placed in URLs (implicit flow rejected by client policy); exact redirect URIs only, so codes/tokens cannot be sent to attacker-chosen URLs.",
+   "checks": [
+    "realm.ssl_all",
+    "policy.reject_implicit",
+    "clients.redirects_exact"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222578": {
+   "disposition": "SHARED",
+   "implementation": "rememberMe disabled, so KEYCLOAK_IDENTITY/KEYCLOAK_SESSION are browser-session cookies destroyed on logoff or browser close.",
+   "checks": [
+    "realm.remember_me_off"
+   ],
+   "app_action": "App session cookie must be a non-persistent session cookie and be destroyed on logoff.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222579": {
+   "disposition": "KC",
+   "implementation": "Keycloak issues a new session ID at authentication (no fixation); built-in behaviour.",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222580": {
+   "disposition": "KC",
+   "implementation": "Keycloak validates session cookies cryptographically (signed identity cookie) on each request; built-in.",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222581": {
+   "disposition": "KC",
+   "implementation": "No URL-embedded session IDs: implicit grant rejected; PKCE S256 enforced for code flow.",
+   "checks": [
+    "policy.reject_implicit",
+    "policy.pkce"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222582": {
+   "disposition": "KC",
+   "implementation": "Session IDs are random UUIDs never reused; refresh tokens single-use (revokeRefreshToken=true, maxReuse=0).",
+   "checks": [
+    "realm.refresh_rotation"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222583": {
+   "disposition": "PLATFORM",
+   "implementation": "Session IDs come from the JVM SecureRandom; FIPS-approved DRBG requires Keycloak FIPS mode (BCFIPS) on a FIPS-enabled host (deploy/Dockerfile.fips).",
+   "checks": [
+    "server.fips"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222584": {
+   "disposition": "KC",
+   "implementation": "TLS client-auth trust store (https-trust-store-file) holds ONLY the DoD roots/intermediates - truststore-paths alone is merged with ~140 public JVM CAs (verified); X.509 authenticator pins the DoD root DNs (x509-cert-auth.casubjectdn = trust-anchor DNs).",
+   "checks": [
+    "deploy.truststore",
+    "flow.x509_anchor_pinned"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222585": {
+   "disposition": "KC",
+   "implementation": "Keycloak refuses to start with invalid configuration and fails closed (OCSP fail-open=false, CRL abort if not updated).",
+   "checks": [
+    "flow.x509_revocation"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222586": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222587": {
+   "disposition": "PLATFORM",
+   "implementation": "Same as V-222588; passwords additionally hashed, client secrets stored server side only.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222588": {
+   "disposition": "PLATFORM",
+   "implementation": "Database at-rest encryption (encrypted volume / TDE).",
+   "checks": [],
+   "app_action": "Encrypt the Keycloak database volume.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222589": {
+   "disposition": "PLATFORM",
+   "implementation": "Same as V-222588.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222590": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222591": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222592": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222593": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222594": {
+   "disposition": "SHARED",
+   "implementation": "Brute-force detection and per-user session limits throttle abuse; rate limiting at the reverse proxy/WAF.",
+   "checks": [
+    "realm.bruteforce",
+    "flow.session_limits"
+   ],
+   "app_action": "Rate limit at proxy/WAF.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222595": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222596": {
+   "disposition": "SHARED",
+   "implementation": "HTTPS only: sslRequired=all, HTTP listener disabled, TLS 1.3/1.2 with FIPS cipher suites, HSTS; DB connection uses TLS (sslmode=verify-full).",
+   "checks": [
+    "realm.ssl_all",
+    "live.http_disabled",
+    "live.tls_versions",
+    "deploy.db_tls"
+   ],
+   "app_action": "App must also enforce TLS end-to-end.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222597": {
+   "disposition": "SHARED",
+   "implementation": "HTTPS only: sslRequired=all, HTTP listener disabled, TLS 1.3/1.2 with FIPS cipher suites, HSTS; DB connection uses TLS (sslmode=verify-full).",
+   "checks": [
+    "realm.ssl_all",
+    "live.http_disabled",
+    "live.tls_versions",
+    "deploy.db_tls"
+   ],
+   "app_action": "App must also enforce TLS end-to-end.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222598": {
+   "disposition": "SHARED",
+   "implementation": "HTTPS only: sslRequired=all, HTTP listener disabled, TLS 1.3/1.2 with FIPS cipher suites, HSTS; DB connection uses TLS (sslmode=verify-full).",
+   "checks": [
+    "realm.ssl_all",
+    "live.http_disabled",
+    "live.tls_versions",
+    "deploy.db_tls"
+   ],
+   "app_action": "App must also enforce TLS end-to-end.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222599": {
+   "disposition": "SHARED",
+   "implementation": "HTTPS only: sslRequired=all, HTTP listener disabled, TLS 1.3/1.2 with FIPS cipher suites, HSTS; DB connection uses TLS (sslmode=verify-full).",
+   "checks": [
+    "realm.ssl_all",
+    "live.http_disabled",
+    "live.tls_versions",
+    "deploy.db_tls"
+   ],
+   "app_action": "App must also enforce TLS end-to-end.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222600": {
+   "disposition": "SHARED",
+   "implementation": "Generic login errors ('Invalid username or password') - no user enumeration.",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222601": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222602": {
+   "disposition": "SHARED",
+   "implementation": "Security headers: CSP frame-ancestors 'self', X-Content-Type-Options nosniff, X-Frame-Options SAMEORIGIN, Referrer-Policy no-referrer, HSTS; Keycloak escapes theme output.",
+   "checks": [
+    "realm.headers"
+   ],
+   "app_action": "App XSS protection is app responsibility.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222603": {
+   "disposition": "SHARED",
+   "implementation": "Keycloak forms carry session-bound execution/tab IDs (CSRF protection); state/PKCE protect OIDC; no wildcard CORS web origins.",
+   "checks": [
+    "policy.pkce",
+    "clients.redirects_exact"
+   ],
+   "app_action": "App CSRF protection.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222604": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222605": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222606": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222607": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222608": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222609": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222610": {
+   "disposition": "SHARED",
+   "implementation": "Keycloak returns generic error pages; stack traces only in server logs.",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222611": {
+   "disposition": "SHARED",
+   "implementation": "Detailed errors only in server logs readable by SA.",
+   "checks": [
+    "builtin"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222612": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222613": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222614": {
+   "disposition": "PLATFORM",
+   "implementation": "Track Keycloak security advisories and patch.",
+   "checks": [
+    "server.version"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222615": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222616": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222617": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222618": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222619": {
+   "disposition": "PROCESS",
+   "implementation": "Account review process; verify output lists inactive/temporary accounts to support it.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222620": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222621": {
+   "disposition": "PLATFORM",
+   "implementation": "SIEM / log platform responsibility (capacity alerts, failure alerts, retention 30 months / 5 years SAMI, weekly backup).",
+   "checks": [],
+   "app_action": "Configure in the SIEM; Keycloak DB event retention (eventsExpiration) is only a local buffer.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222622": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222623": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222624": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222625": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222626": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222627": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222628": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222629": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222630": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222631": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222632": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222633": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222634": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222635": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222636": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222637": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222638": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222639": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222640": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222641": {
+   "disposition": "KC",
+   "implementation": "TLS key exchange (ECDHE) with server certificate authentication before any application data.",
+   "checks": [
+    "live.tls_versions"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222642": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222643": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222644": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222645": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222646": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222647": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222648": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222649": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222650": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222651": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222652": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222653": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222654": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222655": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222656": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222657": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222658": {
+   "disposition": "PLATFORM",
+   "implementation": "Use a supported Keycloak release (or Red Hat build of Keycloak with support).",
+   "checks": [
+    "server.version"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222659": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222660": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222661": {
+   "disposition": "KC",
+   "implementation": "Built-in bootstrap admin removed after named admins are created; no sample users.",
+   "checks": [
+    "master.no_bootstrap_admin"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222662": {
+   "disposition": "KC",
+   "implementation": "No default credentials remain: bootstrap admin deleted, automation client uses generated secret/JWT.",
+   "checks": [
+    "master.no_bootstrap_admin"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222663": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222664": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222665": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222666": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222667": {
+   "disposition": "SHARED",
+   "implementation": "Same as V-222594.",
+   "checks": [
+    "realm.bruteforce"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222668": {
+   "disposition": "APP",
+   "implementation": "Relying application (and, for Keycloak itself, the vendor) responsibility; not satisfiable by IdP configuration.",
+   "checks": [],
+   "app_action": "Assess in the application's own ASD checklist.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222669": {
+   "disposition": "PROCESS",
+   "implementation": "Register an admin for update notifications.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222670": {
+   "disposition": "PLATFORM",
+   "implementation": "Subscribe to Keycloak/RHBK security advisories.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222671": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-222672": {
+   "disposition": "KC-EXT",
+   "implementation": "stig-audit event listener logs WARN 'STIG-CONCURRENT-LOGON' when a user logs in while holding a session from another IP.",
+   "checks": [
+    "realm.listener_stig_audit"
+   ],
+   "app_action": null,
+   "na_condition": null,
+   "inheritable": true
+  },
+  "V-222673": {
+   "disposition": "PROCESS",
+   "implementation": "Organizational / program documentation or procedure.",
+   "checks": [],
+   "app_action": "Program/ISSO evidence.",
+   "na_condition": null,
+   "inheritable": false
+  },
+  "V-265634": {
+   "disposition": "NA-COND",
+   "implementation": "NSA-approved crypto only for classified systems.",
+   "checks": [],
+   "app_action": null,
+   "na_condition": "Not Applicable on unclassified networks.",
+   "inheritable": false
+  }
+ }
+}

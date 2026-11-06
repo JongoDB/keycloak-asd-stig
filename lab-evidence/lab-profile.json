@@ -1,0 +1,23 @@
+{
+  "keycloak": {"url": "https://localhost:8443", "admin_realm": "master"},
+  "realm": {"name": "labapp", "display_name": "Lab Application"},
+  "auth_mode": "cac_or_mfa",
+  "mfa": "otp",
+  "x509": {"crl_files": ["crl/test-id-ca.crl"], "ocsp": true, "crl": true},
+  "clients": [
+    {"client_id": "lab-web", "type": "oidc-confidential", "auth": "client-secret",
+     "redirect_uris": ["https://app.test.mil/cb"], "post_logout_redirect_uris": ["https://app.test.mil/bye"],
+     "backchannel_logout_url": "https://app.test.mil/bc-logout", "web_origins": ["https://app.test.mil"]},
+    {"client_id": "lab-admin", "type": "oidc-public", "privileged": true,
+     "redirect_uris": ["https://admin.app.test.mil/cb"], "post_logout_redirect_uris": ["https://admin.app.test.mil/"]},
+    {"client_id": "https://legacy.test.mil/saml", "type": "saml", "acs_url": "https://legacy.test.mil/saml/acs"}
+  ],
+  "users": [
+    {"username": "doe.john", "email": "john.doe@test.mil", "firstName": "John", "lastName": "Doe", "cac_upn": "1234567890@mil"},
+    {"username": "revoked.ray", "email": "ray@test.mil", "firstName": "Ray", "lastName": "Revoked", "cac_upn": "9999999999@mil"},
+    {"username": "pw.user", "email": "pw.user@test.mil", "firstName": "Pat", "lastName": "Word", "temporary_password": "Temp-Lab-Passw0rd-123!"},
+    {"username": "temp.contractor", "email": "temp@test.mil", "firstName": "Tim", "lastName": "Temp", "account_type": "temporary", "cac_upn": "2345678901@mil"}
+  ],
+  "admin": {"mfa": "x509", "users": [
+    {"username": "smith.alex.adm", "email": "alex.smith@test.mil", "firstName": "Alex", "lastName": "Smith", "alt_token_upn": "3456789012.alt@mil"}]}
+}

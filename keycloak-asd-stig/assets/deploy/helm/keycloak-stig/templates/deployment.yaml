@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kcs.name" . }}
+  labels: {{- include "kcs.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector: {matchLabels: {app.kubernetes.io/name: keycloak-stig, app.kubernetes.io/instance: {{ .Release.Name }}}}
+  template:
+    metadata:
+      labels: {{- include "kcs.labels" . | nindent 8 }}
+    spec:
+      securityContext: {{- include "kcs.podSecurity" . | nindent 8 }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+      - name: pki-init                       # DoD anchors + CRLs into a per-pod volume (V-222550/553/584)
+        image: {{ .Values.image.tools }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args: [pki-init]
+        env: [{name: PKI_SOURCE, value: {{ .Values.pki.source | quote }}}]
+        securityContext: {{- include "kcs.containerSecurity" . | nindent 10 }}
+        resources: {{- toYaml .Values.resources.tools | nindent 10 }}
+        volumeMounts: [{name: pki, mountPath: /pki}, {name: tmp, mountPath: /tmp}{{ if .Values.pki.seedVolume }}, {name: pki-seed, mountPath: /seed, readOnly: true}{{ end }}]
+      {{- if eq .Values.pki.sidecar "native" }}
+      - name: pki-refresh                    # native sidecar (restartPolicy: Always): CRL refresh loop
+        image: {{ .Values.image.tools }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        restartPolicy: Always
+        args: [pki-refresh]
+        env:
+        - {name: PKI_SOURCE, value: {{ .Values.pki.source | quote }}}
+        - {name: PKI_REFRESH_SECONDS, value: {{ .Values.pki.refreshSeconds | quote }}}
+        securityContext: {{- include "kcs.containerSecurity" . | nindent 10 }}
+        resources: {{- toYaml .Values.resources.tools | nindent 10 }}
+        volumeMounts: [{name: pki, mountPath: /pki}, {name: tmp-refresh, mountPath: /tmp}{{ if .Values.pki.seedVolume }}, {name: pki-seed, mountPath: /seed, readOnly: true}{{ end }}]
+      {{- end }}
+      containers:
+      {{- if eq .Values.pki.sidecar "container" }}
+      - name: pki-refresh                    # classic sidecar: CRL refresh loop
+        image: {{ .Values.image.tools }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args: [pki-refresh]
+        env:
+        - {name: PKI_SOURCE, value: {{ .Values.pki.source | quote }}}
+        - {name: PKI_REFRESH_SECONDS, value: {{ .Values.pki.refreshSeconds | quote }}}
+        securityContext: {{- include "kcs.containerSecurity" . | nindent 10 }}
+        resources: {{- toYaml .Values.resources.tools | nindent 10 }}
+        volumeMounts: [{name: pki, mountPath: /pki}, {name: tmp-refresh, mountPath: /tmp}{{ if .Values.pki.seedVolume }}, {name: pki-seed, mountPath: /seed, readOnly: true}{{ end }}]
+      {{- end }}
+      - name: keycloak
+        image: {{ .Values.image.keycloak }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args: [start, --optimized]
+        env:
+        - {name: KC_HOSTNAME, value: {{ .Values.hostname | quote }}}
+        - {name: KC_HOSTNAME_ADMIN, value: {{ .Values.hostnameAdmin | quote }}}
+        - {name: KC_HTTPS_CERTIFICATE_FILE, value: /run/secrets/tls/tls.crt}
+        - {name: KC_HTTPS_CERTIFICATE_KEY_FILE, value: /run/secrets/tls/tls.key}
+        - {name: KC_DB_URL, value: {{ .Values.database.url | quote }}}
+        - {name: KC_DB_USERNAME, value: {{ .Values.database.username | quote }}}
+        - {name: KC_DB_PASSWORD_FILE, value: /run/secrets/db/password}
+        - {name: KC_BOOTSTRAP_ADMIN_USERNAME, value: {{ .Values.bootstrapAdmin.username | quote }}}
+        - {name: KC_BOOTSTRAP_ADMIN_PASSWORD_FILE, value: /run/secrets/bootstrap/password}
+        - {name: KC_SPI_EVENTS_LISTENER__STIG_AUDIT__NOTIFY_EMAILS, value: {{ .Values.stig.notifyEmails | quote }}}
+        {{- if eq .Values.ingress.mode "edge" }}
+        - {name: KC_PROXY_HEADERS, value: xforwarded}
+        - {name: KC_SPI_X509CERT_LOOKUP__NGINX__SSL_CLIENT_CERT, value: ssl-client-cert}
+        - {name: KC_SPI_X509CERT_LOOKUP__NGINX__SSL_CERT_CHAIN_PREFIX, value: USELESS}
+        - {name: KC_SPI_X509CERT_LOOKUP__NGINX__CERTIFICATE_CHAIN_LENGTH, value: "10"}
+        - {name: KC_SPI_X509CERT_LOOKUP__NGINX__TRUST_PROXY_VERIFICATION, value: "false"}
+        {{- end }}
+        {{- with .Values.extraEnv }}{{ toYaml . | nindent 8 }}{{ end }}
+        ports:
+        - {name: https, containerPort: 8443}
+        - {name: management, containerPort: 9000}
+        - {name: jgroups, containerPort: 7800}
+        {{- if eq .Values.probes.type "http" }}
+        startupProbe: {httpGet: {scheme: HTTPS, path: /health/started, port: 9000}, periodSeconds: 5, failureThreshold: 60}
+        readinessProbe: {httpGet: {scheme: HTTPS, path: /health/ready, port: 9000}, periodSeconds: 10}
+        livenessProbe: {httpGet: {scheme: HTTPS, path: /health/live, port: 9000}, periodSeconds: 20}
+        {{- else }}
+        startupProbe: {tcpSocket: {port: 8443}, periodSeconds: 5, failureThreshold: 60}
+        readinessProbe: {tcpSocket: {port: 8443}, periodSeconds: 10}
+        livenessProbe: {tcpSocket: {port: 9000}, periodSeconds: 20}
+        {{- end }}
+        securityContext: {{- include "kcs.containerSecurity" . | nindent 10 }}
+        resources: {{- toYaml .Values.resources.keycloak | nindent 10 }}
+        volumeMounts:
+        - {name: pki, mountPath: /opt/keycloak/conf/pki, readOnly: true}
+        - {name: tls, mountPath: /run/secrets/tls, readOnly: true}
+        - {name: db, mountPath: /run/secrets/db, readOnly: true}
+        - {name: db-ca, mountPath: /run/secrets/db-ca, readOnly: true}
+        - {name: bootstrap, mountPath: /run/secrets/bootstrap, readOnly: true}
+        - {name: kc-data, mountPath: /opt/keycloak/data}
+        - {name: tmp-kc, mountPath: /tmp}
+      volumes:
+      - {name: pki, emptyDir: {sizeLimit: {{ .Values.pki.sizeLimit }}}}
+      {{- if .Values.pki.seedVolume }}
+      - name: pki-seed
+        {{- toYaml .Values.pki.seedVolume | nindent 8 }}
+      {{- end }}
+      - name: tls
+        secret: {secretName: {{ .Values.tls.secretName }}, defaultMode: 0440}
+      - name: db
+        secret: {secretName: {{ .Values.database.passwordSecret.name }}, items: [{key: {{ .Values.database.passwordSecret.key }}, path: password}], defaultMode: 0440}
+      - name: db-ca
+        secret: {secretName: {{ .Values.database.caSecret }}}
+      - name: bootstrap
+        secret: {secretName: {{ .Values.bootstrapAdmin.passwordSecret.name }}, items: [{key: {{ .Values.bootstrapAdmin.passwordSecret.key }}, path: password}], defaultMode: 0440}
+      - {name: kc-data, emptyDir: {}}
+      - {name: tmp, emptyDir: {}}
+      - {name: tmp-refresh, emptyDir: {}}
+      - {name: tmp-kc, emptyDir: {}}

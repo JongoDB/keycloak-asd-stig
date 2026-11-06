@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kcs.name" . }}-profile
+  labels: {{- include "kcs.labels" . | nindent 4 }}
+data:
+  profile.json: |
+    {{- $p := deepCopy .Values.stig.profile }}
+    {{- $_ := set $p "keycloak" (dict "url" (printf "https://%s:8443" (include "kcs.name" .)) "admin_realm" "master") }}
+    {{- $_ := unset $p "clients" }}
+    {{ toJson $p }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kcs.name" . }}-clients
+  labels: {{- include "kcs.labels" . | nindent 4 }}
+data:
+  {{- range .Values.stig.clients }}
+  {{ regexReplaceAll "[^A-Za-z0-9_.-]" .client_id "_" }}.json: {{ toJson . | quote }}
+  {{- end }}
+  _release.json: "[]"

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.cfg/
+*.key
+*.p12
+lab-admin-temporary-password.txt

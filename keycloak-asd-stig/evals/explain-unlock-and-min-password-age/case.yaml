@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: explain-unlock-and-min-password-age
+expected_outcome: |
+  answer.md cites V-222433 (APSC-DV-000540, approved ISSO/ISSM process with identity validation before unlock) and
+  V-222544 (APSC-DV-001760, 24 hour minimum lifetime), quotes or accurately paraphrases the check, says Keycloak 26 has
+  no built-in minimum password age policy (needs an extension or is N/A with CAC-only), and that unlock is a procedure
+  supported by permanentLockout + admin unlock.

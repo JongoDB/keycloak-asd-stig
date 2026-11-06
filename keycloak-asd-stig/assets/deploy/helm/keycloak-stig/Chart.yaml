@@ -1,0 +1,6 @@
+apiVersion: v2
+name: keycloak-stig
+description: Keycloak hardened to the DISA ASD STIG V6R4 (CAC/PIV, MFA, Alt Token admins, DoD banner, audit) with PKI init/refresh sidecars and an apply/verify job
+type: application
+version: 0.1.0
+appVersion: "26.8.2"

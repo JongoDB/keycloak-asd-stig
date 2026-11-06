@@ -1,0 +1,54 @@
+{
+  "realm": "ops-portal",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": true,
+  "resetPasswordAllowed": true,
+  "rememberMe": true,
+  "loginWithEmailAllowed": true,
+  "bruteForceProtected": false,
+  "failureFactor": 30,
+  "permanentLockout": false,
+  "maxDeltaTimeSeconds": 43200,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "ssoSessionIdleTimeoutRememberMe": 2592000,
+  "offlineSessionIdleTimeout": 2592000,
+  "offlineSessionMaxLifespanEnabled": false,
+  "accessTokenLifespan": 1800,
+  "revokeRefreshToken": false,
+  "passwordPolicy": "length(8) and hashAlgorithm(argon2)",
+  "otpPolicyType": "totp",
+  "eventsEnabled": false,
+  "adminEventsEnabled": false,
+  "adminEventsDetailsEnabled": false,
+  "eventsListeners": ["jboss-logging"],
+  "loginTheme": "keycloak.v2",
+  "browserFlow": "browser",
+  "directGrantFlow": "direct grant",
+  "defaultRoles": ["offline_access", "uma_authorization"],
+  "browserSecurityHeaders": {
+    "xFrameOptions": "SAMEORIGIN",
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none';",
+    "xContentTypeOptions": "nosniff",
+    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+  },
+  "authenticationFlows": [
+    {"alias": "browser", "builtIn": true, "topLevel": true, "authenticationExecutions": [
+      {"authenticator": "auth-cookie", "requirement": "ALTERNATIVE"},
+      {"authenticator": "identity-provider-redirector", "requirement": "ALTERNATIVE"},
+      {"flowAlias": "forms", "requirement": "ALTERNATIVE", "authenticatorFlow": true}]},
+    {"alias": "forms", "builtIn": true, "topLevel": false, "authenticationExecutions": [
+      {"authenticator": "auth-username-password-form", "requirement": "REQUIRED"},
+      {"flowAlias": "Browser - Conditional OTP", "requirement": "CONDITIONAL", "authenticatorFlow": true}]}
+  ],
+  "requiredActions": [
+    {"alias": "CONFIGURE_TOTP", "enabled": true, "defaultAction": false},
+    {"alias": "TERMS_AND_CONDITIONS", "enabled": false, "defaultAction": false}
+  ],
+  "clients": [
+    {"clientId": "ops-portal-web", "publicClient": false, "standardFlowEnabled": true, "implicitFlowEnabled": true,
+     "directAccessGrantsEnabled": true, "fullScopeAllowed": true,
+     "redirectUris": ["https://ops.example.mil/*"], "webOrigins": ["*"], "attributes": {}}
+  ]
+}

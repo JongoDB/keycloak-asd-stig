@@ -1,0 +1,73 @@
+# Applies the STIG profile after every install/upgrade. Idempotent; logs in with the automation service
+# account, or with the bootstrap admin on the very first run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kcs.name" . }}-apply-{{ .Release.Revision }}
+  labels: {{- include "kcs.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {{- include "kcs.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {{- include "kcs.podSecurity" . | nindent 8 }}
+      containers:
+      - name: apply
+        image: {{ .Values.image.tools }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args: [apply, --wait, "900", --harden-master, --remove-bootstrap-admin, --automation-secret-file, /run/secrets/automation/secret]
+        env:
+        {{- include "kcs.toolsEnv" . | nindent 8 }}
+        - {name: KC_ADMIN_USER, value: {{ .Values.bootstrapAdmin.username | quote }}}
+        - {name: KC_ADMIN_PASSWORD_FILE, value: /run/secrets/bootstrap/password}
+        securityContext: {{- include "kcs.containerSecurity" . | nindent 10 }}
+        resources: {{- toYaml .Values.resources.tools | nindent 10 }}
+        volumeMounts:
+        {{- include "kcs.toolsMounts" . | nindent 8 }}
+        - {name: bootstrap, mountPath: /run/secrets/bootstrap, readOnly: true}
+      volumes:
+      {{- include "kcs.toolsVolumes" . | nindent 6 }}
+      - name: bootstrap
+        secret: {secretName: {{ .Values.bootstrapAdmin.passwordSecret.name }}, items: [{key: {{ .Values.bootstrapAdmin.passwordSecret.key }}, path: password}]}
+---
+# Nightly drift check: fails (job status Failed) when any automated STIG check fails. Report goes to the log.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "kcs.name" . }}-verify
+  labels: {{- include "kcs.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.stig.verifySchedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels: {{- include "kcs.labels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext: {{- include "kcs.podSecurity" . | nindent 12 }}
+          containers:
+          - name: verify
+            image: {{ .Values.image.tools }}
+            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            command: [sh, -c]
+            args:
+            - kcstig-tools verify --live-url https://{{ include "kcs.name" . }}:8443 --out /tmp/reports --strict; rc=$?; cat /tmp/reports/*-report.md; exit $rc
+            env:
+            {{- include "kcs.toolsEnv" . | nindent 12 }}
+            securityContext: {{- include "kcs.containerSecurity" . | nindent 14 }}
+            resources: {{- toYaml .Values.resources.tools | nindent 14 }}
+            volumeMounts:
+            {{- include "kcs.toolsMounts" . | nindent 12 }}
+          volumes:
+          {{- include "kcs.toolsVolumes" . | nindent 10 }}

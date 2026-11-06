@@ -1,0 +1,54 @@
+# Keycloak ASD STIG image - one Containerfile for docker, podman, buildah, kaniko, BuildKit.
+#
+#   BASE_IMAGE  any Keycloak 26.x distribution with /opt/keycloak:
+#               quay.io/keycloak/keycloak:26.8.2                          (upstream, default - community support)
+#               registry1.dso.mil/ironbank/opensource/keycloak/keycloak:<tag> (Iron Bank - DoD hardened, preferred for ATO)
+#               registry.redhat.io/rhbk/keycloak-rhel9:26.x                (Red Hat build of Keycloak - vendor supported)
+#   FIPS        true -> bake --features=fips with the BC-FIPS jars in ./fips/ (scripts/stage_image.sh --fips fetches them)
+#   FIPS_MODE   strict (validated config on a FIPS host) | non-strict (testing)
+#   X509_LOOKUP default (Keycloak terminates TLS and reads the CAC itself)
+#               nginx | haproxy | apache | envoy (a proxy verifies the CAC and forwards it in a header).
+#               This is a BUILD-time Keycloak option, so the edge-verify mode is a separate image tag.
+#
+# Only BUILD-time options are set here. Everything else is runtime env (KC_*), see runtime.env.example.
+ARG BASE_IMAGE=quay.io/keycloak/keycloak:26.8.2
+FROM ${BASE_IMAGE} AS builder
+ARG FIPS=false
+ARG FIPS_MODE=strict
+ARG X509_LOOKUP=default
+USER 0
+COPY --chown=1000:0 stig-extensions.jar /opt/keycloak/providers/stig-extensions.jar
+COPY --chown=1000:0 theme/dod-stig /opt/keycloak/themes/dod-stig
+COPY --chown=1000:0 fips/ /tmp/fips/
+COPY --chown=1000:0 --chmod=0755 stig-entrypoint.sh /opt/keycloak/bin/stig-entrypoint.sh
+RUN if [ "$FIPS" = "true" ]; then cp /tmp/fips/*.jar /opt/keycloak/providers/; fi; rm -rf /tmp/fips
+USER 1000
+# https-client-auth=request: browser offers the CAC (V-222524). log-mdc: user/realm in every log line.
+ENV KC_DB=postgres KC_HEALTH_ENABLED=true KC_METRICS_ENABLED=true \
+    KC_HTTPS_CLIENT_AUTH=request KC_HTTPS_MANAGEMENT_CLIENT_AUTH=none KC_LOG_MDC_ENABLED=true \
+    KC_CACHE=ispn KC_CACHE_STACK=jdbc-ping
+RUN if [ "$FIPS" = "true" ]; then export KC_FEATURES=fips KC_FIPS_MODE=$FIPS_MODE; fi; \
+    export KC_SPI_X509CERT_LOOKUP__PROVIDER=$X509_LOOKUP; \
+    /opt/keycloak/bin/kc.sh build && /opt/keycloak/bin/kc.sh show-config | grep -E 'kc\.(db|features|fips|https-client-auth|cache)' || true
+
+FROM ${BASE_IMAGE}
+COPY --from=builder /opt/keycloak/ /opt/keycloak/
+USER 1000
+EXPOSE 8443 9000 7800
+# Runtime defaults that are STIG-relevant and safe everywhere; override with KC_* env.
+# JAVA_OPTS_APPEND: BC-FIPS would otherwise extract a native JNI library into /tmp and map it executable,
+# which fails (and stops Keycloak) on the hardened noexec /tmp. The pure-Java variant needs no native code.
+# If you set your own JAVA_OPTS_APPEND, keep this property in it.
+ENV KC_HTTP_ENABLED=false KC_HTTPS_PORT=8443 KC_HTTPS_PROTOCOLS=TLSv1.3,TLSv1.2 \
+    KC_HTTPS_CIPHER_SUITES=TLS_AES_256_GCM_SHA384,TLS_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 \
+    KC_HOSTNAME_STRICT=true KC_LOG=console KC_LOG_CONSOLE_OUTPUT=json \
+    KC_HTTP_ACCESS_LOG_ENABLED=true \
+    KC_HTTP_ACCESS_LOG_PATTERN='%h %l %u %t "%r" %s %b "%{i,Referer}" "%{i,User-Agent}" %D' \
+    KC_HTTP_ACCESS_LOG_MASKED_HEADERS=Authorization,Cookie,Set-Cookie \
+    KC_SPI_EVENTS_LISTENER__JBOSS_LOGGING__SUCCESS_LEVEL=info KC_SPI_EVENTS_LISTENER__JBOSS_LOGGING__ERROR_LEVEL=warn \
+    KC_SPI_EVENTS_LISTENER__WORKFLOW_EVENT_LISTENER__STEP_RUNNER_TASK_INTERVAL=900 \
+    JAVA_OPTS_APPEND="-Dorg.bouncycastle.native.cpu_variant=java" \
+    KC_TRUSTSTORE_PATHS=/opt/keycloak/conf/pki/truststore \
+    KC_HTTPS_TRUST_STORE_FILE=/opt/keycloak/conf/pki/client-ca.p12 KC_HTTPS_TRUST_STORE_PASSWORD=dod-anchors
+ENTRYPOINT ["/opt/keycloak/bin/stig-entrypoint.sh"]
+CMD ["start", "--optimized"]

@@ -1,0 +1,108 @@
+# Reference deployment of the ASD STIG Keycloak pattern with Compose (docker compose / podman compose).
+# Same containers, env and volumes as the Helm chart:
+#   pki-init (once) -> keycloak (+ pki-refresh sidecar) -> kcstig-apply (one-shot job)
+# Files: runtime.env, profile.json, clients.d/*.json, secrets/*, tls/*, and a PKI seed (or PKI_SOURCE=dod).
+name: keycloak-stig
+x-tools: &tools
+  image: ${TOOLS_IMAGE:-localhost/kcstig-tools:26.8.2-stig}
+  read_only: true
+  tmpfs: ["/tmp"]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+services:
+  db:
+    image: ${DB_IMAGE:-postgres:17}
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    entrypoint: ["sh", "-c", "install -o postgres -m 0600 /run/secrets/db_tls_key /var/lib/postgresql/db.key && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/run/secrets/db_tls_crt -c ssl_key_file=/var/lib/postgresql/db.key -c ssl_min_protocol_version=TLSv1.2"]
+    secrets: [db_password, db_tls_crt, db_tls_key]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    networks: [backend]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"], interval: 5s, retries: 30}
+
+  pki-init:
+    <<: *tools
+    command: ["pki-init"]
+    environment: {PKI_SOURCE: "${PKI_SOURCE:-dod}"}
+    volumes: ["pki:/pki", "${PKI_SEED:-./pki-seed}:/seed:ro"]
+    networks: [egress]
+
+  pki-refresh:
+    <<: *tools
+    command: ["pki-refresh"]
+    environment: {PKI_SOURCE: "${PKI_SOURCE:-dod}", PKI_REFRESH_SECONDS: "${PKI_REFRESH_SECONDS:-21600}"}
+    volumes: ["pki:/pki", "${PKI_SEED:-./pki-seed}:/seed:ro"]
+    depends_on: {pki-init: {condition: service_completed_successfully}}
+    networks: [egress]
+    restart: unless-stopped
+
+  keycloak:
+    image: ${KEYCLOAK_IMAGE:-localhost/keycloak-stig:26.8.2-stig}
+    env_file: [runtime.env]
+    user: "1000:0"
+    read_only: true
+    tmpfs: ["/tmp", "/opt/keycloak/data"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    secrets: [db_password, bootstrap_admin_password]
+    volumes:
+      - pki:/opt/keycloak/conf/pki:ro
+      - ./tls:/run/secrets/tls:ro
+      - ./db-ca:/run/secrets/db-ca:ro
+    depends_on:
+      db: {condition: service_healthy}
+      pki-init: {condition: service_completed_successfully}
+    ports: ["${KC_PUBLISH:-8443}:8443"]
+    networks: [backend, frontend]
+    restart: unless-stopped
+    healthcheck:
+      # management interface (9000) is not published; health uses HTTPS with the server cert
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 || exit 1"]
+      interval: 10s
+      retries: 30
+
+  kcstig-apply:
+    <<: *tools
+    command: ["apply", "--wait", "600", "--harden-master", "--remove-bootstrap-admin",
+              "--automation-secret-file", "/run/secrets/automation_secret", "--url", "https://keycloak:8443"]
+    environment:
+      KC_CACERT: /run/secrets/tls/ca.crt
+      KC_CLIENT_ID: stig-automation
+      KC_CLIENT_SECRET_FILE: /run/secrets/automation_secret
+      KC_ADMIN_USER: bootstrap-admin
+      KC_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_admin_password
+      STIG_CLIENTS_DIR: /etc/kcstig/clients.d
+    secrets: [automation_secret, bootstrap_admin_password]
+    volumes: ["./profile.json:/etc/kcstig/profile.json:ro", "./clients.d:/etc/kcstig/clients.d:ro", "./tls:/run/secrets/tls:ro"]
+    depends_on: {keycloak: {condition: service_started}}
+    networks: [frontend]
+    restart: "no"
+
+  kcstig-verify:
+    <<: *tools
+    profiles: [verify]
+    command: ["verify", "--url", "https://keycloak:8443", "--live-url", "https://keycloak:8443", "--out", "/reports", "--strict"]
+    environment:
+      KC_CACERT: /run/secrets/tls/ca.crt
+      KC_CLIENT_ID: stig-automation
+      KC_CLIENT_SECRET_FILE: /run/secrets/automation_secret
+      STIG_CLIENTS_DIR: /etc/kcstig/clients.d
+    secrets: [automation_secret]
+    volumes: ["./profile.json:/etc/kcstig/profile.json:ro", "./clients.d:/etc/kcstig/clients.d:ro", "./tls:/run/secrets/tls:ro", "./reports:/reports"]
+    networks: [frontend]
+
+secrets:
+  db_password: {file: ./secrets/db_password}
+  bootstrap_admin_password: {file: ./secrets/bootstrap_admin_password}
+  automation_secret: {file: ./secrets/automation_secret}
+  db_tls_crt: {file: ./db-tls/tls.crt}
+  db_tls_key: {file: ./db-tls/tls.key}
+volumes:
+  pgdata: {}
+  pki: {}
+networks:
+  backend: {internal: true}
+  frontend: {}
+  egress: {}

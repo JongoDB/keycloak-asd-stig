@@ -1,0 +1,5 @@
+services:
+  keycloak:
+    ports: !reset []
+    deploy: {replicas: 2}
+# use together with compose.edge.yaml (the edge proxy load-balances the replicas; clustering uses the database - jdbc-ping)

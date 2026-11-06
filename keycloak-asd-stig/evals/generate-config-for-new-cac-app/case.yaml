@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: generate-config-for-new-cac-app
+expected_outcome: |
+  Keycloak configuration files in ./outputs for realm LogTrack: CAC (X.509, SAN UPN mapping to a user attribute users cannot edit)
+  or password+MFA for contractors, Alt Token for admins, 15 min user / 10 min admin idle, 3 failures in 15 min lockout,
+  DoD banner, password policy 15 chars/history 5/60 days, PKCE, no implicit/password grant, SAML signed+encrypted,
+  exact redirect URIs, and a document mapping ASD STIG IDs to IdP-covered vs app-owned responsibilities.

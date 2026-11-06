@@ -1,0 +1,3438 @@
+{
+ "sources": {
+  "cci_list": "DISA U_CCI_List.xml version 2025-01-23",
+  "catalog": "Electronic (OSCAL) Version of NIST SP 800-53 Rev 5.2.0 Controls and SP 800-53A Rev 5.2.0 Assessment Procedures 5.2.0",
+  "baselines": "NIST SP 800-53B Rev 5 OSCAL profiles (LOW/MODERATE/HIGH)"
+ },
+ "cci": {
+  "CCI-000015": {
+   "definition": "Support the management of system accounts using organization-defined automated mechanisms.",
+   "rev5": [
+    "AC-2 (1)"
+   ],
+   "rev4": [
+    "AC-2 (1)"
+   ],
+   "controls": [
+    "ac-2.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000016": {
+   "definition": "Automatically remove or disable temporary and emergency accounts after an organization-defined time-period for each type of account.",
+   "rev5": [
+    "AC-2 (2)"
+   ],
+   "rev4": [
+    "AC-2 (2)"
+   ],
+   "controls": [
+    "ac-2.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000017": {
+   "definition": "Disable accounts when the accounts have been inactive for the organization-defined time-period.",
+   "rev5": [
+    "AC-2 (3) (d)"
+   ],
+   "rev4": [
+    "AC-2 (3)"
+   ],
+   "controls": [
+    "ac-2.3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000018": {
+   "definition": "Automatically audit account creation actions.",
+   "rev5": [
+    "AC-2 (4)"
+   ],
+   "rev4": [
+    "AC-2 (4)"
+   ],
+   "controls": [
+    "ac-2.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000044": {
+   "definition": "Enforce the organization-defined limit of consecutive invalid logon attempts by a user during the organization-defined time period.",
+   "rev5": [
+    "AC-7 a"
+   ],
+   "rev4": [
+    "AC-7 a"
+   ],
+   "controls": [
+    "ac-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000048": {
+   "definition": "Display an organization-defined system use notification message or banner to users before granting access to the system that provides privacy and security notices consistent with applicable federal laws, Executive Orders, directives, policies, regulations, standards, and guidelines.",
+   "rev5": [
+    "AC-8 a"
+   ],
+   "rev4": [
+    "AC-8 a"
+   ],
+   "controls": [
+    "ac-8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000050": {
+   "definition": "Retain the notification message or banner on the screen until users acknowledge the usage conditions and take explicit actions to log on to or further access the system.",
+   "rev5": [
+    "AC-8 b"
+   ],
+   "rev4": [
+    "AC-8 b"
+   ],
+   "controls": [
+    "ac-8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000052": {
+   "definition": "Notify the user, upon successful logon (access) to the system, of the date and time of the last logon (access).",
+   "rev5": [
+    "AC-9"
+   ],
+   "rev4": [
+    "AC-9"
+   ],
+   "controls": [
+    "ac-9"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000054": {
+   "definition": "Limit the number of concurrent sessions for each organization-defined account and/or account type to an organization-defined number.",
+   "rev5": [
+    "AC-10"
+   ],
+   "rev4": [
+    "AC-10"
+   ],
+   "controls": [
+    "ac-10"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000068": {
+   "definition": "Implement cryptographic mechanisms to protect the confidentiality of remote access sessions.",
+   "rev5": [
+    "AC-17 (2)"
+   ],
+   "rev4": [
+    "AC-17 (2)"
+   ],
+   "controls": [
+    "ac-17.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000130": {
+   "definition": "Ensure that audit records contain information that establishes what type of event occurred.",
+   "rev5": [
+    "AU-3 a"
+   ],
+   "rev4": [
+    "AU-3"
+   ],
+   "controls": [
+    "au-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000131": {
+   "definition": "Ensure that audit records containing information that establishes when the event occurred.",
+   "rev5": [
+    "AU-3 b"
+   ],
+   "rev4": [
+    "AU-3"
+   ],
+   "controls": [
+    "au-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000132": {
+   "definition": "Ensure that audit records containing information that establishes where the event occurred.",
+   "rev5": [
+    "AU-3 c"
+   ],
+   "rev4": [
+    "AU-3"
+   ],
+   "controls": [
+    "au-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000133": {
+   "definition": "Ensure that audit records containing information that establishes the source of the event.",
+   "rev5": [
+    "AU-3 d"
+   ],
+   "rev4": [
+    "AU-3"
+   ],
+   "controls": [
+    "au-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000134": {
+   "definition": "Ensure that audit records containing information that establishes the outcome of the event.",
+   "rev5": [
+    "AU-3 e"
+   ],
+   "rev4": [
+    "AU-3"
+   ],
+   "controls": [
+    "au-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000135": {
+   "definition": "Generate audit records containing the organization-defined additional information that is to be included in the audit records.",
+   "rev5": [
+    "AU-3 (1)"
+   ],
+   "rev4": [
+    "AU-3 (1)"
+   ],
+   "controls": [
+    "au-3.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000139": {
+   "definition": "Alert organization-defined personnel or roles within an organization-defined time period in the event of an audit logging process failure.",
+   "rev5": [
+    "AU-5 a"
+   ],
+   "rev4": [
+    "AU-5 a"
+   ],
+   "controls": [
+    "au-5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000140": {
+   "definition": "Take organization-defined actions upon audit failure include, shutting down the system, overwriting oldest audit records, and stopping the generation of audit records.",
+   "rev5": [
+    "AU-5 b"
+   ],
+   "rev4": [
+    "AU-5 b"
+   ],
+   "controls": [
+    "au-5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000149": {
+   "definition": "Report any findings to organization-defined personnel or roles for indications of organization-defined inappropriate or unusual activity.",
+   "rev5": [
+    "AU-6 b"
+   ],
+   "rev4": [
+    "AU-6 b"
+   ],
+   "controls": [
+    "au-6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000154": {
+   "definition": "Provide the capability to centrally review and analyze audit records from multiple components within the system.",
+   "rev5": [
+    "AU-6 (4)"
+   ],
+   "rev4": [
+    "AU-6 (4)"
+   ],
+   "controls": [
+    "au-6.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000158": {
+   "definition": "Provide the capability to process, sort, and search audit records for events of interest based on organization-defined audit fields within audit records.",
+   "rev5": [
+    "AU-7 (1)"
+   ],
+   "rev4": [
+    "AU-7 (1)"
+   ],
+   "controls": [
+    "au-7.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000159": {
+   "definition": "Use internal system clocks to generate time stamps for audit records.",
+   "rev5": [
+    "AU-8 a"
+   ],
+   "rev4": [
+    "AU-8 a"
+   ],
+   "controls": [
+    "au-8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000162": {
+   "definition": "Protect audit information from unauthorized access.",
+   "rev5": [
+    "AU-9 a"
+   ],
+   "rev4": [
+    "AU-9"
+   ],
+   "controls": [
+    "au-9"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000163": {
+   "definition": "Protect audit information from unauthorized modification.",
+   "rev5": [
+    "AU-9 a"
+   ],
+   "rev4": [
+    "AU-9"
+   ],
+   "controls": [
+    "au-9"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000164": {
+   "definition": "Protect audit information from unauthorized deletion.",
+   "rev5": [
+    "AU-9 a"
+   ],
+   "rev4": [
+    "AU-9"
+   ],
+   "controls": [
+    "au-9"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000166": {
+   "definition": "Provide irrefutable evidence that an individual (or process acting on behalf of an individual) falsely denying having performed organization-defined actions to be covered by non-repudiation.",
+   "rev5": [
+    "AU-10"
+   ],
+   "rev4": [
+    "AU-10"
+   ],
+   "controls": [
+    "au-10"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000167": {
+   "definition": "Retain audit records for an organization-defined time period to provide support for after-the-fact investigations of incidents and to meet regulatory and organizational information retention requirements.",
+   "rev5": [
+    "AU-11"
+   ],
+   "rev4": [
+    "AU-11"
+   ],
+   "controls": [
+    "au-11"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000169": {
+   "definition": "Provide audit record generation capability for the event types the system is capable of auditing as defined in AU-2 a on organization-defined information system components.",
+   "rev5": [
+    "AU-12 a"
+   ],
+   "rev4": [
+    "AU-12 a"
+   ],
+   "controls": [
+    "au-12"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000172": {
+   "definition": "Generate audit records for the event types defined in AU-2 c that include the audit record content defined in AU-3.",
+   "rev5": [
+    "AU-12 c"
+   ],
+   "rev4": [
+    "AU-12 c"
+   ],
+   "controls": [
+    "au-12"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000174": {
+   "definition": "Compile audit records from organization-defined information system components into a system-wide (logical or physical) audit trail that is time-correlated to within an organization-defined level of tolerance for relationship between time stamps of individual records in the audit trail.",
+   "rev5": [
+    "AU-12 (1)"
+   ],
+   "rev4": [
+    "AU-12 (1)"
+   ],
+   "controls": [
+    "au-12.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000184": {
+   "definition": "Manage system authenticators by requiring individuals to take, and having devices implement, specific security controls to protect authenticators.",
+   "rev5": [
+    "IA-5 h"
+   ],
+   "rev4": [
+    "IA-5 i"
+   ],
+   "controls": [
+    "ia-5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000185": {
+   "definition": "For public key-based authentication, validate certificates by constructing and verifying a certification path to an accepted trust anchor including checking certificate status information.",
+   "rev5": [
+    "IA-5 (2) (b) (1)"
+   ],
+   "rev4": [
+    "IA-5 (2) (a)"
+   ],
+   "controls": [
+    "ia-5.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000186": {
+   "definition": "For public key-based authentication, enforce authorized access to the corresponding private key.",
+   "rev5": [
+    "IA-5 (2) (a) (1)"
+   ],
+   "rev4": [
+    "IA-5 (2) (b)"
+   ],
+   "controls": [
+    "ia-5.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000187": {
+   "definition": "For public key-based authentication, map the authenticated identity to the account of the individual or group.",
+   "rev5": [
+    "IA-5 (2) (a) (2)"
+   ],
+   "rev4": [
+    "IA-5 (2) (c)"
+   ],
+   "controls": [
+    "ia-5.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000197": {
+   "definition": "For password-based authentication, transmit passwords only over cryptographically-protected channels.",
+   "rev5": [
+    "IA-5 (1) (c)"
+   ],
+   "rev4": [
+    "IA-5 (1) (c)"
+   ],
+   "controls": [
+    "ia-5.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000201": {
+   "definition": "Protect authenticators commensurate with the security category of the information to which use of the authenticator permits access.",
+   "rev5": [
+    "IA-5 (6)"
+   ],
+   "rev4": [
+    "IA-5 (6)"
+   ],
+   "controls": [
+    "ia-5.6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000206": {
+   "definition": "Obscure feedback of authentication information during the authentication process to protect the information from possible exploitation and use by unauthorized individuals.",
+   "rev5": [
+    "IA-6"
+   ],
+   "rev4": [
+    "IA-6"
+   ],
+   "controls": [
+    "ia-6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000213": {
+   "definition": "Enforce approved authorizations for logical access to information and system resources in accordance with applicable access control policies.",
+   "rev5": [
+    "AC-3"
+   ],
+   "rev4": [
+    "AC-3"
+   ],
+   "controls": [
+    "ac-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000256": {
+   "definition": "Include as part of the control assessments, announced or unannounced, on an organization-defined frequency, in-depth monitoring; security instrumentation; automated security test cases; vulnerability scanning; malicious user testing; insider threat assessment; performance and load testing; data leakage or data loss assessment; and/or organization-defined other forms of assessment.",
+   "rev5": [
+    "CA-2 (2)"
+   ],
+   "rev4": [
+    "CA-2 (2)"
+   ],
+   "controls": [
+    "ca-2.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000336": {
+   "definition": "After system changes, verify that the impacted controls are operating as intended, meeting the security requirements for the system.",
+   "rev5": [
+    "CM-4 (2)"
+   ],
+   "rev4": [
+    "CM-4 (2)"
+   ],
+   "controls": [
+    "cm-4.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000345": {
+   "definition": "Enforce logical access restrictions associated with changes to the system.",
+   "rev5": [
+    "CM-5"
+   ],
+   "rev4": [
+    "CM-5"
+   ],
+   "controls": [
+    "cm-5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000363": {
+   "definition": "The organization defines security configuration checklists to be used to establish and document configuration settings for the information system technology products employed.",
+   "rev5": [],
+   "rev4": [
+    "CM-6 a"
+   ],
+   "controls": [],
+   "rev4_only": [
+    "cm-6"
+   ]
+  },
+  "CCI-000366": {
+   "definition": "Implement the security configuration settings.",
+   "rev5": [
+    "CM-6 b"
+   ],
+   "rev4": [
+    "CM-6 b"
+   ],
+   "controls": [
+    "cm-6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000381": {
+   "definition": "Configure the system to provide only organization-defined mission essential capabilities.",
+   "rev5": [
+    "CM-7 a"
+   ],
+   "rev4": [
+    "CM-7 a"
+   ],
+   "controls": [
+    "cm-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000382": {
+   "definition": "Configure the system to prohibit or restrict the use of organization-defined prohibited or restricted functions, system ports, protocols, software, and/or services.",
+   "rev5": [
+    "CM-7 b"
+   ],
+   "rev4": [
+    "CM-7 b"
+   ],
+   "controls": [
+    "cm-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000388": {
+   "definition": "Ensure compliance with organization-defined registration requirements for functions, ports, protocols, and services.",
+   "rev5": [
+    "CM-7 (3)"
+   ],
+   "rev4": [
+    "CM-7 (3)"
+   ],
+   "controls": [
+    "cm-7.3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000445": {
+   "definition": "Develop a contingency plan for the system that identifies associated contingency requirements.",
+   "rev5": [
+    "CP-2 a 1"
+   ],
+   "rev4": [
+    "CP-2 a 1"
+   ],
+   "controls": [
+    "cp-2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000448": {
+   "definition": "Develop a contingency plan for the system that provides metrics.",
+   "rev5": [
+    "CP-2 a 2"
+   ],
+   "rev4": [
+    "CP-2 a 2"
+   ],
+   "controls": [
+    "cp-2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000537": {
+   "definition": "Conduct backups of system-level information contained in the system per organization-defined frequency that is consistent with recovery time and recovery point objectives.",
+   "rev5": [
+    "CP-9 (b)"
+   ],
+   "rev4": [
+    "CP-9 (b)"
+   ],
+   "controls": [
+    "cp-9"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000540": {
+   "definition": "The organization protects the confidentiality, integrity, and availability of backup information at storage locations.",
+   "rev5": [],
+   "rev4": [
+    "CP-9 (d)"
+   ],
+   "controls": [],
+   "rev4_only": [
+    "cp-9"
+   ]
+  },
+  "CCI-000698": {
+   "definition": "Require the developer of the system, system component, or system service to enable integrity verification of software and firmware components.",
+   "rev5": [
+    "SA-10 (1)"
+   ],
+   "rev4": [
+    "SA-10 (1)"
+   ],
+   "controls": [
+    "sa-10.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000764": {
+   "definition": "Uniquely identify and authenticate organizational users and associate that unique identification with processes acting on behalf of those users.",
+   "rev5": [
+    "IA-2"
+   ],
+   "rev4": [
+    "IA-2"
+   ],
+   "controls": [
+    "ia-2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000765": {
+   "definition": "Implement multifactor authentication for access to privileged accounts.",
+   "rev5": [
+    "IA-2 (1)"
+   ],
+   "rev4": [
+    "IA-2 (1)"
+   ],
+   "controls": [
+    "ia-2.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000766": {
+   "definition": "Implement multifactor authentication for access to non-privileged accounts.",
+   "rev5": [
+    "IA-2 (2)"
+   ],
+   "rev4": [
+    "IA-2 (2)"
+   ],
+   "controls": [
+    "ia-2.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000778": {
+   "definition": "Uniquely identify organization-defined devices and/or types of devices before establishing a local, remote, and/or network connection.",
+   "rev5": [
+    "IA-3"
+   ],
+   "rev4": [
+    "IA-3"
+   ],
+   "controls": [
+    "ia-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000803": {
+   "definition": "Implement mechanisms for authentication to a cryptographic module that meet the requirements of applicable laws, Executive Orders, directives, policies, regulations, standards, and guidance for such authentication.",
+   "rev5": [
+    "IA-7"
+   ],
+   "rev4": [
+    "IA-7"
+   ],
+   "controls": [
+    "ia-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000804": {
+   "definition": "Uniquely identify and authenticate non-organizational users or processes acting on behalf of non-organizational users.",
+   "rev5": [
+    "IA-8"
+   ],
+   "rev4": [
+    "IA-8"
+   ],
+   "controls": [
+    "ia-8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-000877": {
+   "definition": "Employ strong authentication in the establishment of nonlocal maintenance and diagnostic sessions.",
+   "rev5": [
+    "MA-4 c"
+   ],
+   "rev4": [
+    "MA-4 c"
+   ],
+   "controls": [
+    "ma-4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001010": {
+   "definition": "Mark system media indicating the distribution limitations, handling caveats, and applicable security markings (if any) of the information.",
+   "rev5": [
+    "MP-3 a"
+   ],
+   "rev4": [
+    "MP-3 a"
+   ],
+   "controls": [
+    "mp-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001082": {
+   "definition": "Separate user functionality, including user interface services, from system management functionality.",
+   "rev5": [
+    "SC-2"
+   ],
+   "rev4": [
+    "SC-2"
+   ],
+   "controls": [
+    "sc-2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001084": {
+   "definition": "Isolate security functions from nonsecurity functions.",
+   "rev5": [
+    "SC-3"
+   ],
+   "rev4": [
+    "SC-3"
+   ],
+   "controls": [
+    "sc-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001090": {
+   "definition": "Prevent unauthorized and unintended information transfer via shared system resources.",
+   "rev5": [
+    "SC-4"
+   ],
+   "rev4": [
+    "SC-4"
+   ],
+   "controls": [
+    "sc-4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001094": {
+   "definition": "Restrict the ability of individuals to launch organization-defined denial of service attacks against other systems.",
+   "rev5": [
+    "SC-5 (1)"
+   ],
+   "rev4": [
+    "SC-5 (1)"
+   ],
+   "controls": [
+    "sc-5.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001095": {
+   "definition": "Manage capacity, bandwidth, or other redundancy to limit the effects of information flooding types of denial-of-service attacks.",
+   "rev5": [
+    "SC-5 (2)"
+   ],
+   "rev4": [
+    "SC-5 (2)"
+   ],
+   "controls": [
+    "sc-5.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001119": {
+   "definition": "Isolate organization-defined information security tools, mechanisms, and support components from other internal system components by implementing physically separate subnetworks with managed interfaces to other components of the system.",
+   "rev5": [
+    "SC-7 (13)"
+   ],
+   "rev4": [
+    "SC-7 (13)"
+   ],
+   "controls": [
+    "sc-7.13"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001133": {
+   "definition": "Terminate the network connection associated with a communications session at the end of the session or after an organization-defined time period of inactivity.",
+   "rev5": [
+    "SC-10"
+   ],
+   "rev4": [
+    "SC-10"
+   ],
+   "controls": [
+    "sc-10"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001166": {
+   "definition": "Identify organization-defined unacceptable mobile code.",
+   "rev5": [
+    "SC-18 (1)"
+   ],
+   "rev4": [
+    "SC-18 (1)"
+   ],
+   "controls": [
+    "sc-18.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001167": {
+   "definition": "Verify that the development of mobile code to be deployed in information systems meets organization-defined mobile code requirements.",
+   "rev5": [
+    "SC-18 (2)"
+   ],
+   "rev4": [
+    "SC-18 (2)"
+   ],
+   "controls": [
+    "sc-18.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001184": {
+   "definition": "Protect the authenticity of communications sessions.",
+   "rev5": [
+    "SC-23"
+   ],
+   "rev4": [
+    "SC-23"
+   ],
+   "controls": [
+    "sc-23"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001185": {
+   "definition": "Invalidate session identifiers upon user logout or other session termination.",
+   "rev5": [
+    "SC-23 (1)"
+   ],
+   "rev4": [
+    "SC-23 (1)"
+   ],
+   "controls": [
+    "sc-23.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001188": {
+   "definition": "Generate a unique session identifier for each session with organization-defined randomness requirements.",
+   "rev5": [
+    "SC-23 (3)"
+   ],
+   "rev4": [
+    "SC-23 (3)"
+   ],
+   "controls": [
+    "sc-23.3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001190": {
+   "definition": "Fail to an organization-defined known-system state for the list of organization-defined types of system failures on organization-defined system components on the indicated components while preserving organization-defined system state information in failure.",
+   "rev5": [
+    "SC-24"
+   ],
+   "rev4": [
+    "SC-24"
+   ],
+   "controls": [
+    "sc-24"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001199": {
+   "definition": "Protects the confidentiality and/or integrity of organization-defined information at rest.",
+   "rev5": [
+    "SC-28"
+   ],
+   "rev4": [
+    "SC-28"
+   ],
+   "controls": [
+    "sc-28"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001274": {
+   "definition": "Alert organization-defined personnel or roles using organization-defined automated mechanisms when inappropriate or unusual activities with security or privacy implications.",
+   "rev5": [
+    "SI-4 (12)"
+   ],
+   "rev4": [
+    "SI-4 (12)"
+   ],
+   "controls": [
+    "si-4.12"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001285": {
+   "definition": "Receive system security alerts, advisories, and directives from organization-defined external organizations on an ongoing basis.",
+   "rev5": [
+    "SI-5 a"
+   ],
+   "rev4": [
+    "SI-5 a"
+   ],
+   "controls": [
+    "si-5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001286": {
+   "definition": "Generate internal security alerts, advisories, and directives as deemed necessary.",
+   "rev5": [
+    "SI-5 b"
+   ],
+   "rev4": [
+    "SI-5 b"
+   ],
+   "controls": [
+    "si-5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001294": {
+   "definition": "Alert organization-defined personnel or roles of failed security verification tests.",
+   "rev5": [
+    "SI-6 c"
+   ],
+   "rev4": [
+    "SI-6 c"
+   ],
+   "controls": [
+    "si-6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001310": {
+   "definition": "Checks the validity of organization-defined information inputs to the system.",
+   "rev5": [
+    "SI-10"
+   ],
+   "rev4": [
+    "SI-10"
+   ],
+   "controls": [
+    "si-10"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001312": {
+   "definition": "Generate error messages that provide information necessary for corrective actions without revealing information that could be exploited.",
+   "rev5": [
+    "SI-11 a"
+   ],
+   "rev4": [
+    "SI-11 a"
+   ],
+   "controls": [
+    "si-11"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001314": {
+   "definition": "Reveal error messages only to organization-defined personnel or roles.",
+   "rev5": [
+    "SI-11 b"
+   ],
+   "rev4": [
+    "SI-11 b"
+   ],
+   "controls": [
+    "si-11"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001348": {
+   "definition": "Store audit records on an organization-defined frequency in a repository that is part of a physically different system or system component than the system or component being audited.",
+   "rev5": [
+    "AU-9 (2)"
+   ],
+   "rev4": [
+    "AU-9 (2)"
+   ],
+   "controls": [
+    "au-9.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001350": {
+   "definition": "Implement cryptographic mechanisms to protect the integrity of audit information.",
+   "rev5": [
+    "AU-9 (3)"
+   ],
+   "rev4": [
+    "AU-9 (3)"
+   ],
+   "controls": [
+    "au-9.3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001368": {
+   "definition": "Enforce approved authorizations for controlling the flow of information within the system based on organization-defined information flow control policies.",
+   "rev5": [
+    "AC-4"
+   ],
+   "rev4": [
+    "AC-4"
+   ],
+   "controls": [
+    "ac-4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001384": {
+   "definition": "For publicly accessible systems, display system use information with organization-defined conditions before granting further access to the publicly accessible system.",
+   "rev5": [
+    "AC-8 c 1"
+   ],
+   "rev4": [
+    "AC-8 c 1"
+   ],
+   "controls": [
+    "ac-8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001403": {
+   "definition": "Automatically audit account modification actions.",
+   "rev5": [
+    "AC-2 (4)"
+   ],
+   "rev4": [
+    "AC-2 (4)"
+   ],
+   "controls": [
+    "ac-2.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001404": {
+   "definition": "Automatically audit account disabling actions.",
+   "rev5": [
+    "AC-2 (4)"
+   ],
+   "rev4": [
+    "AC-2 (4)"
+   ],
+   "controls": [
+    "ac-2.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001405": {
+   "definition": "Automatically audit account removal actions.",
+   "rev5": [
+    "AC-2 (4)"
+   ],
+   "rev4": [
+    "AC-2 (4)"
+   ],
+   "controls": [
+    "ac-2.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001414": {
+   "definition": "Enforce approved authorizations for controlling the flow of information between connected systems based on organization-defined information flow control policies.",
+   "rev5": [
+    "AC-4"
+   ],
+   "rev4": [
+    "AC-4"
+   ],
+   "controls": [
+    "ac-4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001453": {
+   "definition": "Implement cryptographic mechanisms to protect the integrity of remote access sessions.",
+   "rev5": [
+    "AC-17 (2)"
+   ],
+   "rev4": [
+    "AC-17 (2)"
+   ],
+   "controls": [
+    "ac-17.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001464": {
+   "definition": "Initiates session audits automatically at system start-up.",
+   "rev5": [
+    "AU-14 (1)"
+   ],
+   "rev4": [
+    "AU-14 (1)"
+   ],
+   "controls": [
+    "au-14.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001487": {
+   "definition": "Ensure that audit records containing information that establishes the identity of any individuals, subjects, or objects/entities associated with the event.",
+   "rev5": [
+    "AU-3 f"
+   ],
+   "rev4": [
+    "AU-3"
+   ],
+   "controls": [
+    "au-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001493": {
+   "definition": "Protect audit tools from unauthorized access.",
+   "rev5": [
+    "AU-9 a"
+   ],
+   "rev4": [
+    "AU-9"
+   ],
+   "controls": [
+    "au-9"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001494": {
+   "definition": "Protect audit tools from unauthorized modification.",
+   "rev5": [
+    "AU-9 a"
+   ],
+   "rev4": [
+    "AU-9"
+   ],
+   "controls": [
+    "au-9"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001495": {
+   "definition": "Protect audit tools from unauthorized deletion.",
+   "rev5": [
+    "AU-9 a"
+   ],
+   "rev4": [
+    "AU-9"
+   ],
+   "controls": [
+    "au-9"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001496": {
+   "definition": "Implement cryptographic mechanisms to protect the integrity of audit tools.",
+   "rev5": [
+    "AU-9 (3)"
+   ],
+   "rev4": [
+    "AU-9 (3)"
+   ],
+   "controls": [
+    "au-9.3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001499": {
+   "definition": "Limit privileges to change software resident within software libraries.",
+   "rev5": [
+    "CM-5 (6)"
+   ],
+   "rev4": [
+    "CM-5 (6)"
+   ],
+   "controls": [
+    "cm-5.6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001664": {
+   "definition": "Recognize only session identifiers that are system-generated.",
+   "rev5": [
+    "SC-23 (3)"
+   ],
+   "rev4": [
+    "SC-23 (3)"
+   ],
+   "controls": [
+    "sc-23.3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001665": {
+   "definition": "Preserve organization-defined system state information in the event of a system failure.",
+   "rev5": [
+    "SC-24"
+   ],
+   "rev4": [
+    "SC-24"
+   ],
+   "controls": [
+    "sc-24"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001764": {
+   "definition": "Prevent program execution in accordance with organization-defined policies, rules of behavior, and/or access agreements regarding software program usage and restrictions; rules authorizing the terms and conditions of software program usage.",
+   "rev5": [
+    "CM-7 (2)"
+   ],
+   "rev4": [
+    "CM-7 (2)"
+   ],
+   "controls": [
+    "cm-7.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001774": {
+   "definition": "Employ a deny-all, permit-by-exception policy to allow the execution of authorized software programs on the system.",
+   "rev5": [
+    "CM-7 (5) (b)"
+   ],
+   "rev4": [
+    "CM-7 (5) (b)"
+   ],
+   "controls": [
+    "cm-7.5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001795": {
+   "definition": "Implement a configuration management plan for the system that establishes a process for managing the configuration of the configuration items.",
+   "rev5": [
+    "CM-9 b"
+   ],
+   "rev4": [
+    "CM-9 b"
+   ],
+   "controls": [
+    "cm-9"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001813": {
+   "definition": "Enforce access restrictions using organization-defined mechanisms.",
+   "rev5": [
+    "CM-5 (1) (a)"
+   ],
+   "rev4": [
+    "CM-5 (1)"
+   ],
+   "controls": [
+    "cm-5.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001851": {
+   "definition": "Transfer audit logs per organization-defined frequency to a different system, system component, or media than the system or system component conducting the logging.",
+   "rev5": [
+    "AU-4 (1)"
+   ],
+   "rev4": [
+    "AU-4 (1)"
+   ],
+   "controls": [
+    "au-4.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001855": {
+   "definition": "Provide a warning to organization-defined personnel, roles, and/or locations within an organization-defined time period when allocated audit log storage volume reaches an organization-defined percentage of repository maximum audit log storage capacity.",
+   "rev5": [
+    "AU-5 (1)"
+   ],
+   "rev4": [
+    "AU-5 (1)"
+   ],
+   "controls": [
+    "au-5.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001858": {
+   "definition": "Provide an alert in an organization-defined real-time-period to organization-defined personnel, roles, and/or locations when organization-defined audit failure events requiring real-time alerts occur.",
+   "rev5": [
+    "AU-5 (2)"
+   ],
+   "rev4": [
+    "AU-5 (2)"
+   ],
+   "controls": [
+    "au-5.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001872": {
+   "definition": "The organization adjusts the level of audit review and analysis within the information system when there is a change in risk based on law enforcement information, intelligence information, or other credible sources of information.",
+   "rev5": [],
+   "rev4": [
+    "AU-6 (10)"
+   ],
+   "controls": [],
+   "rev4_only": [
+    "au-6.10"
+   ]
+  },
+  "CCI-001875": {
+   "definition": "Provide an audit reduction capability that supports on-demand audit review and analysis.",
+   "rev5": [
+    "AU-7 a"
+   ],
+   "rev4": [
+    "AU-7 a"
+   ],
+   "controls": [
+    "au-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001876": {
+   "definition": "Provide an audit reduction capability that supports on-demand reporting requirements.",
+   "rev5": [
+    "AU-7 a"
+   ],
+   "rev4": [
+    "AU-7 a"
+   ],
+   "controls": [
+    "au-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001877": {
+   "definition": "Provide an audit reduction capability that supports after-the-fact investigations of incidents.",
+   "rev5": [
+    "AU-7 a"
+   ],
+   "rev4": [
+    "AU-7 a"
+   ],
+   "controls": [
+    "au-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001878": {
+   "definition": "Provide a report generation capability that supports on-demand audit review and analysis.",
+   "rev5": [
+    "AU-7 a"
+   ],
+   "rev4": [
+    "AU-7 a"
+   ],
+   "controls": [
+    "au-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001879": {
+   "definition": "Provide a report generation capability that supports on-demand reporting requirements.",
+   "rev5": [
+    "AU-7 a"
+   ],
+   "rev4": [
+    "AU-7 a"
+   ],
+   "controls": [
+    "au-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001880": {
+   "definition": "Provide a report generation capability that supports after-the-fact investigations of security incidents.",
+   "rev5": [
+    "AU-7 a"
+   ],
+   "rev4": [
+    "AU-7 a"
+   ],
+   "controls": [
+    "au-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001881": {
+   "definition": "Provide an audit reduction capability that does not alter original content or time ordering of audit records.",
+   "rev5": [
+    "AU-7 b"
+   ],
+   "rev4": [
+    "AU-7 b"
+   ],
+   "controls": [
+    "au-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001882": {
+   "definition": "Provide a report generation capability that does not alter original content or time ordering of audit records.",
+   "rev5": [
+    "AU-7 b"
+   ],
+   "rev4": [
+    "AU-7 b"
+   ],
+   "controls": [
+    "au-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001889": {
+   "definition": "Record time stamps for audit records that meet organization-defined granularity of time measurement.",
+   "rev5": [
+    "AU-8 b"
+   ],
+   "rev4": [
+    "AU-8 b"
+   ],
+   "controls": [
+    "au-8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001890": {
+   "definition": "Record time stamps for audit records that use Coordinated Universal Time, have a fixed local time offset from Coordinated Universal Time, or that include the local time offset as part of the time stamp.",
+   "rev5": [
+    "AU-8 b"
+   ],
+   "rev4": [
+    "AU-8 b"
+   ],
+   "controls": [
+    "au-8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001941": {
+   "definition": "Implement replay-resistant authentication mechanisms for access to privileged accounts and/or non-privileged accounts.",
+   "rev5": [
+    "IA-2 (8)"
+   ],
+   "rev4": [
+    "IA-2 (8)"
+   ],
+   "controls": [
+    "ia-2.8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001953": {
+   "definition": "Accept Personal Identity Verification-compliant credentials.",
+   "rev5": [
+    "IA-2 (12)"
+   ],
+   "rev4": [
+    "IA-2 (12)"
+   ],
+   "controls": [
+    "ia-2.12"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001954": {
+   "definition": "Electronically verify Personal Identity Verification-compliant credentials.",
+   "rev5": [
+    "IA-2 (12)"
+   ],
+   "rev4": [
+    "IA-2 (12)"
+   ],
+   "controls": [
+    "ia-2.12"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001958": {
+   "definition": "Authenticate organization-defined devices and/or types of devices before establishing a local, remote, and/or network connection.",
+   "rev5": [
+    "IA-3"
+   ],
+   "rev4": [
+    "IA-3"
+   ],
+   "controls": [
+    "ia-3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-001967": {
+   "definition": "Authenticate organization-defined devices and/or types of devices before establishing a local, remote, and/or network connection using bidirectional authentication that is cryptographically based.",
+   "rev5": [
+    "IA-3 (1)"
+   ],
+   "rev4": [
+    "IA-3 (1)"
+   ],
+   "controls": [
+    "ia-3.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002007": {
+   "definition": "Prohibit the use of cached authenticators after an organization-defined time period.",
+   "rev5": [
+    "IA-5 (13)"
+   ],
+   "rev4": [
+    "IA-5 (13)"
+   ],
+   "controls": [
+    "ia-5.13"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002009": {
+   "definition": "Accept Personal Identity Verification-compliant credentials from other federal agencies.",
+   "rev5": [
+    "IA-8 (1)"
+   ],
+   "rev4": [
+    "IA-8 (1)"
+   ],
+   "controls": [
+    "ia-8.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002010": {
+   "definition": "Electronically verify Personal Identity Verification-compliant credentials from other federal agencies.",
+   "rev5": [
+    "IA-8 (1)"
+   ],
+   "rev4": [
+    "IA-8 (1)"
+   ],
+   "controls": [
+    "ia-8.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002038": {
+   "definition": "The organization requires users to reauthenticate upon organization-defined circumstances or situations requiring reauthentication.",
+   "rev5": [
+    "IA-11"
+   ],
+   "rev4": [
+    "IA-11"
+   ],
+   "controls": [
+    "ia-11"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002052": {
+   "definition": "Provide practical exercises in security training that reinforce training objectives.",
+   "rev5": [
+    "AT-3 (3)"
+   ],
+   "rev4": [
+    "AT-3 (3)"
+   ],
+   "controls": [
+    "at-3.3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002121": {
+   "definition": "Defines the procedures to be employed when creating, enabling, modifying, disabling, and removing information system accounts.",
+   "rev5": [
+    "AC-2 f"
+   ],
+   "rev4": [
+    "AC-2 f"
+   ],
+   "controls": [
+    "ac-2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002130": {
+   "definition": "Automatically audit account enabling actions.",
+   "rev5": [
+    "AC-2 (4)"
+   ],
+   "rev4": [
+    "AC-2 (4)"
+   ],
+   "controls": [
+    "ac-2.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002165": {
+   "definition": "Enforce organization-defined discretionary access control policies over defined subjects and objects.",
+   "rev5": [
+    "AC-3 (4)"
+   ],
+   "rev4": [
+    "AC-3 (4)"
+   ],
+   "controls": [
+    "ac-3.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002225": {
+   "definition": "Provide separate processing domains to enable finer-grained allocation of user privileges.",
+   "rev5": [
+    "AC-6 (4)"
+   ],
+   "rev4": [
+    "AC-6 (4)"
+   ],
+   "controls": [
+    "ac-6.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002233": {
+   "definition": "Prevent the organization-defined software from executing at higher privilege levels than users executing the software.",
+   "rev5": [
+    "AC-6 (8)"
+   ],
+   "rev4": [
+    "AC-6 (8)"
+   ],
+   "controls": [
+    "ac-6.8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002234": {
+   "definition": "Log the execution of privileged functions.",
+   "rev5": [
+    "AC-6 (9)"
+   ],
+   "rev4": [
+    "AC-6 (9)"
+   ],
+   "controls": [
+    "ac-6.9"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002235": {
+   "definition": "Prevent non-privileged users from executing privileged functions.",
+   "rev5": [
+    "AC-6 (10)"
+   ],
+   "rev4": [
+    "AC-6 (10)"
+   ],
+   "controls": [
+    "ac-6.10"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002238": {
+   "definition": "Automatically lock the account or node for either an organization-defined time period, until the locked account or node is released by an administrator, or delays the next logon prompt according to the organization-defined delay algorithm when the maximum number of unsuccessful logon attempts is exceeded.",
+   "rev5": [
+    "AC-7 b"
+   ],
+   "rev4": [
+    "AC-7 b"
+   ],
+   "controls": [
+    "ac-7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002262": {
+   "definition": "Provide the means to associate organization-defined types of security attributes having organization-defined security attribute values with information in storage.",
+   "rev5": [
+    "AC-16 a"
+   ],
+   "rev4": [
+    "AC-16 a"
+   ],
+   "controls": [
+    "ac-16"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002263": {
+   "definition": "Provide the means to associate organization-defined types of security attributes having organization-defined security attribute values with information in process.",
+   "rev5": [
+    "AC-16 a"
+   ],
+   "rev4": [
+    "AC-16 a"
+   ],
+   "controls": [
+    "ac-16"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002264": {
+   "definition": "Provide the means to associate organization-defined types of security attributes having organization-defined security attribute values with information in transmission.",
+   "rev5": [
+    "AC-16 a"
+   ],
+   "rev4": [
+    "AC-16 a"
+   ],
+   "controls": [
+    "ac-16"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002346": {
+   "definition": "Employ organization-defined data mining prevention techniques for organization-defined data storage objects to protect against unauthorized data mining.",
+   "rev5": [
+    "AC-23"
+   ],
+   "rev4": [
+    "AC-23"
+   ],
+   "controls": [
+    "ac-23"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002347": {
+   "definition": "Employ organization-defined data mining detection techniques for organization-defined data storage objects to detect data mining attempts.",
+   "rev5": [
+    "AC-23"
+   ],
+   "rev4": [
+    "AC-23"
+   ],
+   "controls": [
+    "ac-23"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002361": {
+   "definition": "Automatically terminate a user session after organization-defined conditions or trigger events requiring session disconnect.",
+   "rev5": [
+    "AC-12"
+   ],
+   "rev4": [
+    "AC-12"
+   ],
+   "controls": [
+    "ac-12"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002363": {
+   "definition": "Provide a logout capability for user-initiated communications sessions whenever authentication is used to gain access to organization-defined information resources.",
+   "rev5": [
+    "AC-12 (1)"
+   ],
+   "rev4": [
+    "AC-12 (1)"
+   ],
+   "controls": [
+    "ac-12.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002364": {
+   "definition": "Display an explicit logout message to users indicating the reliable termination of authenticated communications sessions.",
+   "rev5": [
+    "AC-12 (2)"
+   ],
+   "rev4": [
+    "AC-12 (1)"
+   ],
+   "controls": [
+    "ac-12.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002367": {
+   "definition": "The organization ensures unencrypted static authenticators are not embedded in applications.",
+   "rev5": [],
+   "rev4": [
+    "IA-5 (7)"
+   ],
+   "controls": [],
+   "rev4_only": [
+    "ia-5.7"
+   ]
+  },
+  "CCI-002385": {
+   "definition": "Protect against or limit the effects of organization-defined types of denial-of-service events.",
+   "rev5": [
+    "SC-5 a"
+   ],
+   "rev4": [
+    "SC-5"
+   ],
+   "controls": [
+    "sc-5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002386": {
+   "definition": "The organization defines the security safeguards to be employed to protect the information system against, or limit the effects of, denial of service attacks.",
+   "rev5": [],
+   "rev4": [
+    "SC-5"
+   ],
+   "controls": [],
+   "rev4_only": [
+    "sc-5"
+   ]
+  },
+  "CCI-002418": {
+   "definition": "Protect the confidentiality and/or integrity of transmitted information.",
+   "rev5": [
+    "SC-8"
+   ],
+   "rev4": [
+    "SC-8"
+   ],
+   "controls": [
+    "sc-8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002420": {
+   "definition": "Maintain the confidentiality and/or integrity of information during preparation for transmission.",
+   "rev5": [
+    "SC-8 (2)"
+   ],
+   "rev4": [
+    "SC-8 (2)"
+   ],
+   "controls": [
+    "sc-8.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002421": {
+   "definition": "Implement cryptographic mechanisms to prevent unauthorized disclosure of information and/or detect changes to information during transmission.",
+   "rev5": [
+    "SC-8 (1)"
+   ],
+   "rev4": [
+    "SC-8 (1)"
+   ],
+   "controls": [
+    "sc-8.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002422": {
+   "definition": "Maintain the confidentiality and/or integrity of information during reception.",
+   "rev5": [
+    "SC-8 (2)"
+   ],
+   "rev4": [
+    "SC-8 (2)"
+   ],
+   "controls": [
+    "sc-8.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002450": {
+   "definition": "Implement organization-defined types of cryptography for each specified cryptography use.",
+   "rev5": [
+    "SC-13 b"
+   ],
+   "rev4": [
+    "SC-13"
+   ],
+   "controls": [
+    "sc-13"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002470": {
+   "definition": "Only allow the use of organization-defined certificate authorities for verification of the establishment of protected sessions.",
+   "rev5": [
+    "SC-23 (5)"
+   ],
+   "rev4": [
+    "SC-23 (5)"
+   ],
+   "controls": [
+    "sc-23.5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002475": {
+   "definition": "Implement cryptographic mechanisms to prevent unauthorized modification of organization-defined information at rest on organization-defined system components.",
+   "rev5": [
+    "SC-28 (1)"
+   ],
+   "rev4": [
+    "SC-28 (1)"
+   ],
+   "controls": [
+    "sc-28.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002476": {
+   "definition": "Implement cryptographic mechanisms to prevent unauthorized disclosure of organization-defined information at rest on organization-defined system components.",
+   "rev5": [
+    "SC-28 (1)"
+   ],
+   "rev4": [
+    "SC-28 (1)"
+   ],
+   "controls": [
+    "sc-28.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002478": {
+   "definition": "Remove organization-defined information from online storage.",
+   "rev5": [
+    "SC-28 (2)"
+   ],
+   "rev4": [
+    "SC-28 (2)"
+   ],
+   "controls": [
+    "sc-28.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002530": {
+   "definition": "Maintain a separate execution domain for each executing system process.",
+   "rev5": [
+    "SC-39"
+   ],
+   "rev4": [
+    "SC-39"
+   ],
+   "controls": [
+    "sc-39"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002605": {
+   "definition": "Install security-relevant software updates within an organization-defined time period of the release of the updates.",
+   "rev5": [
+    "SI-2 c"
+   ],
+   "rev4": [
+    "SI-2 c"
+   ],
+   "controls": [
+    "si-2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002617": {
+   "definition": "Remove previous versions of organization-defined software components after updated versions have been installed.",
+   "rev5": [
+    "SI-2 (6)"
+   ],
+   "rev4": [
+    "SI-2 (6)"
+   ],
+   "controls": [
+    "si-2.6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002696": {
+   "definition": "Verify correct operation of organization-defined security functions.",
+   "rev5": [
+    "SI-6 a"
+   ],
+   "rev4": [
+    "SI-6 a"
+   ],
+   "controls": [
+    "si-6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002699": {
+   "definition": "Perform verification of the correct operation of organization-defined security functions: when the system is in an organization-defined transitional state; upon command by a user with appropriate privileges; and/or on an organization-defined frequency.",
+   "rev5": [
+    "SI-6 b"
+   ],
+   "rev4": [
+    "SI-6 b"
+   ],
+   "controls": [
+    "si-6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002754": {
+   "definition": "Verify that the system behaves in a predictable and documented manner that reflects organizational and system objectives when invalid inputs are received.",
+   "rev5": [
+    "SI-10 (3)"
+   ],
+   "rev4": [
+    "SI-10 (3)"
+   ],
+   "controls": [
+    "si-10.3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002824": {
+   "definition": "Implement organization-defined controls to protect the system memory from unauthorized code execution.",
+   "rev5": [
+    "SI-16"
+   ],
+   "rev4": [
+    "SI-16"
+   ],
+   "controls": [
+    "si-16"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002828": {
+   "definition": "Identify critical system assets supporting all or essential mission functions.",
+   "rev5": [
+    "CP-2 (8)"
+   ],
+   "rev4": [
+    "CP-2 (8)"
+   ],
+   "controls": [
+    "cp-2.8"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002853": {
+   "definition": "Provide the capability to employ organization-defined alternative communications protocols in support of maintaining continuity of operations.",
+   "rev5": [
+    "CP-11"
+   ],
+   "rev4": [
+    "CP-11"
+   ],
+   "controls": [
+    "cp-11"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002884": {
+   "definition": "Log organization-defined audit events for nonlocal maintenance and diagnostic sessions.",
+   "rev5": [
+    "MA-4 (1) (a)"
+   ],
+   "rev4": [
+    "MA-4 (1) (a)"
+   ],
+   "controls": [
+    "ma-4.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002890": {
+   "definition": "Implement organization-defined cryptographic mechanisms to protect the integrity of nonlocal maintenance and diagnostic communications.",
+   "rev5": [
+    "MA-4 (6)"
+   ],
+   "rev4": [
+    "MA-4 (6)"
+   ],
+   "controls": [
+    "ma-4.6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-002891": {
+   "definition": "Verify session and network connection termination after the completion of nonlocal maintenance and diagnostic sessions.",
+   "rev5": [
+    "MA-4 (7)"
+   ],
+   "rev4": [
+    "MA-4 (7)"
+   ],
+   "controls": [
+    "ma-4.7"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003004": {
+   "definition": "Implement a process for ensuring that organizational plans for conducting security testing associated with organizational systems continue to be executed.",
+   "rev5": [
+    "PM-14 a 2"
+   ],
+   "rev4": [
+    "PM-14 a 2"
+   ],
+   "controls": [
+    "pm-14"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003109": {
+   "definition": "Require the developer of the system, system component, or system service to deliver the system, component, or service with organization-defined security configurations implemented.",
+   "rev5": [
+    "SA-4 (5) (a)"
+   ],
+   "rev4": [
+    "SA-4 (5) (a)"
+   ],
+   "controls": [
+    "sa-4.5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003123": {
+   "definition": "Implement organization-defined cryptographic mechanisms to protect the confidentiality of nonlocal maintenance and diagnostic communications.",
+   "rev5": [
+    "MA-4 (6)"
+   ],
+   "rev4": [
+    "MA-4 (6)"
+   ],
+   "controls": [
+    "ma-4.6"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003124": {
+   "definition": "Obtain or develop administrator documentation for the system, system component, or system service that describes secure configuration of the system, component, or service.",
+   "rev5": [
+    "SA-5 a 1"
+   ],
+   "rev4": [
+    "SA-5 a 1"
+   ],
+   "controls": [
+    "sa-5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003161": {
+   "definition": "Require the developer of the system, system component, or system service to track security flaws within the system, component, or service.",
+   "rev5": [
+    "SA-10 e"
+   ],
+   "rev4": [
+    "SA-10 e"
+   ],
+   "controls": [
+    "sa-10"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003173": {
+   "definition": "Requires the developer of the system, system component, or system service, at all post-design phases of the system development life cycle, to perform unit, integration, system, and/or regression testing/evaluation on an organization-defined frequency, at an organization-defined depth and coverage.",
+   "rev5": [
+    "SA-11 b"
+   ],
+   "rev4": [
+    "SA-11 b"
+   ],
+   "controls": [
+    "sa-11"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003178": {
+   "definition": "Requires the developer of the system, system component, or system service, at all post-design phases of the system development life cycle, to correct flaws identified during testing/evaluation.",
+   "rev5": [
+    "SA-11 e"
+   ],
+   "rev4": [
+    "SA-11 e"
+   ],
+   "controls": [
+    "sa-11"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003182": {
+   "definition": "Require the developer of the system, system component, or system service to perform threat modeling and vulnerability analysis during subsequent testing and evaluation of the system, component, or service.",
+   "rev5": [
+    "SA-11 (2)"
+   ],
+   "rev4": [
+    "SA-11 (2)"
+   ],
+   "controls": [
+    "sa-11.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003187": {
+   "definition": "Require the developer of the system, system component, or system service to perform a manual code review of organization-defined specific code using organization-defined processes, procedures, and/or techniques.",
+   "rev5": [
+    "SA-11 (4)"
+   ],
+   "rev4": [
+    "SA-11 (4)"
+   ],
+   "controls": [
+    "sa-11.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003188": {
+   "definition": "Defines the specific code for which the developer of the system, system component, or system service is required to perform a manual code review using organization-defined process, procedures, and/or techniques.",
+   "rev5": [
+    "SA-11 (4)"
+   ],
+   "rev4": [
+    "SA-11 (4)"
+   ],
+   "controls": [
+    "sa-11.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003233": {
+   "definition": "Require the developer of the system, system component, or system service to follow a documented development process.",
+   "rev5": [
+    "SA-15 a"
+   ],
+   "rev4": [
+    "SA-15"
+   ],
+   "controls": [
+    "sa-15"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003256": {
+   "definition": "The organization requires that developers perform threat modeling for the information system at an organization-defined breadth/depth.",
+   "rev5": [],
+   "rev4": [
+    "SA-15 (4)"
+   ],
+   "controls": [],
+   "rev4_only": [
+    "sa-15.4"
+   ]
+  },
+  "CCI-003272": {
+   "definition": "Require the developer of the system, system component, or system service to reduce attack surfaces to organization-defined thresholds.",
+   "rev5": [
+    "SA-15 (5)"
+   ],
+   "rev4": [
+    "SA-15 (5)"
+   ],
+   "controls": [
+    "sa-15.5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003289": {
+   "definition": "Require the developer of the system, system component, or system service to provide an incident response plan.",
+   "rev5": [
+    "SA-15 (10)"
+   ],
+   "rev4": [
+    "SA-15 (10)"
+   ],
+   "controls": [
+    "sa-15.10"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003374": {
+   "definition": "The organization documents approval for the continued use of unsupported system components required to satisfy mission/business needs.",
+   "rev5": [],
+   "rev4": [
+    "SA-22 b"
+   ],
+   "controls": [],
+   "rev4_only": [
+    "sa-22"
+   ]
+  },
+  "CCI-003376": {
+   "definition": "Replace system components when support for the components is no longer available from the developer, vendor, or manufacturer.",
+   "rev5": [
+    "SA-22 a"
+   ],
+   "rev4": [
+    "SA-22 a"
+   ],
+   "controls": [
+    "sa-22"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003627": {
+   "definition": "Disable accounts when the accounts have expired.",
+   "rev5": [
+    "AC-2 (3) (a)"
+   ],
+   "rev4": [],
+   "controls": [
+    "ac-2.3"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003938": {
+   "definition": "Automatically generate audit records of the enforcement actions.",
+   "rev5": [
+    "CM-5 (1) (b)"
+   ],
+   "rev4": [],
+   "controls": [
+    "cm-5.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003980": {
+   "definition": "Allow user installation of software only with explicit privileged status.",
+   "rev5": [
+    "CM-11 (2)"
+   ],
+   "rev4": [],
+   "controls": [
+    "cm-11.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-003992": {
+   "definition": "Prevent the installation of organization-defined software and firmware components without verification that the component has been digitally signed using a certificate that is recognized and approved by the organization.",
+   "rev5": [
+    "CM-14"
+   ],
+   "rev4": [],
+   "controls": [
+    "cm-14"
+   ],
+   "rev4_only": []
+  },
+  "CCI-004045": {
+   "definition": "Require users to be individually authenticated before granting access to the shared accounts or resources.",
+   "rev5": [
+    "IA-2 (5)"
+   ],
+   "rev4": [],
+   "controls": [
+    "ia-2.5"
+   ],
+   "rev4_only": []
+  },
+  "CCI-004061": {
+   "definition": "For password-based authentication, verify when users create or update passwords, that the passwords are not found on the list of commonly-used, expected, or compromised passwords in IA-5 (1) (a).",
+   "rev5": [
+    "IA-5 (1) (b)"
+   ],
+   "rev4": [],
+   "controls": [
+    "ia-5.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-004062": {
+   "definition": "For password-based authentication, store passwords using an approved salted key derivation function, preferably using a keyed hash.",
+   "rev5": [
+    "IA-5 (1) (d)"
+   ],
+   "rev4": [],
+   "controls": [
+    "ia-5.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-004066": {
+   "definition": "For password-based authentication, enforce organization-defined composition and complexity rules.",
+   "rev5": [
+    "IA-5 (1) (h)"
+   ],
+   "rev4": [],
+   "controls": [
+    "ia-5.1"
+   ],
+   "rev4_only": []
+  },
+  "CCI-004068": {
+   "definition": "For public key-based authentication, implement a local cache of revocation data to support path discovery and validation.",
+   "rev5": [
+    "IA-5 (2) (b) (2)"
+   ],
+   "rev4": [],
+   "controls": [
+    "ia-5.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-004083": {
+   "definition": "Accept only external credentials that are NIST compliant.",
+   "rev5": [
+    "IA-8 (2) (a)"
+   ],
+   "rev4": [],
+   "controls": [
+    "ia-8.2"
+   ],
+   "rev4_only": []
+  },
+  "CCI-004085": {
+   "definition": "Conform to organization-defined identity management profiles for identity management.",
+   "rev5": [
+    "IA-8 (4)"
+   ],
+   "rev4": [],
+   "controls": [
+    "ia-8.4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-004190": {
+   "definition": "Terminate session when nonlocal maintenance is completed.",
+   "rev5": [
+    "MA-4 e"
+   ],
+   "rev4": [],
+   "controls": [
+    "ma-4"
+   ],
+   "rev4_only": []
+  },
+  "CCI-004895": {
+   "definition": "Permit users to invoke the trusted communications path for communications between the user and the organization-defined security functions, including at a minimum, authentication and re-authentication.",
+   "rev5": [
+    "SC-11 b"
+   ],
+   "rev4": [],
+   "controls": [
+    "sc-11"
+   ],
+   "rev4_only": []
+  }
+ },
+ "controls": {
+  "ac-10": {
+   "title": "Concurrent Session Control",
+   "family": "Access Control",
+   "baselines": [
+    "H"
+   ]
+  },
+  "ac-12": {
+   "title": "Session Termination",
+   "family": "Access Control",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ac-12.1": {
+   "title": "User-initiated Logouts",
+   "family": "Access Control",
+   "baselines": []
+  },
+  "ac-12.2": {
+   "title": "Termination Message",
+   "family": "Access Control",
+   "baselines": []
+  },
+  "ac-16": {
+   "title": "Security and Privacy Attributes",
+   "family": "Access Control",
+   "baselines": []
+  },
+  "ac-17.2": {
+   "title": "Protection of Confidentiality and Integrity Using Encryption",
+   "family": "Access Control",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ac-2": {
+   "title": "Account Management",
+   "family": "Access Control",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ac-2.1": {
+   "title": "Automated System Account Management",
+   "family": "Access Control",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ac-2.2": {
+   "title": "Automated Temporary and Emergency Account Management",
+   "family": "Access Control",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ac-2.3": {
+   "title": "Disable Accounts",
+   "family": "Access Control",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ac-2.4": {
+   "title": "Automated Audit Actions",
+   "family": "Access Control",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ac-23": {
+   "title": "Data Mining Protection",
+   "family": "Access Control",
+   "baselines": []
+  },
+  "ac-3": {
+   "title": "Access Enforcement",
+   "family": "Access Control",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ac-3.4": {
+   "title": "Discretionary Access Control",
+   "family": "Access Control",
+   "baselines": []
+  },
+  "ac-4": {
+   "title": "Information Flow Enforcement",
+   "family": "Access Control",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ac-6.10": {
+   "title": "Prohibit Non-privileged Users from Executing Privileged Functions",
+   "family": "Access Control",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ac-6.4": {
+   "title": "Separate Processing Domains",
+   "family": "Access Control",
+   "baselines": []
+  },
+  "ac-6.8": {
+   "title": "Privilege Levels for Code Execution",
+   "family": "Access Control",
+   "baselines": []
+  },
+  "ac-6.9": {
+   "title": "Log Use of Privileged Functions",
+   "family": "Access Control",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ac-7": {
+   "title": "Unsuccessful Logon Attempts",
+   "family": "Access Control",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ac-8": {
+   "title": "System Use Notification",
+   "family": "Access Control",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ac-9": {
+   "title": "Previous Logon Notification",
+   "family": "Access Control",
+   "baselines": []
+  },
+  "at-3.3": {
+   "title": "Practical Exercises",
+   "family": "Awareness and Training",
+   "baselines": []
+  },
+  "au-10": {
+   "title": "Non-repudiation",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "H"
+   ]
+  },
+  "au-11": {
+   "title": "Audit Record Retention",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "au-12": {
+   "title": "Audit Record Generation",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "au-12.1": {
+   "title": "System-wide and Time-correlated Audit Trail",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "H"
+   ]
+  },
+  "au-14.1": {
+   "title": "System Start-up",
+   "family": "Audit and Accountability",
+   "baselines": []
+  },
+  "au-3": {
+   "title": "Content of Audit Records",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "au-3.1": {
+   "title": "Additional Audit Information",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "au-4.1": {
+   "title": "Transfer to Alternate Storage",
+   "family": "Audit and Accountability",
+   "baselines": []
+  },
+  "au-5": {
+   "title": "Response to Audit Logging Process Failures",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "au-5.1": {
+   "title": "Storage Capacity Warning",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "H"
+   ]
+  },
+  "au-5.2": {
+   "title": "Real-time Alerts",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "H"
+   ]
+  },
+  "au-6": {
+   "title": "Audit Record Review, Analysis, and Reporting",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "au-6.4": {
+   "title": "Central Review and Analysis",
+   "family": "Audit and Accountability",
+   "baselines": []
+  },
+  "au-7": {
+   "title": "Audit Record Reduction and Report Generation",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "au-7.1": {
+   "title": "Automatic Processing",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "au-8": {
+   "title": "Time Stamps",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "au-9": {
+   "title": "Protection of Audit Information",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "au-9.2": {
+   "title": "Store on Separate Physical Systems or Components",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "H"
+   ]
+  },
+  "au-9.3": {
+   "title": "Cryptographic Protection",
+   "family": "Audit and Accountability",
+   "baselines": [
+    "H"
+   ]
+  },
+  "ca-2.2": {
+   "title": "Specialized Assessments",
+   "family": "Assessment, Authorization, and Monitoring",
+   "baselines": [
+    "H"
+   ]
+  },
+  "cm-11.2": {
+   "title": "Software Installation with Privileged Status",
+   "family": "Configuration Management",
+   "baselines": []
+  },
+  "cm-14": {
+   "title": "Signed Components",
+   "family": "Configuration Management",
+   "baselines": []
+  },
+  "cm-4.2": {
+   "title": "Verification of Controls",
+   "family": "Configuration Management",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "cm-5": {
+   "title": "Access Restrictions for Change",
+   "family": "Configuration Management",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "cm-5.1": {
+   "title": "Automated Access Enforcement and Audit Records",
+   "family": "Configuration Management",
+   "baselines": [
+    "H"
+   ]
+  },
+  "cm-5.6": {
+   "title": "Limit Library Privileges",
+   "family": "Configuration Management",
+   "baselines": []
+  },
+  "cm-6": {
+   "title": "Configuration Settings",
+   "family": "Configuration Management",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "cm-7": {
+   "title": "Least Functionality",
+   "family": "Configuration Management",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "cm-7.2": {
+   "title": "Prevent Program Execution",
+   "family": "Configuration Management",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "cm-7.3": {
+   "title": "Registration Compliance",
+   "family": "Configuration Management",
+   "baselines": []
+  },
+  "cm-7.5": {
+   "title": "Authorized Software \u2014 Allow-by-exception",
+   "family": "Configuration Management",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "cm-9": {
+   "title": "Configuration Management Plan",
+   "family": "Configuration Management",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "cp-11": {
+   "title": "Alternate Communications Protocols",
+   "family": "Contingency Planning",
+   "baselines": []
+  },
+  "cp-2": {
+   "title": "Contingency Plan",
+   "family": "Contingency Planning",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "cp-2.8": {
+   "title": "Identify Critical Assets",
+   "family": "Contingency Planning",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "cp-9": {
+   "title": "System Backup",
+   "family": "Contingency Planning",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-11": {
+   "title": "Re-authentication",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-2": {
+   "title": "Identification and Authentication (Organizational Users)",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-2.1": {
+   "title": "Multi-factor Authentication to Privileged Accounts",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-2.12": {
+   "title": "Acceptance of PIV Credentials",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-2.2": {
+   "title": "Multi-factor Authentication to Non-privileged Accounts",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-2.5": {
+   "title": "Individual Authentication with Group Authentication",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "H"
+   ]
+  },
+  "ia-2.8": {
+   "title": "Access to Accounts \u2014 Replay Resistant",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-3": {
+   "title": "Device Identification and Authentication",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ia-3.1": {
+   "title": "Cryptographic Bidirectional Authentication",
+   "family": "Identification and Authentication",
+   "baselines": []
+  },
+  "ia-5": {
+   "title": "Authenticator Management",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-5.1": {
+   "title": "Password-based Authentication",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-5.13": {
+   "title": "Expiration of Cached Authenticators",
+   "family": "Identification and Authentication",
+   "baselines": []
+  },
+  "ia-5.2": {
+   "title": "Public Key-based Authentication",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ia-5.6": {
+   "title": "Protection of Authenticators",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "ia-6": {
+   "title": "Authentication Feedback",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-7": {
+   "title": "Cryptographic Module Authentication",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-8": {
+   "title": "Identification and Authentication (Non-organizational Users)",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-8.1": {
+   "title": "Acceptance of PIV Credentials from Other Agencies",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-8.2": {
+   "title": "Acceptance of External Authenticators",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ia-8.4": {
+   "title": "Use of Defined Profiles",
+   "family": "Identification and Authentication",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ma-4": {
+   "title": "Nonlocal Maintenance",
+   "family": "Maintenance",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "ma-4.1": {
+   "title": "Logging and Review",
+   "family": "Maintenance",
+   "baselines": []
+  },
+  "ma-4.6": {
+   "title": "Cryptographic Protection",
+   "family": "Maintenance",
+   "baselines": []
+  },
+  "ma-4.7": {
+   "title": "Disconnect Verification",
+   "family": "Maintenance",
+   "baselines": []
+  },
+  "mp-3": {
+   "title": "Media Marking",
+   "family": "Media Protection",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "pm-14": {
+   "title": "Testing, Training, and Monitoring",
+   "family": "Program Management",
+   "baselines": []
+  },
+  "sa-10": {
+   "title": "Developer Configuration Management",
+   "family": "System and Services Acquisition",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sa-10.1": {
+   "title": "Software and Firmware Integrity Verification",
+   "family": "System and Services Acquisition",
+   "baselines": []
+  },
+  "sa-11": {
+   "title": "Developer Testing and Evaluation",
+   "family": "System and Services Acquisition",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sa-11.2": {
+   "title": "Threat Modeling and Vulnerability Analyses",
+   "family": "System and Services Acquisition",
+   "baselines": []
+  },
+  "sa-11.4": {
+   "title": "Manual Code Reviews",
+   "family": "System and Services Acquisition",
+   "baselines": []
+  },
+  "sa-15": {
+   "title": "Development Process, Standards, and Tools",
+   "family": "System and Services Acquisition",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sa-15.10": {
+   "title": "Incident Response Plan",
+   "family": "System and Services Acquisition",
+   "baselines": []
+  },
+  "sa-15.5": {
+   "title": "Attack Surface Reduction",
+   "family": "System and Services Acquisition",
+   "baselines": []
+  },
+  "sa-22": {
+   "title": "Unsupported System Components",
+   "family": "System and Services Acquisition",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "sa-4.5": {
+   "title": "System, Component, and Service Configurations",
+   "family": "System and Services Acquisition",
+   "baselines": [
+    "H"
+   ]
+  },
+  "sa-5": {
+   "title": "System Documentation",
+   "family": "System and Services Acquisition",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "sc-10": {
+   "title": "Network Disconnect",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sc-11": {
+   "title": "Trusted Path",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "sc-13": {
+   "title": "Cryptographic Protection",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "sc-18.1": {
+   "title": "Identify Unacceptable Code and Take Corrective Actions",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "sc-18.2": {
+   "title": "Acquisition, Development, and Use",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "sc-2": {
+   "title": "Separation of System and User Functionality",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sc-23": {
+   "title": "Session Authenticity",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sc-23.1": {
+   "title": "Invalidate Session Identifiers at Logout",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "sc-23.3": {
+   "title": "Unique System-generated Session Identifiers",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "sc-23.5": {
+   "title": "Allowed Certificate Authorities",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "sc-24": {
+   "title": "Fail in Known State",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "H"
+   ]
+  },
+  "sc-28": {
+   "title": "Protection of Information at Rest",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sc-28.1": {
+   "title": "Cryptographic Protection",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sc-28.2": {
+   "title": "Offline Storage",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "sc-3": {
+   "title": "Security Function Isolation",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "H"
+   ]
+  },
+  "sc-39": {
+   "title": "Process Isolation",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "sc-4": {
+   "title": "Information in Shared System Resources",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sc-5": {
+   "title": "Denial-of-service Protection",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "sc-5.1": {
+   "title": "Restrict Ability to Attack Other Systems",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "sc-5.2": {
+   "title": "Capacity, Bandwidth, and Redundancy",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "sc-7.13": {
+   "title": "Isolation of Security Tools, Mechanisms, and Support Components",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "sc-8": {
+   "title": "Transmission Confidentiality and Integrity",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sc-8.1": {
+   "title": "Cryptographic Protection",
+   "family": "System and Communications Protection",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "sc-8.2": {
+   "title": "Pre- and Post-transmission Handling",
+   "family": "System and Communications Protection",
+   "baselines": []
+  },
+  "si-10": {
+   "title": "Information Input Validation",
+   "family": "System and Information Integrity",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "si-10.3": {
+   "title": "Predictable Behavior",
+   "family": "System and Information Integrity",
+   "baselines": []
+  },
+  "si-11": {
+   "title": "Error Handling",
+   "family": "System and Information Integrity",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "si-16": {
+   "title": "Memory Protection",
+   "family": "System and Information Integrity",
+   "baselines": [
+    "M",
+    "H"
+   ]
+  },
+  "si-2": {
+   "title": "Flaw Remediation",
+   "family": "System and Information Integrity",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "si-2.6": {
+   "title": "Removal of Previous Versions of Software and Firmware",
+   "family": "System and Information Integrity",
+   "baselines": []
+  },
+  "si-4.12": {
+   "title": "Automated Organization-generated Alerts",
+   "family": "System and Information Integrity",
+   "baselines": [
+    "H"
+   ]
+  },
+  "si-5": {
+   "title": "Security Alerts, Advisories, and Directives",
+   "family": "System and Information Integrity",
+   "baselines": [
+    "L",
+    "M",
+    "H"
+   ]
+  },
+  "si-6": {
+   "title": "Security and Privacy Function Verification",
+   "family": "System and Information Integrity",
+   "baselines": [
+    "H"
+   ]
+  }
+ }
+}

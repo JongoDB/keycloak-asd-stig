@@ -1,0 +1,12 @@
+# kcstig-tools: PKI init/refresh sidecar + apply/verify/e2e job image. Runtime-agnostic (OCI).
+# Base: Red Hat UBI 9 Python (python3, openssl, curl, unzip included - no package installs needed).
+ARG TOOLS_BASE=registry.access.redhat.com/ubi9/python-312:latest
+FROM ${TOOLS_BASE}
+USER 0
+COPY --chown=1001:0 kcstig/ /opt/kcstig/
+COPY --chown=1001:0 --chmod=0755 kcstig-tools.sh /usr/local/bin/kcstig-tools
+RUN chmod 0755 /opt/kcstig/scripts/*.py /opt/kcstig/scripts/*.sh && mkdir -p /pki && chown 1001:0 /pki && chmod 0775 /pki
+USER 1001
+ENV PKI_DIR=/pki PKI_SOURCE=dod PKI_REFRESH_SECONDS=21600 CRL_PREFIX=pki/crl
+ENTRYPOINT ["/usr/local/bin/kcstig-tools"]
+CMD ["help"]

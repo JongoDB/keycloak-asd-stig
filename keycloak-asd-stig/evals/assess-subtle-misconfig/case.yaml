@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: assess-subtle-misconfig
+expected_outcome: |
+  findings.md reports the subtle problems in an otherwise hardened realm: OCSP fail-open with CRL checking off,
+  the user-editable cac_upn mapping attribute, the 5-minute lockout window, 90-day password expiry, the password
+  grant toggle on ops-portal-web (blocked by the deny flow, still worth turning off), LOGOUT events not recorded, and no
+  DoD banner theme - with correct vuln IDs, CAT levels and fixes - and does not pad the list with settings that
+  are already compliant (15-minute idle, sslRequired=all, PKCE policy, 15-character passwords, pbkdf2 hashing).
+context:
+  scaffold_script: place-files.sh

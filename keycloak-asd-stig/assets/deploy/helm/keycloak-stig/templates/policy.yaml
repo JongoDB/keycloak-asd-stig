@@ -1,0 +1,31 @@
+{{- if .Values.podDisruptionBudget }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kcs.name" . }}
+  labels: {{- include "kcs.labels" . | nindent 4 }}
+spec:
+  {{- toYaml .Values.podDisruptionBudget | nindent 2 }}
+  selector: {matchLabels: {app.kubernetes.io/name: keycloak-stig, app.kubernetes.io/instance: {{ .Release.Name }}}}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# Only HTTPS from allowed sources, cluster traffic between replicas, and this release's jobs (V-222519, V-222594)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kcs.name" . }}
+  labels: {{- include "kcs.labels" . | nindent 4 }}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: keycloak-stig, app.kubernetes.io/instance: {{ .Release.Name }}}}
+  policyTypes: [Ingress]
+  ingress:
+  - ports: [{port: 8443}]
+    {{- with .Values.networkPolicy.ingressFrom }}
+    from: {{- toYaml . | nindent 4 }}
+    {{- end }}
+  - from: [{podSelector: {matchLabels: {app.kubernetes.io/name: keycloak-stig, app.kubernetes.io/instance: {{ .Release.Name }}}}}]
+    ports: [{port: 7800}, {port: 57800}, {port: 8443}]
+  - from: [{podSelector: {}}]
+    ports: [{port: 9000}]
+{{- end }}

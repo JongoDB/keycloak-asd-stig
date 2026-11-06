@@ -1,0 +1,2345 @@
+{
+ "checks": {
+  "builtin": {
+   "status": "pass",
+   "evidence": "Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+  },
+  "realm.ssl_all": {
+   "status": "pass",
+   "evidence": "sslRequired: realm=all admin=all"
+  },
+  "realm.user_idle_15": {
+   "status": "pass",
+   "evidence": "ssoSessionIdleTimeout=900s"
+  },
+  "realm.sso_max": {
+   "status": "pass",
+   "evidence": "ssoSessionMaxLifespan=28800s"
+  },
+  "realm.token_lifespan": {
+   "status": "pass",
+   "evidence": "accessTokenLifespan=300s"
+  },
+  "master.admin_idle_10": {
+   "status": "pass",
+   "evidence": "admin realm ssoSessionIdleTimeout=600s"
+  },
+  "realm.admin_console_idle_10": {
+   "status": "pass",
+   "evidence": "security-admin-console client.session.idle.timeout=600"
+  },
+  "realm.remember_me_off": {
+   "status": "pass",
+   "evidence": "rememberMe realm=False admin=False"
+  },
+  "realm.refresh_rotation": {
+   "status": "pass",
+   "evidence": "revokeRefreshToken=True refreshTokenMaxReuse=0"
+  },
+  "realm.offline_access_removed": {
+   "status": "pass",
+   "evidence": "default role composites: ['manage-account', 'uma_authorization', 'view-profile']"
+  },
+  "realm.registration_off": {
+   "status": "pass",
+   "evidence": "registrationAllowed=False"
+  },
+  "realm.reset_password_off": {
+   "status": "pass",
+   "evidence": "resetPasswordAllowed=False"
+  },
+  "realm.bruteforce": {
+   "status": "pass",
+   "evidence": "bruteForceProtected=True failureFactor=3 maxDeltaTimeSeconds=900 permanentLockout=True (admin realm failureFactor=3)"
+  },
+  "realm.pw_policy": {
+   "status": "pass",
+   "evidence": "passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+  },
+  "realm.otp_policy": {
+   "status": "pass",
+   "evidence": "otp totp/HmacSHA256 digits=6 period=30 reusable=False"
+  },
+  "realm.user_events": {
+   "status": "pass",
+   "evidence": "eventsEnabled=True, 132 event types, missing=[]"
+  },
+  "realm.admin_events": {
+   "status": "pass",
+   "evidence": "adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+  },
+  "realm.listener_jboss": {
+   "status": "pass",
+   "evidence": "eventsListeners=['stig-audit', 'jboss-logging']"
+  },
+  "realm.listener_stig_audit": {
+   "status": "pass",
+   "evidence": "eventsListeners realm=['stig-audit', 'jboss-logging'] admin=['stig-audit', 'jboss-logging']"
+  },
+  "realm.stig_claims_scope": {
+   "status": "pass",
+   "evidence": "default client scopes: ['AuthnContextClassRef', 'acr', 'basic', 'email', 'profile', 'role_list', 'roles', 'saml_organization', 'stig-claims', 'web-origins']"
+  },
+  "realm.headers": {
+   "status": "pass",
+   "evidence": "browserSecurityHeaders={\"contentSecurityPolicyReportOnly\": \"\", \"xContentTypeOptions\": \"nosniff\", \"referrerPolicy\": \"no-referrer\", \"xRobotsTag\": \"none\", \"xFrameOptions\": \"SAMEORIGIN\", \"contentSecurityPolicy\": \"frame-src 'self'; frame-ancestors 'self'; object-src 'none';\", \"strictTransportSecurity\": \"max-age=31536000; includeSubDomains\"}"
+  },
+  "realm.login_theme": {
+   "status": "pass",
+   "evidence": "loginTheme realm=dod-stig admin=dod-stig"
+  },
+  "realm.terms_action": {
+   "status": "pass",
+   "evidence": "TERMS_AND_CONDITIONS enabled=True defaultAction=True"
+  },
+  "realm.required_actions": {
+   "status": "pass",
+   "evidence": "UPDATE_PASSWORD enabled=True"
+  },
+  "realm.logout_cookies": {
+   "status": "pass",
+   "evidence": "Keycloak expires KEYCLOAK_IDENTITY/KEYCLOAK_SESSION/AUTH_SESSION_ID on logout (built-in)"
+  },
+  "realm.no_default_admin_roles": {
+   "status": "pass",
+   "evidence": "default roles carry no realm-management client roles (['default-roles-labapp'])"
+  },
+  "userprofile.cac_upn_admin_only": {
+   "status": "pass",
+   "evidence": "cac_upn permissions={'view': ['admin'], 'edit': ['admin']} unmanagedAttributePolicy=None"
+  },
+  "flow.x509_or_mfa": {
+   "status": "pass",
+   "evidence": "browserFlow='STIG Browser' authentication paths=[['auth-x509-client-username-form', 'user-session-limits'], ['auth-otp-form', 'auth-username-password-form', 'user-session-limits']]"
+  },
+  "flow.no_password_only": {
+   "status": "pass",
+   "evidence": "paths lacking CAC or second factor: []"
+  },
+  "flow.session_limits": {
+   "status": "pass",
+   "evidence": "user-session-limits requirement=REQUIRED config={'userClientLimit': '0', 'errorMessage': 'Maximum concurrent sessions reached. Log out of another session first.', 'behavior': 'Deny new session', 'userRealmLimit': '3'}"
+  },
+  "flow.x509_revocation": {
+   "status": "pass",
+   "evidence": "ocsp=True crl=True(crl/test-id-ca.crl) ocsp-fail-open=True timestamp=true keyusage=digitalSignature policies=None"
+  },
+  "realm.direct_grant_denied": {
+   "status": "pass",
+   "evidence": "directGrantFlow='STIG Direct Grant - Deny' providers=['deny-access-authenticator']"
+  },
+  "policy.pkce": {
+   "status": "pass",
+   "evidence": "client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']"
+  },
+  "policy.reject_implicit": {
+   "status": "pass",
+   "evidence": "client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']"
+  },
+  "policy.reject_ropc": {
+   "status": "pass",
+   "evidence": "client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']"
+  },
+  "policy.full_scope_disabled": {
+   "status": "pass",
+   "evidence": "client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']"
+  },
+  "clients.redirects_exact": {
+   "status": "pass",
+   "evidence": "profile clients=['https://legacy.test.mil/saml', 'lab-admin', 'lab-web']; wildcard/implicit/ROPC: []"
+  },
+  "clients.saml_hardened": {
+   "status": "pass",
+   "evidence": "SAML clients lacking signed+encrypted assertions: []"
+  },
+  "clients.logout_configured": {
+   "status": "pass",
+   "evidence": "OIDC clients without post-logout or back-channel logout: []"
+  },
+  "clients.authenticated": {
+   "status": "pass",
+   "evidence": "confidential clients without authenticator: []"
+  },
+  "workflow.inactive_35d": {
+   "status": "pass",
+   "evidence": "workflows: [('stig-disable-inactive-35d', 'user-created or user-authenticated', 'not has-user-attribute(account_type:emergency)', [('disable-user', '35d')]), ('stig-temp-account-72h', 'user-created', 'has-user-attribute(account_type:temporary)', [('disable-user', '72h')])]"
+  },
+  "workflow.temp_72h": {
+   "status": "pass",
+   "evidence": "temporary-account workflow: ('has-user-attribute(account_type:temporary)', [{'uses': 'disable-user', 'after': '72h', 'id': '49893c0d-8d56-496b-a62d-e87353b6f6ed'}])"
+  },
+  "master.flow_alt_token": {
+   "status": "pass",
+   "evidence": "admin realm browserFlow='STIG Admin Browser' paths=[['auth-x509-client-username-form', 'user-session-limits']] x509 mapping attribute=alt_token_upn admin.mfa=x509"
+  },
+  "master.no_bootstrap_admin": {
+   "status": "pass",
+   "evidence": "temporary bootstrap admin users: []; temporary admin clients: []"
+  },
+  "server.fips": {
+   "status": "fail",
+   "evidence": "cryptoInfo.cryptoProvider=DefaultCryptoProvider"
+  },
+  "server.version": {
+   "status": "manual",
+   "evidence": "Keycloak 26.8.2 - confirm it is a currently supported release"
+  },
+  "server.extension": {
+   "status": "pass",
+   "evidence": "stig-extensions provider loaded=True"
+  },
+  "live.cookie_flags": {
+   "status": "pass",
+   "evidence": "HTTP 200; session cookies: ['AUTH_SESSION_ID=...;Version=1;Path=/realms/labapp/;Secure;HttpOnly;SameSite=None', 'KC_RESTART=...;Version=1;Path=/realms/labapp/;Secure;HttpOnly;SameSite=None']"
+  },
+  "live.headers": {
+   "status": "pass",
+   "evidence": "HSTS=max-age=31536000; includeSubDomains; X-Content-Type-Options=nosniff; X-Frame-Options=SAMEORIGIN; CSP=frame-src 'self'; frame-ancestors 'self'; object-src 'none';"
+  },
+  "live.http_disabled": {
+   "status": "pass",
+   "evidence": "no HTTP listener on localhost:8080"
+  },
+  "live.tls_versions": {
+   "status": "pass",
+   "evidence": "TLS handshake results: {'TLSv1.1': None, 'TLSv1.2': 'TLSv1.2', 'TLSv1.3': 'TLSv1.3'}"
+  },
+  "deploy.client_auth": {
+   "status": "pass",
+   "evidence": "https-client-auth=request (build-time: Dockerfile KC_HTTPS_CLIENT_AUTH)"
+  },
+  "deploy.truststore": {
+   "status": "pass",
+   "evidence": "keycloak.conf truststore-paths (DoD PKI roots only)"
+  },
+  "deploy.access_log": {
+   "status": "pass",
+   "evidence": "http-access-log-enabled + pattern with User-Agent/Referer"
+  },
+  "deploy.syslog": {
+   "status": "pass",
+   "evidence": "log handlers include syslog"
+  },
+  "deploy.db_tls": {
+   "status": "pass",
+   "evidence": "db-url sslmode=verify-full"
+  },
+  "deploy.admin_hostname": {
+   "status": "pass",
+   "evidence": "hostname-admin set (separate admin URL)"
+  },
+  "deploy.nonroot": {
+   "status": "pass",
+   "evidence": "container user 1000"
+  },
+  "deploy.key_perms": {
+   "status": "manual",
+   "evidence": "Verify TLS private key mode 0400/0600 owned by UID 1000 (ls -l)."
+  }
+ },
+ "rules": [
+  {
+   "vuln_id": "V-222387",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] flow.session_limits: user-session-limits requirement=REQUIRED config={'userClientLimit': '0', 'errorMessage': 'Maximum concurrent sessions reached. Log out of another session first.', 'behavior': 'Deny new session', 'userRealmLimit': '3'}"
+   ]
+  },
+  {
+   "vuln_id": "V-222388",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.logout_cookies: Keycloak expires KEYCLOAK_IDENTITY/KEYCLOAK_SESSION/AUTH_SESSION_ID on logout (built-in)"
+   ]
+  },
+  {
+   "vuln_id": "V-222389",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.user_idle_15: ssoSessionIdleTimeout=900s",
+    "[PASS] realm.offline_access_removed: default role composites: ['manage-account', 'uma_authorization', 'view-profile']",
+    "[PASS] realm.refresh_rotation: revokeRefreshToken=True refreshTokenMaxReuse=0"
+   ]
+  },
+  {
+   "vuln_id": "V-222390",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] master.admin_idle_10: admin realm ssoSessionIdleTimeout=600s",
+    "[PASS] realm.admin_console_idle_10: security-admin-console client.session.idle.timeout=600"
+   ]
+  },
+  {
+   "vuln_id": "V-222391",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] clients.logout_configured: OIDC clients without post-logout or back-channel logout: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222392",
+   "status": "not_reviewed",
+   "disposition": "SHARED",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222393",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222394",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222395",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222396",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.ssl_all: sslRequired: realm=all admin=all",
+    "[PASS] live.http_disabled: no HTTP listener on localhost:8080",
+    "[PASS] live.tls_versions: TLS handshake results: {'TLSv1.1': None, 'TLSv1.2': 'TLSv1.2', 'TLSv1.3': 'TLSv1.3'}",
+    "[PASS] deploy.db_tls: db-url sslmode=verify-full"
+   ]
+  },
+  {
+   "vuln_id": "V-222397",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.ssl_all: sslRequired: realm=all admin=all",
+    "[PASS] live.http_disabled: no HTTP listener on localhost:8080",
+    "[PASS] live.tls_versions: TLS handshake results: {'TLSv1.1': None, 'TLSv1.2': 'TLSv1.2', 'TLSv1.3': 'TLSv1.3'}",
+    "[PASS] deploy.db_tls: db-url sslmode=verify-full"
+   ]
+  },
+  {
+   "vuln_id": "V-222398",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222399",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222400",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] clients.saml_hardened: SAML clients lacking signed+encrypted assertions: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222401",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222402",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] clients.saml_hardened: SAML clients lacking signed+encrypted assertions: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222403",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] clients.saml_hardened: SAML clients lacking signed+encrypted assertions: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222404",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] clients.saml_hardened: SAML clients lacking signed+encrypted assertions: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222405",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222406",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] clients.saml_hardened: SAML clients lacking signed+encrypted assertions: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222407",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222408",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222409",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] workflow.temp_72h: temporary-account workflow: ('has-user-attribute(account_type:temporary)', [{'uses': 'disable-user', 'after': '72h', 'id': '49893c0d-8d56-496b-a62d-e87353b6f6ed'}])"
+   ]
+  },
+  {
+   "vuln_id": "V-222410",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] workflow.inactive_35d: workflows: [('stig-disable-inactive-35d', 'user-created or user-authenticated', 'not has-user-attribute(account_type:emergency)', [('disable-user', '35d')]), ('stig-temp-account-72h', 'user-created', 'has-user-attribute(account_type:temporary)', [('disable-user', '72h')])]"
+   ]
+  },
+  {
+   "vuln_id": "V-222411",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] workflow.inactive_35d: workflows: [('stig-disable-inactive-35d', 'user-created or user-authenticated', 'not has-user-attribute(account_type:emergency)', [('disable-user', '35d')]), ('stig-temp-account-72h', 'user-created', 'has-user-attribute(account_type:temporary)', [('disable-user', '72h')])]"
+   ]
+  },
+  {
+   "vuln_id": "V-222412",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] master.no_bootstrap_admin: temporary bootstrap admin users: []; temporary admin clients: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222413",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222414",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222415",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222416",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222417",
+   "status": "not_a_finding",
+   "disposition": "KC-EXT",
+   "evidence": [
+    "[PASS] realm.listener_stig_audit: eventsListeners realm=['stig-audit', 'jboss-logging'] admin=['stig-audit', 'jboss-logging']"
+   ]
+  },
+  {
+   "vuln_id": "V-222418",
+   "status": "not_a_finding",
+   "disposition": "KC-EXT",
+   "evidence": [
+    "[PASS] realm.listener_stig_audit: eventsListeners realm=['stig-audit', 'jboss-logging'] admin=['stig-audit', 'jboss-logging']"
+   ]
+  },
+  {
+   "vuln_id": "V-222419",
+   "status": "not_a_finding",
+   "disposition": "KC-EXT",
+   "evidence": [
+    "[PASS] realm.listener_stig_audit: eventsListeners realm=['stig-audit', 'jboss-logging'] admin=['stig-audit', 'jboss-logging']"
+   ]
+  },
+  {
+   "vuln_id": "V-222420",
+   "status": "not_a_finding",
+   "disposition": "KC-EXT",
+   "evidence": [
+    "[PASS] realm.listener_stig_audit: eventsListeners realm=['stig-audit', 'jboss-logging'] admin=['stig-audit', 'jboss-logging']"
+   ]
+  },
+  {
+   "vuln_id": "V-222421",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222422",
+   "status": "not_a_finding",
+   "disposition": "KC-EXT",
+   "evidence": [
+    "[PASS] realm.listener_stig_audit: eventsListeners realm=['stig-audit', 'jboss-logging'] admin=['stig-audit', 'jboss-logging']"
+   ]
+  },
+  {
+   "vuln_id": "V-222423",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222424",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222425",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] policy.full_scope_disabled: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']"
+   ]
+  },
+  {
+   "vuln_id": "V-222426",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222427",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222428",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222429",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.no_default_admin_roles: default roles carry no realm-management client roles (['default-roles-labapp'])"
+   ]
+  },
+  {
+   "vuln_id": "V-222430",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] deploy.nonroot: container user 1000"
+   ]
+  },
+  {
+   "vuln_id": "V-222431",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222432",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.bruteforce: bruteForceProtected=True failureFactor=3 maxDeltaTimeSeconds=900 permanentLockout=True (admin realm failureFactor=3)"
+   ]
+  },
+  {
+   "vuln_id": "V-222433",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.bruteforce: bruteForceProtected=True failureFactor=3 maxDeltaTimeSeconds=900 permanentLockout=True (admin realm failureFactor=3)"
+   ]
+  },
+  {
+   "vuln_id": "V-222434",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.login_theme: loginTheme realm=dod-stig admin=dod-stig",
+    "[PASS] realm.terms_action: TERMS_AND_CONDITIONS enabled=True defaultAction=True"
+   ]
+  },
+  {
+   "vuln_id": "V-222435",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.login_theme: loginTheme realm=dod-stig admin=dod-stig",
+    "[PASS] realm.terms_action: TERMS_AND_CONDITIONS enabled=True defaultAction=True"
+   ]
+  },
+  {
+   "vuln_id": "V-222436",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.login_theme: loginTheme realm=dod-stig admin=dod-stig",
+    "[PASS] realm.terms_action: TERMS_AND_CONDITIONS enabled=True defaultAction=True"
+   ]
+  },
+  {
+   "vuln_id": "V-222437",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.listener_stig_audit: eventsListeners realm=['stig-audit', 'jboss-logging'] admin=['stig-audit', 'jboss-logging']",
+    "[PASS] realm.stig_claims_scope: default client scopes: ['AuthnContextClassRef', 'acr', 'basic', 'email', 'profile', 'role_list', 'roles', 'saml_organization', 'stig-claims', 'web-origins']"
+   ]
+  },
+  {
+   "vuln_id": "V-222438",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222439",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222441",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222442",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222443",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222444",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222445",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222446",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222447",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] deploy.access_log: http-access-log-enabled + pattern with User-Agent/Referer"
+   ]
+  },
+  {
+   "vuln_id": "V-222448",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222449",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222450",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)",
+    "[PASS] deploy.access_log: http-access-log-enabled + pattern with User-Agent/Referer"
+   ]
+  },
+  {
+   "vuln_id": "V-222451",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)",
+    "[PASS] deploy.access_log: http-access-log-enabled + pattern with User-Agent/Referer"
+   ]
+  },
+  {
+   "vuln_id": "V-222452",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222453",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222454",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)",
+    "[PASS] deploy.access_log: http-access-log-enabled + pattern with User-Agent/Referer"
+   ]
+  },
+  {
+   "vuln_id": "V-222455",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)",
+    "[PASS] deploy.access_log: http-access-log-enabled + pattern with User-Agent/Referer"
+   ]
+  },
+  {
+   "vuln_id": "V-222456",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222457",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222458",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)",
+    "[PASS] deploy.access_log: http-access-log-enabled + pattern with User-Agent/Referer"
+   ]
+  },
+  {
+   "vuln_id": "V-222459",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222460",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)",
+    "[PASS] deploy.access_log: http-access-log-enabled + pattern with User-Agent/Referer"
+   ]
+  },
+  {
+   "vuln_id": "V-222461",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222462",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222463",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222464",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222465",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222466",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]",
+    "[PASS] policy.reject_ropc: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']"
+   ]
+  },
+  {
+   "vuln_id": "V-222467",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222468",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222469",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] deploy.syslog: log handlers include syslog"
+   ]
+  },
+  {
+   "vuln_id": "V-222470",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] deploy.access_log: http-access-log-enabled + pattern with User-Agent/Referer"
+   ]
+  },
+  {
+   "vuln_id": "V-222471",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222472",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222473",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222474",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222475",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] deploy.syslog: log handlers include syslog"
+   ]
+  },
+  {
+   "vuln_id": "V-222476",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222477",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222478",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222479",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222480",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.listener_jboss: eventsListeners=['stig-audit', 'jboss-logging']",
+    "[PASS] deploy.syslog: log handlers include syslog"
+   ]
+  },
+  {
+   "vuln_id": "V-222481",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.listener_jboss: eventsListeners=['stig-audit', 'jboss-logging']",
+    "[PASS] deploy.syslog: log handlers include syslog"
+   ]
+  },
+  {
+   "vuln_id": "V-222482",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.listener_jboss: eventsListeners=['stig-audit', 'jboss-logging']",
+    "[PASS] deploy.syslog: log handlers include syslog"
+   ]
+  },
+  {
+   "vuln_id": "V-222483",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222484",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222485",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222486",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222487",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.listener_jboss: eventsListeners=['stig-audit', 'jboss-logging']",
+    "[PASS] deploy.syslog: log handlers include syslog"
+   ]
+  },
+  {
+   "vuln_id": "V-222488",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222489",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222490",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222491",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222492",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222493",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222494",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222495",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222496",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222497",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222498",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222499",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] realm.user_events: eventsEnabled=True, 132 event types, missing=[]"
+   ]
+  },
+  {
+   "vuln_id": "V-222500",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222501",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222502",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222503",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222504",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222505",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222506",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222507",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222508",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222509",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222510",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222511",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] master.flow_alt_token: admin realm browserFlow='STIG Admin Browser' paths=[['auth-x509-client-username-form', 'user-session-limits']] x509 mapping attribute=alt_token_upn admin.mfa=x509"
+   ]
+  },
+  {
+   "vuln_id": "V-222512",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222513",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222514",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222515",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222516",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222517",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222518",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.registration_off: registrationAllowed=False",
+    "[PASS] policy.reject_implicit: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']",
+    "[PASS] policy.reject_ropc: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']",
+    "[PASS] live.http_disabled: no HTTP listener on localhost:8080"
+   ]
+  },
+  {
+   "vuln_id": "V-222519",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] live.http_disabled: no HTTP listener on localhost:8080"
+   ]
+  },
+  {
+   "vuln_id": "V-222520",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.sso_max: ssoSessionMaxLifespan=28800s"
+   ]
+  },
+  {
+   "vuln_id": "V-222521",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.token_lifespan: accessTokenLifespan=300s"
+   ]
+  },
+  {
+   "vuln_id": "V-222522",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] flow.x509_or_mfa: browserFlow='STIG Browser' authentication paths=[['auth-x509-client-username-form', 'user-session-limits'], ['auth-otp-form', 'auth-username-password-form', 'user-session-limits']]",
+    "[PASS] userprofile.cac_upn_admin_only: cac_upn permissions={'view': ['admin'], 'edit': ['admin']} unmanagedAttributePolicy=None"
+   ]
+  },
+  {
+   "vuln_id": "V-222523",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] master.flow_alt_token: admin realm browserFlow='STIG Admin Browser' paths=[['auth-x509-client-username-form', 'user-session-limits']] x509 mapping attribute=alt_token_upn admin.mfa=x509"
+   ]
+  },
+  {
+   "vuln_id": "V-222524",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] flow.x509_or_mfa: browserFlow='STIG Browser' authentication paths=[['auth-x509-client-username-form', 'user-session-limits'], ['auth-otp-form', 'auth-username-password-form', 'user-session-limits']]",
+    "[PASS] deploy.client_auth: https-client-auth=request (build-time: Dockerfile KC_HTTPS_CLIENT_AUTH)"
+   ]
+  },
+  {
+   "vuln_id": "V-222525",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] flow.x509_revocation: ocsp=True crl=True(crl/test-id-ca.crl) ocsp-fail-open=True timestamp=true keyusage=digitalSignature policies=None"
+   ]
+  },
+  {
+   "vuln_id": "V-222526",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] flow.x509_or_mfa: browserFlow='STIG Browser' authentication paths=[['auth-x509-client-username-form', 'user-session-limits'], ['auth-otp-form', 'auth-username-password-form', 'user-session-limits']]",
+    "[PASS] flow.no_password_only: paths lacking CAC or second factor: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222527",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] master.flow_alt_token: admin realm browserFlow='STIG Admin Browser' paths=[['auth-x509-client-username-form', 'user-session-limits']] x509 mapping attribute=alt_token_upn admin.mfa=x509"
+   ]
+  },
+  {
+   "vuln_id": "V-222528",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] flow.x509_or_mfa: browserFlow='STIG Browser' authentication paths=[['auth-x509-client-username-form', 'user-session-limits'], ['auth-otp-form', 'auth-username-password-form', 'user-session-limits']]"
+   ]
+  },
+  {
+   "vuln_id": "V-222529",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222530",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] policy.pkce: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']",
+    "[PASS] realm.refresh_rotation: revokeRefreshToken=True refreshTokenMaxReuse=0",
+    "[PASS] realm.otp_policy: otp totp/HmacSHA256 digits=6 period=30 reusable=False"
+   ]
+  },
+  {
+   "vuln_id": "V-222531",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] policy.pkce: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']",
+    "[PASS] realm.refresh_rotation: revokeRefreshToken=True refreshTokenMaxReuse=0",
+    "[PASS] realm.otp_policy: otp totp/HmacSHA256 digits=6 period=30 reusable=False"
+   ]
+  },
+  {
+   "vuln_id": "V-222532",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] deploy.client_auth: https-client-auth=request (build-time: Dockerfile KC_HTTPS_CLIENT_AUTH)"
+   ]
+  },
+  {
+   "vuln_id": "V-222533",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] clients.authenticated: confidential clients without authenticator: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222534",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222535",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222536",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.pw_policy: passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+   ]
+  },
+  {
+   "vuln_id": "V-222537",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.pw_policy: passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+   ]
+  },
+  {
+   "vuln_id": "V-222538",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.pw_policy: passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+   ]
+  },
+  {
+   "vuln_id": "V-222539",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.pw_policy: passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+   ]
+  },
+  {
+   "vuln_id": "V-222540",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.pw_policy: passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+   ]
+  },
+  {
+   "vuln_id": "V-222541",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.pw_policy: passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+   ]
+  },
+  {
+   "vuln_id": "V-222542",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.pw_policy: passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+   ]
+  },
+  {
+   "vuln_id": "V-222543",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.ssl_all: sslRequired: realm=all admin=all",
+    "[PASS] policy.reject_ropc: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']",
+    "[PASS] live.http_disabled: no HTTP listener on localhost:8080"
+   ]
+  },
+  {
+   "vuln_id": "V-222544",
+   "status": "not_a_finding",
+   "disposition": "KC-EXT",
+   "evidence": [
+    "[PASS] realm.pw_policy: passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+   ]
+  },
+  {
+   "vuln_id": "V-222545",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.pw_policy: passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+   ]
+  },
+  {
+   "vuln_id": "V-222546",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.pw_policy: passwordPolicy=length(15) and maxLength(128) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(60) and hashAlgorithm(pbkdf2-sha512) and hashIterations(210000) and minimumPasswordAge(24)"
+   ]
+  },
+  {
+   "vuln_id": "V-222547",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.required_actions: UPDATE_PASSWORD enabled=True"
+   ]
+  },
+  {
+   "vuln_id": "V-222548",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.registration_off: registrationAllowed=False",
+    "[PASS] realm.reset_password_off: resetPasswordAllowed=False"
+   ]
+  },
+  {
+   "vuln_id": "V-222549",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222550",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] flow.x509_revocation: ocsp=True crl=True(crl/test-id-ca.crl) ocsp-fail-open=True timestamp=true keyusage=digitalSignature policies=None",
+    "[PASS] deploy.truststore: keycloak.conf truststore-paths (DoD PKI roots only)"
+   ]
+  },
+  {
+   "vuln_id": "V-222551",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[MANUAL] deploy.key_perms: Verify TLS private key mode 0400/0600 owned by UID 1000 (ls -l)."
+   ]
+  },
+  {
+   "vuln_id": "V-222552",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] flow.x509_or_mfa: browserFlow='STIG Browser' authentication paths=[['auth-x509-client-username-form', 'user-session-limits'], ['auth-otp-form', 'auth-username-password-form', 'user-session-limits']]",
+    "[PASS] userprofile.cac_upn_admin_only: cac_upn permissions={'view': ['admin'], 'edit': ['admin']} unmanagedAttributePolicy=None"
+   ]
+  },
+  {
+   "vuln_id": "V-222553",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] flow.x509_revocation: ocsp=True crl=True(crl/test-id-ca.crl) ocsp-fail-open=True timestamp=true keyusage=digitalSignature policies=None"
+   ]
+  },
+  {
+   "vuln_id": "V-222554",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222555",
+   "status": "open",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[FAIL] server.fips: cryptoInfo.cryptoProvider=DefaultCryptoProvider"
+   ]
+  },
+  {
+   "vuln_id": "V-222556",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] flow.no_password_only: paths lacking CAC or second factor: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222557",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] deploy.truststore: keycloak.conf truststore-paths (DoD PKI roots only)"
+   ]
+  },
+  {
+   "vuln_id": "V-222558",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] deploy.truststore: keycloak.conf truststore-paths (DoD PKI roots only)"
+   ]
+  },
+  {
+   "vuln_id": "V-222559",
+   "status": "not_reviewed",
+   "disposition": "SHARED",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222560",
+   "status": "not_reviewed",
+   "disposition": "SHARED",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222561",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.admin_events: adminEventsEnabled realm=True/True admin=True/True (enabled/details)"
+   ]
+  },
+  {
+   "vuln_id": "V-222562",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] live.tls_versions: TLS handshake results: {'TLSv1.1': None, 'TLSv1.2': 'TLSv1.2', 'TLSv1.3': 'TLSv1.3'}"
+   ]
+  },
+  {
+   "vuln_id": "V-222563",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] live.tls_versions: TLS handshake results: {'TLSv1.1': None, 'TLSv1.2': 'TLSv1.2', 'TLSv1.3': 'TLSv1.3'}"
+   ]
+  },
+  {
+   "vuln_id": "V-222564",
+   "status": "not_reviewed",
+   "disposition": "SHARED",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222565",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] master.flow_alt_token: admin realm browserFlow='STIG Admin Browser' paths=[['auth-x509-client-username-form', 'user-session-limits']] x509 mapping attribute=alt_token_upn admin.mfa=x509"
+   ]
+  },
+  {
+   "vuln_id": "V-222566",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] master.admin_idle_10: admin realm ssoSessionIdleTimeout=600s"
+   ]
+  },
+  {
+   "vuln_id": "V-222567",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222568",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] clients.logout_configured: OIDC clients without post-logout or back-channel logout: []"
+   ]
+  },
+  {
+   "vuln_id": "V-265634",
+   "status": "not_reviewed",
+   "disposition": "NA-COND",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222570",
+   "status": "open",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[FAIL] server.fips: cryptoInfo.cryptoProvider=DefaultCryptoProvider"
+   ]
+  },
+  {
+   "vuln_id": "V-222571",
+   "status": "open",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[FAIL] server.fips: cryptoInfo.cryptoProvider=DefaultCryptoProvider"
+   ]
+  },
+  {
+   "vuln_id": "V-222572",
+   "status": "open",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[FAIL] server.fips: cryptoInfo.cryptoProvider=DefaultCryptoProvider"
+   ]
+  },
+  {
+   "vuln_id": "V-222573",
+   "status": "open",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[FAIL] server.fips: cryptoInfo.cryptoProvider=DefaultCryptoProvider"
+   ]
+  },
+  {
+   "vuln_id": "V-222574",
+   "status": "not_a_finding_idp",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[PASS] deploy.admin_hostname: hostname-admin set (separate admin URL)"
+   ]
+  },
+  {
+   "vuln_id": "V-222575",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] live.cookie_flags: HTTP 200; session cookies: ['AUTH_SESSION_ID=...;Version=1;Path=/realms/labapp/;Secure;HttpOnly;SameSite=None', 'KC_RESTART=...;Version=1;Path=/realms/labapp/;Secure;HttpOnly;SameSite=None']"
+   ]
+  },
+  {
+   "vuln_id": "V-222576",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] live.cookie_flags: HTTP 200; session cookies: ['AUTH_SESSION_ID=...;Version=1;Path=/realms/labapp/;Secure;HttpOnly;SameSite=None', 'KC_RESTART=...;Version=1;Path=/realms/labapp/;Secure;HttpOnly;SameSite=None']",
+    "[PASS] realm.ssl_all: sslRequired: realm=all admin=all"
+   ]
+  },
+  {
+   "vuln_id": "V-222577",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.ssl_all: sslRequired: realm=all admin=all",
+    "[PASS] policy.reject_implicit: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']"
+   ]
+  },
+  {
+   "vuln_id": "V-222578",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.remember_me_off: rememberMe realm=False admin=False"
+   ]
+  },
+  {
+   "vuln_id": "V-222579",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222580",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222581",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] policy.reject_implicit: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']",
+    "[PASS] policy.pkce: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']"
+   ]
+  },
+  {
+   "vuln_id": "V-222582",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] realm.refresh_rotation: revokeRefreshToken=True refreshTokenMaxReuse=0"
+   ]
+  },
+  {
+   "vuln_id": "V-222583",
+   "status": "open",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[FAIL] server.fips: cryptoInfo.cryptoProvider=DefaultCryptoProvider"
+   ]
+  },
+  {
+   "vuln_id": "V-222584",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] deploy.truststore: keycloak.conf truststore-paths (DoD PKI roots only)"
+   ]
+  },
+  {
+   "vuln_id": "V-222585",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] flow.x509_revocation: ocsp=True crl=True(crl/test-id-ca.crl) ocsp-fail-open=True timestamp=true keyusage=digitalSignature policies=None"
+   ]
+  },
+  {
+   "vuln_id": "V-222586",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222587",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222588",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222589",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222590",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222591",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222592",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222593",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222594",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.bruteforce: bruteForceProtected=True failureFactor=3 maxDeltaTimeSeconds=900 permanentLockout=True (admin realm failureFactor=3)",
+    "[PASS] flow.session_limits: user-session-limits requirement=REQUIRED config={'userClientLimit': '0', 'errorMessage': 'Maximum concurrent sessions reached. Log out of another session first.', 'behavior': 'Deny new session', 'userRealmLimit': '3'}"
+   ]
+  },
+  {
+   "vuln_id": "V-222595",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222596",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.ssl_all: sslRequired: realm=all admin=all",
+    "[PASS] live.http_disabled: no HTTP listener on localhost:8080",
+    "[PASS] live.tls_versions: TLS handshake results: {'TLSv1.1': None, 'TLSv1.2': 'TLSv1.2', 'TLSv1.3': 'TLSv1.3'}",
+    "[PASS] deploy.db_tls: db-url sslmode=verify-full"
+   ]
+  },
+  {
+   "vuln_id": "V-222597",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.ssl_all: sslRequired: realm=all admin=all",
+    "[PASS] live.http_disabled: no HTTP listener on localhost:8080",
+    "[PASS] live.tls_versions: TLS handshake results: {'TLSv1.1': None, 'TLSv1.2': 'TLSv1.2', 'TLSv1.3': 'TLSv1.3'}",
+    "[PASS] deploy.db_tls: db-url sslmode=verify-full"
+   ]
+  },
+  {
+   "vuln_id": "V-222598",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.ssl_all: sslRequired: realm=all admin=all",
+    "[PASS] live.http_disabled: no HTTP listener on localhost:8080",
+    "[PASS] live.tls_versions: TLS handshake results: {'TLSv1.1': None, 'TLSv1.2': 'TLSv1.2', 'TLSv1.3': 'TLSv1.3'}",
+    "[PASS] deploy.db_tls: db-url sslmode=verify-full"
+   ]
+  },
+  {
+   "vuln_id": "V-222599",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.ssl_all: sslRequired: realm=all admin=all",
+    "[PASS] live.http_disabled: no HTTP listener on localhost:8080",
+    "[PASS] live.tls_versions: TLS handshake results: {'TLSv1.1': None, 'TLSv1.2': 'TLSv1.2', 'TLSv1.3': 'TLSv1.3'}",
+    "[PASS] deploy.db_tls: db-url sslmode=verify-full"
+   ]
+  },
+  {
+   "vuln_id": "V-222600",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222601",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222602",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.headers: browserSecurityHeaders={\"contentSecurityPolicyReportOnly\": \"\", \"xContentTypeOptions\": \"nosniff\", \"referrerPolicy\": \"no-referrer\", \"xRobotsTag\": \"none\", \"xFrameOptions\": \"SAMEORIGIN\", \"contentSecurityPolicy\": \"frame-src 'self'; frame-ancestors 'self'; object-src 'none';\", \"strictTransportSecurity\": \"max-age=31536000; includeSubDomains\"}"
+   ]
+  },
+  {
+   "vuln_id": "V-222603",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] policy.pkce: client policy asd-stig active=True executors=['full-scope-disabled', 'pkce-enforcer', 'reject-implicit-grant', 'reject-ropc-grant']"
+   ]
+  },
+  {
+   "vuln_id": "V-222604",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222605",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222606",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222607",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222608",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222609",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222610",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222611",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] builtin: Built-in Keycloak 26.8.2 behaviour (no configuration required)."
+   ]
+  },
+  {
+   "vuln_id": "V-222612",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222613",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222614",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[MANUAL] server.version: Keycloak 26.8.2 - confirm it is a currently supported release"
+   ]
+  },
+  {
+   "vuln_id": "V-222615",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222616",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222617",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222618",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222619",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222620",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222621",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222622",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222623",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222624",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222625",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222626",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222627",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222628",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222629",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222630",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222631",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222632",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222633",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222634",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222635",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222636",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222637",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222638",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222639",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222640",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222641",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] live.tls_versions: TLS handshake results: {'TLSv1.1': None, 'TLSv1.2': 'TLSv1.2', 'TLSv1.3': 'TLSv1.3'}"
+   ]
+  },
+  {
+   "vuln_id": "V-222642",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222643",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222644",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222645",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222646",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222647",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222648",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222649",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222650",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222651",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222652",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222653",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222654",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222655",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222656",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222657",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222658",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": [
+    "[MANUAL] server.version: Keycloak 26.8.2 - confirm it is a currently supported release"
+   ]
+  },
+  {
+   "vuln_id": "V-222659",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222660",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222661",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] master.no_bootstrap_admin: temporary bootstrap admin users: []; temporary admin clients: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222662",
+   "status": "not_a_finding",
+   "disposition": "KC",
+   "evidence": [
+    "[PASS] master.no_bootstrap_admin: temporary bootstrap admin users: []; temporary admin clients: []"
+   ]
+  },
+  {
+   "vuln_id": "V-222663",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222664",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222665",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222666",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222667",
+   "status": "not_a_finding_idp",
+   "disposition": "SHARED",
+   "evidence": [
+    "[PASS] realm.bruteforce: bruteForceProtected=True failureFactor=3 maxDeltaTimeSeconds=900 permanentLockout=True (admin realm failureFactor=3)"
+   ]
+  },
+  {
+   "vuln_id": "V-222668",
+   "status": "not_reviewed",
+   "disposition": "APP",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222669",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222670",
+   "status": "not_reviewed",
+   "disposition": "PLATFORM",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222671",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  },
+  {
+   "vuln_id": "V-222672",
+   "status": "not_a_finding",
+   "disposition": "KC-EXT",
+   "evidence": [
+    "[PASS] realm.listener_stig_audit: eventsListeners realm=['stig-audit', 'jboss-logging'] admin=['stig-audit', 'jboss-logging']"
+   ]
+  },
+  {
+   "vuln_id": "V-222673",
+   "status": "not_reviewed",
+   "disposition": "PROCESS",
+   "evidence": []
+  }
+ ]
+}

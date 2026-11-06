@@ -1,0 +1,61 @@
+# keycloak-stig Helm values. Same containers/env as the compose reference deployment.
+fullnameOverride: ""
+replicas: 2
+
+image:
+  keycloak: registry.example.mil/iam/keycloak-stig:26.8.2-stig        # build with scripts/build_images.sh (append -nginx for ingress.mode=edge)
+  tools: registry.example.mil/iam/kcstig-tools:26.8.2-stig
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+hostname: https://sso.example.mil              # public URL users see
+hostnameAdmin: https://sso-admin.example.mil   # admin console URL, reachable only from the admin network (V-222574)
+
+tls:
+  secretName: keycloak-tls        # kubernetes.io/tls secret with tls.crt, tls.key and ca.crt (chain that signed the server cert)
+
+database:
+  url: jdbc:postgresql://postgres:5432/keycloak?sslmode=verify-full&sslrootcert=/run/secrets/db-ca/ca.crt
+  username: keycloak
+  passwordSecret: {name: keycloak-db, key: password}
+  caSecret: keycloak-db-ca         # secret with ca.crt for sslmode=verify-full
+
+bootstrapAdmin:                     # used once by the apply job, then deleted (V-222662)
+  username: bootstrap-admin
+  passwordSecret: {name: keycloak-bootstrap-admin, key: password}
+
+automation:                         # service account used by apply/verify; secret value comes from your secret manager
+  clientId: stig-automation
+  secret: {name: keycloak-automation, key: secret}
+
+pki:
+  source: dod                       # dod (download + verify DISA bundle) | dir:/seed (air-gapped: mount seed via pki.seedVolume)
+  refreshSeconds: 21600
+  sidecar: container               # container (any K8s, OpenShift, podman kube play) | native (K8s >= 1.29 init sidecar) | none
+  seedVolume: {}                    # e.g. {configMap: {name: dod-pki-seed}} or {persistentVolumeClaim: {claimName: dod-pki}} with truststore/ and crl/
+  sizeLimit: 512Mi                  # DoD CRLs are ~140 MB
+
+ingress:
+  mode: passthrough                 # passthrough: L4 to Keycloak (Keycloak reads the CAC) | edge: ingress-nginx verifies + forwards
+  serviceType: ClusterIP            # LoadBalancer / NodePort for passthrough without an ingress controller
+  nodePort: null
+  className: nginx
+  host: sso.example.mil
+  edgeCaSecret: ""                  # namespace/secret with ca.crt = DoD anchors, for ingress-nginx auth-tls-secret
+
+stig:
+  profile: {}                       # the kcstig profile (references/profile.md). keycloak.url is set by the chart.
+  clients: []                       # client objects registered by this release
+  clientConfigMaps: []              # names of ConfigMaps owned by individual services, each with *.json client files
+  verifySchedule: "17 3 * * *"
+  notifyEmails: ""
+
+extraEnv: []
+resources:
+  # Measured (26.8.2): ~0.6 GiB idle; 3.5-4.9 GiB once the full DoD ID/derived-PIV CRL set (~140 MB, 600k+ entries
+  # per CA) is loaded. Keycloak sizes its heap from the container limit, so keep the limit >= 8Gi with DoD CRLs.
+  keycloak: {requests: {cpu: "1", memory: 6Gi}, limits: {memory: 8Gi}}
+  tools: {requests: {cpu: 50m, memory: 128Mi}, limits: {memory: 512Mi}}
+probes: {type: http}            # http (kubelet HTTPS health endpoints) | tcp (podman kube play: it runs probes with curl inside the image, which has none)
+podDisruptionBudget: {minAvailable: 1}
+networkPolicy: {enabled: true, ingressFrom: []}   # add namespaceSelectors of your ingress controller / clients

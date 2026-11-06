@@ -1,0 +1,125 @@
+{
+  "keycloak": {
+    "url": "https://sso.example.mil:8443",
+    "admin_realm": "master"
+  },
+  "realm": {
+    "name": "myapp",
+    "display_name": "My Application"
+  },
+  "auth_mode": "cac_or_mfa",
+  "mfa": "otp",
+  "x509": {
+    "mapping_attribute": "cac_upn",
+    "mapping_source": "Subject's Alternative Name otherName (UPN)",
+    "ocsp": true,
+    "ocsp_responder_uri": "",
+    "crl": true,
+    "crl_files": [
+      "crl/DODIDCA_59.crl",
+      "crl/DODIDCA_62.crl",
+      "crl/DODIDCA_63.crl"
+    ],
+    "key_usage": "digitalSignature",
+    "extended_key_usage": "",
+    "certificate_policies": [],
+    "confirmation_page": true,
+    "ca_subject_dns": [
+      "CN=DoD Root CA 3,OU=PKI,OU=DoD,O=U.S. Government,C=US",
+      "CN=DoD Root CA 4,OU=PKI,OU=DoD,O=U.S. Government,C=US",
+      "CN=DoD Root CA 5,OU=PKI,OU=DoD,O=U.S. Government,C=US",
+      "CN=DoD Root CA 6,OU=PKI,OU=DoD,O=U.S. Government,C=US"
+    ]
+  },
+  "sessions": {
+    "user_idle_minutes": 15,
+    "admin_idle_minutes": 10,
+    "max_hours": 8,
+    "max_per_user": 3,
+    "access_token_minutes": 5
+  },
+  "lockout": {
+    "max_failures": 3,
+    "window_minutes": 15,
+    "permanent": true
+  },
+  "password": {
+    "min_length": 15,
+    "history": 5,
+    "max_age_days": 60,
+    "min_age_hours": 24
+  },
+  "accounts": {
+    "inactive_days": 35,
+    "temp_hours": 72
+  },
+  "banner": {
+    "theme": "dod-stig",
+    "terms_required_action": true
+  },
+  "events": {
+    "retention_days": 90
+  },
+  "clients": [
+    {
+      "client_id": "myapp-web",
+      "type": "oidc-confidential",
+      "auth": "client-jwt",
+      "jwks_url": "https://myapp.example.mil/.well-known/jwks.json",
+      "root_url": "https://myapp.example.mil",
+      "redirect_uris": [
+        "https://myapp.example.mil/oauth2/callback"
+      ],
+      "post_logout_redirect_uris": [
+        "https://myapp.example.mil/logged-out"
+      ],
+      "backchannel_logout_url": "https://myapp.example.mil/oauth2/backchannel-logout",
+      "web_origins": [
+        "https://myapp.example.mil"
+      ]
+    },
+    {
+      "client_id": "myapp-admin",
+      "type": "oidc-public",
+      "privileged": true,
+      "redirect_uris": [
+        "https://admin.myapp.example.mil/callback"
+      ],
+      "post_logout_redirect_uris": [
+        "https://admin.myapp.example.mil/"
+      ],
+      "web_origins": [
+        "https://admin.myapp.example.mil"
+      ]
+    },
+    {
+      "client_id": "https://legacy.example.mil/saml/metadata",
+      "type": "saml",
+      "acs_url": "https://legacy.example.mil/saml/acs",
+      "slo_url": "https://legacy.example.mil/saml/slo"
+    }
+  ],
+  "users": [
+    {
+      "username": "doe.john",
+      "email": "john.doe@example.mil",
+      "firstName": "John",
+      "lastName": "Doe",
+      "cac_upn": "1234567890@mil"
+    }
+  ],
+  "admin": {
+    "mfa": "x509",
+    "mapping_attribute": "alt_token_upn",
+    "users": [
+      {
+        "username": "smith.alex.adm",
+        "email": "alex.smith@example.mil",
+        "firstName": "Alex",
+        "lastName": "Smith",
+        "alt_token_upn": "3456789012.alt@mil"
+      }
+    ],
+    "automation_client": "stig-automation"
+  }
+}

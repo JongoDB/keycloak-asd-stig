@@ -1,0 +1,10 @@
+services:
+  keycloak:
+    image: ${KEYCLOAK_EDGE_IMAGE:-localhost/keycloak-stig:26.8.2-stig-nginx}
+    env_file: [runtime.env, edge.env]
+  edge:
+    image: mirror.gcr.io/library/nginx:1.27
+    volumes: ["./proxy/default.conf:/etc/nginx/conf.d/default.conf:ro", "./tls:/etc/nginx/tls:ro", "./proxy/anchors.pem:/etc/nginx/pki/anchors.pem:ro"]
+    ports: ["9443:8443"]
+    networks: [frontend]
+    depends_on: [keycloak]
