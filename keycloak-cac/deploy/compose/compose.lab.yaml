@@ -25,9 +25,10 @@ services:
       KC_DB_PASSWORD: lab-only-db-password
       KC_BOOTSTRAP_ADMIN_USERNAME: bootstrap
       KC_BOOTSTRAP_ADMIN_PASSWORD: lab-only-bootstrap-password
-      # Your real CAC in the lab too: trust the baked DoD bundle as well and map your card's UPN.
+      # Your real CAC in the lab too: also trust the baked DoD bundle and map your card's UPN exactly
+      # (16 digits on many cards). DoD CRLs are then downloaded (needs crl.disa.mil and ~5 GB of memory).
       # CAC_LAB_TRUST_DOD: "true"
-      # CAC_USERS: "me=1234567890123456@mil"
+      # CAC_USERS: "your.name=1234567890123456@mil"
       CAC_CLIENTS_JSON: >-
         [{"client_id":"demo","type":"oidc-public",
           "redirect_uris":["https://localhost:${CAC_PORT:-8443}/realms/dod-cac/account/"],

@@ -30,7 +30,7 @@ Import `lab-cards/doe.john.p12` (password `changeit`) into a browser and open `h
 - `unmapped.p12` is refused because no account is mapped to it.
 - `admin.alt.p12` is the Alt Token that can open `/admin`.
 
-To use your real CAC in the lab, set `CAC_LAB_TRUST_DOD=true` and `CAC_USERS=me=<your card's UPN>`.
+To use your real CAC in the lab, set `CAC_LAB_TRUST_DOD=true` and `CAC_USERS=your.name=<your card's UPN>`. The username needs at least 3 characters. The container then also downloads the DoD CRLs (from crl.disa.mil, about 140 MB) and needs about 5 GB of memory. The mock cards keep working alongside your card.
 
 ## Production
 
@@ -169,6 +169,7 @@ All of these were run against this image. The black-box suite is `keycloak-asd-s
 | Online: baked DoD bundle, live download of all 17 DoD CRLs, CRL cache clear | passed; the TLS handshake requests only DoD CAs (45 names) |
 | Offline drop-in build, and a tampered bundle | same 45 anchors; the tampered bundle is refused |
 | Wrong automation secret after hardening | container stops (fail secure) |
+| Lab mode plus DoD trust: mock CA and DoD anchors, mock CRL plus all 17 DoD CRLs | 11/11 with mock cards; 4.3 GiB memory with the DoD CRLs loaded |
 
 On the `/auth` run, the one failure was `previous_login`. That run used Keycloak's built-in admin-console client, which doesn't carry the `stig-claims` scope. The check passed in the runs that used registered clients.
 
