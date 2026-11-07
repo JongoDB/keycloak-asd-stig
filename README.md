@@ -9,6 +9,7 @@ application that uses this login.
 
 | Path | What it is |
 |---|---|
+| `keycloak-cac/` | **Start here (v2).** One self-configuring container image: DoD CAC/PIV login hardened to the ASD STIG and configured only through env vars. DoD anchors are baked in at build (or dropped in offline), CRLs work online or air-gapped, and it deploys to Compose, Helm/K8s or ECS. See `keycloak-cac/README.md`, and `keycloak-cac/DEPLOY.md` for each platform and registry. |
 | `keycloak-asd-stig/` | The Claude Code skill: `SKILL.md`, `scripts/kcstig.py` (render, apply, verify, assess, crosswalk, inherit, gateway), the e2e checker, image build, DoD PKI fetch, references, deploy assets (Compose, Helm, Podman, proxy), the theme and extension. |
 | `keycloak-asd-stig.skill` | The packaged skill. Install it by unzipping into `~/.claude/skills/`. |
 | `kc-cac-setup/` | `kc-cac-setup.sh`: a self-contained, one-command local CAC test stack (Docker or Podman). The README is the runbook. `build.sh` rebuilds it from `header.sh` plus the skill. |
@@ -19,8 +20,9 @@ application that uses this login.
 
 ## Quick start
 ```bash
-bash kc-cac-setup/kc-cac-setup.sh --upn <your card's Principal Name>   # real CAC
-bash kc-cac-setup/kc-cac-setup.sh --lab-pki                            # generated test cards
+docker build -f keycloak-cac/Containerfile -t keycloak-cac:26.8.2 .                 # v2 image (from the repo root)
+docker compose -f keycloak-cac/deploy/compose/compose.lab.yaml up -d               # lab with mock CACs
+bash kc-cac-setup/kc-cac-setup.sh --upn <your card's Principal Name>               # v1 one-command local test, real CAC
 ```
 Use the card's UPN exactly as it appears. Many cards use 16 digits (the EDIPI plus a suffix). See `kc-cac-setup/README.md`.
 

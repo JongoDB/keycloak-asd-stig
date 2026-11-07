@@ -1,0 +1,197 @@
+# keycloak-cac on plain Kubernetes, air-gapped variant (rendered from the Helm chart with values-airgap.yaml).
+# No Helm needed: edit the values marked EDIT, then  kubectl apply -n iam -f keycloak-cac-airgap.yaml
+# Before applying, create the Secrets (tls, db, bootstrap, automation) - see ../../README.md "Kubernetes".
+# CRLs: the PVC "dod-crls" holds the DoD CRL files; your offline process refreshes it (the pods re-read and
+# signature-check them every hour). Online clusters: use the Helm chart with crl.mode=online instead.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: dod-crls}
+spec:
+  accessModes: [ReadOnlyMany]
+  resources: {requests: {storage: 1Gi}}
+---
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: iam-keycloak-cac
+  labels:
+    app.kubernetes.io/name: keycloak-cac
+    app.kubernetes.io/instance: iam
+    app.kubernetes.io/version: "26.8.2"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak-cac
+      app.kubernetes.io/instance: iam
+  policyTypes: [Ingress]
+  ingress:
+  - ports: [{port: 8443}]                       # browsers and relying apps
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: keycloak-cac
+          app.kubernetes.io/instance: iam
+    ports: [{port: 7800}, {port: 9000}]         # cluster traffic between replicas, probes
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: iam-keycloak-cac
+  labels:
+    app.kubernetes.io/name: keycloak-cac
+    app.kubernetes.io/instance: iam
+    app.kubernetes.io/version: "26.8.2"
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak-cac
+      app.kubernetes.io/instance: iam
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iam-keycloak-cac-clients
+  labels:
+    app.kubernetes.io/name: keycloak-cac
+    app.kubernetes.io/instance: iam
+    app.kubernetes.io/version: "26.8.2"
+data:
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iam-keycloak-cac-anchors
+  labels:
+    app.kubernetes.io/name: keycloak-cac
+    app.kubernetes.io/instance: iam
+    app.kubernetes.io/version: "26.8.2"
+data:
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iam-keycloak-cac
+  labels:
+    app.kubernetes.io/name: keycloak-cac
+    app.kubernetes.io/instance: iam
+    app.kubernetes.io/version: "26.8.2"
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: keycloak-cac
+    app.kubernetes.io/instance: iam
+  ports:
+  - {name: https, port: 443, targetPort: https}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iam-keycloak-cac-management
+  labels:
+    app.kubernetes.io/name: keycloak-cac
+    app.kubernetes.io/instance: iam
+    app.kubernetes.io/version: "26.8.2"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: keycloak-cac
+    app.kubernetes.io/instance: iam
+  ports:
+  - {name: management, port: 9000, targetPort: management}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iam-keycloak-cac
+  labels:
+    app.kubernetes.io/name: keycloak-cac
+    app.kubernetes.io/instance: iam
+    app.kubernetes.io/version: "26.8.2"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak-cac
+      app.kubernetes.io/instance: iam
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak-cac
+        app.kubernetes.io/instance: iam
+        app.kubernetes.io/version: "26.8.2"
+      annotations:
+        checksum/config: 4833b3b8d1d2e3c4e4eee9ba1d09346c167037ea50789475922e5e361f2206f3
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 0
+        runAsGroup: 0
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: keycloak
+        image: "registry.example.mil/iam/keycloak-cac:26.8.2"
+        imagePullPolicy: IfNotPresent
+        env:
+        - {name: CAC_PUBLIC_URL, value: "https://sso.example.mil"}
+        - {name: CAC_REALM, value: "dod-cac"}
+        - {name: CAC_REALM_DISPLAY_NAME, value: "DoD CAC Login"}
+        - {name: CAC_USERNAME_SOURCE, value: "upn"}
+        - {name: CRL_MODE, value: "file"}
+        - {name: CAC_CRL_REFRESH_SECONDS, value: "3600"}
+        - {name: CAC_CRL_DIR, value: /crl}
+        - {name: CAC_OCSP, value: "false"}
+        - {name: CAC_ADMINS, value: "EDIT.admin=1234567890.alt@mil"}
+        - {name: CAC_USERS, value: ""}
+        - {name: CAC_CLIENTS_DIR, value: /clients}
+        - {name: KC_HTTPS_CERTIFICATE_FILE, value: /run/secrets/tls/tls.crt}
+        - {name: KC_HTTPS_CERTIFICATE_KEY_FILE, value: /run/secrets/tls/tls.key}
+        - {name: KC_DB_URL, value: "jdbc:postgresql://postgres.iam.svc:5432/keycloak?sslmode=verify-full"}
+        - {name: KC_DB_USERNAME, value: "keycloak"}
+        - {name: KC_DB_PASSWORD_FILE, value: /run/secrets/db/password}
+        - {name: KC_BOOTSTRAP_ADMIN_USERNAME, value: "bootstrap"}
+        - {name: KC_BOOTSTRAP_ADMIN_PASSWORD_FILE, value: /run/secrets/bootstrap/password}
+        - {name: CAC_AUTOMATION_SECRET_FILE, value: /run/secrets/automation/secret}
+        ports:
+        - {name: https, containerPort: 8443}
+        - {name: management, containerPort: 9000}
+        - {name: jgroups, containerPort: 7800}
+        # ready = Keycloak ready AND the STIG realm applied AND revocation data loaded
+        startupProbe: {exec: {command: ["/opt/keycloak-cac/bin/cac-entrypoint.sh", "health"]}, periodSeconds: 10, timeoutSeconds: 10, failureThreshold: 60}
+        readinessProbe: {exec: {command: ["/opt/keycloak-cac/bin/cac-entrypoint.sh", "health"]}, periodSeconds: 15, timeoutSeconds: 10}
+        livenessProbe: {httpGet: {scheme: HTTPS, path: /health/live, port: 9000}, periodSeconds: 20, failureThreshold: 6}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: [ALL]}
+        resources:
+          limits:
+            memory: 8Gi
+          requests:
+            cpu: "1"
+            memory: 6Gi
+        volumeMounts:
+        - {name: data, mountPath: /opt/keycloak/data}
+        - {name: tmp, mountPath: /tmp}
+        - {name: tls, mountPath: /run/secrets/tls, readOnly: true}
+        - {name: db, mountPath: /run/secrets/db, readOnly: true}
+        - {name: bootstrap, mountPath: /run/secrets/bootstrap, readOnly: true}
+        - {name: automation, mountPath: /run/secrets/automation, readOnly: true}
+        - {name: clients, mountPath: /clients, readOnly: true}
+        - {name: crl, mountPath: /crl, readOnly: true}
+      volumes:
+      - {name: data, emptyDir: {sizeLimit: 1Gi}}
+      - {name: tmp, emptyDir: {}}
+      - {name: tls, secret: {secretName: keycloak-cac-tls}}
+      - {name: db, secret: {secretName: keycloak-cac-db}}
+      - {name: bootstrap, secret: {secretName: keycloak-cac-bootstrap}}
+      - {name: automation, secret: {secretName: keycloak-cac-automation}}
+      - {name: clients, configMap: {name: iam-keycloak-cac-clients}}
+      - name: crl
+        persistentVolumeClaim:
+          claimName: dod-crls
+          readOnly: true

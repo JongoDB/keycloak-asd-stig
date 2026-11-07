@@ -1,0 +1,118 @@
+# keycloak-cac: a single, self-configuring DoD CAC/PIV identity provider (Keycloak, DISA ASD STIG V6R4).
+# Build from the REPOSITORY ROOT (any OCI builder: docker, podman, buildah, kaniko):
+#   docker build -f keycloak-cac/Containerfile -t keycloak-cac:26.8.2 .
+#
+# Build arguments
+#   KEYCLOAK_IMAGE        Keycloak 26.x base (upstream default; Iron Bank / RHBK work too, see README)
+#   UBI_IMAGE             UBI 9 used only in build stages (tools root fs, PKI processing)
+#   PKI_BUNDLE_URLS       space-separated DISA bundle zips to trust (default: the DoD PKI bundle)
+#   PKI_FETCH             true: download when keycloak-cac/certs/ has no bundle; false: offline build must drop one in
+#   PKI_REQUIRE_MANIFEST  true: a zip must carry a signed SHA-256 manifest that verifies (DISA zips do)
+#   PKI_KEEP_EXPIRED      false: leave expired CAs out (their stale CRLs would block every login)
+#   PKI_REFRESH           change it (e.g. a date) to force a fresh bundle download without --no-cache
+#   KC_DB                 postgres (default) | mysql | mariadb | mssql | oracle   (build-time in Keycloak)
+#   KC_HTTP_RELATIVE_PATH /  or e.g. /auth                                           (build-time in Keycloak)
+#   X509_LOOKUP           default: Keycloak terminates TLS and reads the card itself
+#                         nginx | haproxy | apache | envoy: a proxy verifies the card and forwards it
+#   FIPS                  true: Keycloak FIPS mode with Bouncy Castle FIPS (jars fetched + SHA-256 checked, or
+#                         taken from keycloak-cac/fips/ for offline builds)
+#   FIPS_MODE             strict (default: approved algorithms only) | non-strict
+ARG KEYCLOAK_IMAGE=quay.io/keycloak/keycloak:26.8.2
+ARG UBI_IMAGE=registry.access.redhat.com/ubi9:latest
+
+# ---- python3/openssl/curl/unzip as a minimal root file system (Keycloak's documented way to add packages)
+FROM ${UBI_IMAGE} AS tools
+RUN dnf install -y --installroot /mnt/rootfs --releasever 9 --setopt install_weak_deps=false --nodocs \
+        python3 openssl curl gawk findutils \
+ && dnf --installroot /mnt/rootfs clean all \
+ && rpm --root /mnt/rootfs -e --nodeps setup \
+ && rm -rf /mnt/rootfs/var/cache/* /mnt/rootfs/var/log/dnf* /mnt/rootfs/var/lib/dnf
+
+# ---- trust anchors: DoD/Federal bundles -> verified, de-duplicated PEM anchors
+FROM ${UBI_IMAGE} AS pki
+ARG PKI_BUNDLE_URLS="https://dl.dod.cyber.mil/wp-content/uploads/pki-pke/zip/unclass-certificates_pkcs7_DoD.zip"
+ARG PKI_FETCH=true
+ARG PKI_REQUIRE_MANIFEST=true
+ARG PKI_KEEP_EXPIRED=false
+ARG PKI_REFRESH=none
+COPY keycloak-cac/certs/ /certs/
+COPY keycloak-cac/bin/cac-pki.sh /usr/local/bin/cac-pki.sh
+# certs/build-trust/*.crt: CA of a TLS-inspecting egress proxy, trusted for the bundle DOWNLOAD only (this stage)
+RUN if ls /certs/build-trust/*.crt >/dev/null 2>&1; then cp /certs/build-trust/*.crt /etc/pki/ca-trust/source/anchors/ && update-ca-trust; fi \
+ && echo "pki refresh: ${PKI_REFRESH}" \
+ && PKI_BUNDLE_URLS="${PKI_BUNDLE_URLS}" PKI_FETCH="${PKI_FETCH}" PKI_REQUIRE_MANIFEST="${PKI_REQUIRE_MANIFEST}" \
+    PKI_KEEP_EXPIRED="${PKI_KEEP_EXPIRED}" cac-pki.sh bundle /out /certs \
+ && cat /out/anchors.txt
+
+# ---- BC-FIPS jars (FIPS=true): from keycloak-cac/fips/ when present (offline), else Maven Central; SHA-256 pinned
+FROM ${UBI_IMAGE} AS fipsjars
+ARG FIPS=false
+COPY keycloak-cac/fips/ /in/
+COPY keycloak-cac/certs/build-trust/ /build-trust/
+RUN mkdir -p /out && if [ "$FIPS" = "true" ]; then \
+      if ls /build-trust/*.crt >/dev/null 2>&1; then cp /build-trust/*.crt /etc/pki/ca-trust/source/anchors/ && update-ca-trust; fi; \
+      grep -v '^#' /in/fips-jars.sha256 | while read -r sum n v; do f="$n-$v.jar"; \
+        if [ -f "/in/$f" ]; then cp "/in/$f" "/out/$f"; \
+        else curl -fsSL --retry 6 --retry-all-errors --retry-delay 10 -o "/out/$f" "https://repo1.maven.org/maven2/org/bouncycastle/$n/$v/$f" \
+             || { echo "download failed: $f (offline: put it in keycloak-cac/fips/)"; exit 1; }; fi; \
+        echo "$sum  /out/$f" | sha256sum -c - || exit 1; done; \
+    fi
+
+# ---- Keycloak build (Quarkus build-time options are baked here)
+FROM ${KEYCLOAK_IMAGE} AS builder
+ARG KC_DB=postgres
+ARG KC_HTTP_RELATIVE_PATH=/
+ARG X509_LOOKUP=default
+ARG FIPS=false
+ARG FIPS_MODE=strict
+USER 0
+COPY --chown=1000:0 keycloak-asd-stig/assets/extension/target/stig-extensions.jar /opt/keycloak/providers/stig-extensions.jar
+COPY --chown=1000:0 keycloak-asd-stig/assets/theme/dod-stig /opt/keycloak/themes/dod-stig
+COPY --from=fipsjars --chown=1000:0 /out/ /tmp/fips/
+RUN if [ "$FIPS" = "true" ]; then cp /tmp/fips/*.jar /opt/keycloak/providers/; fi; rm -rf /tmp/fips
+USER 1000
+ENV KC_DB=${KC_DB} KC_HTTP_RELATIVE_PATH=${KC_HTTP_RELATIVE_PATH} KC_HEALTH_ENABLED=true KC_METRICS_ENABLED=true \
+    KC_HTTPS_CLIENT_AUTH=request KC_HTTPS_MANAGEMENT_CLIENT_AUTH=none KC_LOG_MDC_ENABLED=true
+RUN set -e; if [ "$FIPS" = "true" ]; then export KC_FEATURES=fips KC_FIPS_MODE=$FIPS_MODE; fi; \
+    export KC_SPI_X509CERT_LOOKUP__PROVIDER=$X509_LOOKUP; \
+    /opt/keycloak/bin/kc.sh build; \
+    { echo "KC_DB=$KC_DB"; echo "KC_HTTP_RELATIVE_PATH=$KC_HTTP_RELATIVE_PATH"; \
+      echo "KC_SPI_X509CERT_LOOKUP__PROVIDER=$X509_LOOKUP"; [ "$FIPS" = "true" ] && echo "KC_FEATURES=fips" && echo "KC_FIPS_MODE=$FIPS_MODE"; true; } \
+      > /opt/keycloak/conf/cac-build-options.env
+
+# ---- final image
+FROM ${KEYCLOAK_IMAGE}
+ARG KC_DB=postgres
+ARG KC_HTTP_RELATIVE_PATH=/
+ARG X509_LOOKUP=default
+COPY --from=tools /mnt/rootfs /
+COPY --from=builder /opt/keycloak/ /opt/keycloak/
+COPY --from=pki --chown=0:0 /out/ /opt/keycloak-cac/pki/
+COPY --chown=0:0 keycloak-cac/bin/ /opt/keycloak-cac/bin/
+COPY --chown=0:0 keycloak-cac/README.md /opt/keycloak-cac/README.md
+COPY --chown=0:0 keycloak-asd-stig/scripts/ /opt/kcstig/scripts/
+COPY --chown=0:0 keycloak-asd-stig/references/ /opt/kcstig/references/
+USER 0
+RUN mv /opt/keycloak/conf/cac-build-options.env /opt/keycloak-cac/build-options.env \
+ && chmod -R a+rX,go-w /opt/keycloak-cac /opt/kcstig && chmod 0755 /opt/keycloak-cac/bin/* /opt/kcstig/scripts/*.sh \
+ && mkdir -p /opt/keycloak/data/cac && chown -R 1000:0 /opt/keycloak/data && chmod -R g=u /opt/keycloak/data \
+ && ln -sfn /opt/keycloak/data/cac /opt/keycloak/conf/cac \
+ && find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+USER 1000
+EXPOSE 8443 9000 7800
+# STIG-relevant runtime defaults; every one can be overridden with the same KC_* variable at run time.
+ENV KC_HTTP_ENABLED=false KC_HTTPS_PORT=8443 KC_HTTPS_PROTOCOLS=TLSv1.3,TLSv1.2 \
+    KC_HTTPS_CIPHER_SUITES=TLS_AES_256_GCM_SHA384,TLS_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 \
+    KC_HOSTNAME_STRICT=true KC_LOG=console KC_LOG_CONSOLE_OUTPUT=json \
+    KC_HTTP_ACCESS_LOG_ENABLED=true \
+    KC_HTTP_ACCESS_LOG_PATTERN='%h %l %u %t "%r" %s %b "%{i,Referer}" "%{i,User-Agent}" %D' \
+    KC_HTTP_ACCESS_LOG_MASKED_HEADERS=Authorization,Cookie,Set-Cookie \
+    KC_SPI_EVENTS_LISTENER__JBOSS_LOGGING__SUCCESS_LEVEL=info KC_SPI_EVENTS_LISTENER__JBOSS_LOGGING__ERROR_LEVEL=warn \
+    KC_SPI_EVENTS_LISTENER__WORKFLOW_EVENT_LISTENER__STEP_RUNNER_TASK_INTERVAL=900 \
+    KC_CACHE=ispn KC_CACHE_STACK=jdbc-ping \
+    KC_DB=${KC_DB} KC_HTTP_RELATIVE_PATH=${KC_HTTP_RELATIVE_PATH} KC_SPI_X509CERT_LOOKUP__PROVIDER=${X509_LOOKUP} \
+    KC_HEALTH_ENABLED=true KC_METRICS_ENABLED=true KC_HTTPS_CLIENT_AUTH=request KC_HTTPS_MANAGEMENT_CLIENT_AUTH=none \
+    KC_LOG_MDC_ENABLED=true \
+    CAC_REALM=dod-cac CRL_MODE= CAC_USERNAME_SOURCE=upn
+HEALTHCHECK --interval=15s --timeout=10s --start-period=180s --retries=4 CMD ["/opt/keycloak-cac/bin/cac-entrypoint.sh", "health"]
+ENTRYPOINT ["/opt/keycloak-cac/bin/cac-entrypoint.sh"]

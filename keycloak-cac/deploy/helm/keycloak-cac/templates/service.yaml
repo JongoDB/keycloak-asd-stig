@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kcc.name" . }}
+  labels: {{- include "kcc.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector: {{- include "kcc.selector" . | nindent 4 }}
+  ports:
+  - {name: https, port: {{ .Values.service.port }}, targetPort: https}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kcc.name" . }}-management
+  labels: {{- include "kcc.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "kcc.selector" . | nindent 4 }}
+  ports:
+  - {name: management, port: 9000, targetPort: management}

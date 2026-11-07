@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kcc.name" . }}-clients
+  labels: {{- include "kcc.labels" . | nindent 4 }}
+data:
+  {{- range $name, $c := .Values.clients }}
+  {{ $name }}.json: {{ toJson $c | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kcc.name" . }}-anchors
+  labels: {{- include "kcc.labels" . | nindent 4 }}
+data:
+  {{- range $name, $pem := .Values.extraAnchors }}
+  {{ $name }}: {{ $pem | quote }}
+  {{- end }}

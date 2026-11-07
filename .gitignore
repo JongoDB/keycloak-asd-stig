@@ -4,3 +4,7 @@ __pycache__/
 *.key
 *.p12
 lab-admin-temporary-password.txt
+keycloak-cac/certs/build-trust/*.crt
+keycloak-cac/certs/*.zip
+keycloak-cac/certs/*.p7b
+keycloak-cac/fips/*.jar
