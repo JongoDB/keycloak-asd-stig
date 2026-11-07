@@ -50,7 +50,7 @@ rm -rf "$D/anchors.new"; mkdir -p "$D/anchors.new"
 if [ -n "${CAC_TRUST_ANCHORS_DIR:-}" ]; then
   log "trust anchors: REPLACING the baked DoD bundle with $CAC_TRUST_ANCHORS_DIR"
   "$TOOLS/cac-pki.sh" bundle "$D/src" "$CAC_TRUST_ANCHORS_DIR" && cp "$D/src/anchors/"*.pem "$D/anchors.new/"
-elif $LAB && ! truthy "${CAC_LAB_TRUST_DOD:-false}"; then
+elif $LAB; then
   if [ ! -f "$D/lab/ca/idca.crt" ]; then
     host=$(echo "$KC_HOSTNAME" | sed -E 's#^https?://##; s#[:/].*$##')
     log "lab: generating the mock CAC PKI (test root, issuing CA, users, revoked + rogue cards) for $host"
@@ -91,7 +91,10 @@ if [ -z "${KC_HTTPS_CERTIFICATE_FILE:-}" ]; then
 fi
 
 # ---- 3. revocation data
-MODE="${CRL_MODE:-}"; [ -z "$MODE" ] && { $LAB && MODE=file || MODE=online; }
+MODE="${CRL_MODE:-}"
+if [ -z "$MODE" ]; then   # lab: the mock CA's CRL; lab + real cards: DoD CRLs too (online)
+  if $LAB && ! truthy "${CAC_LAB_TRUST_DOD:-false}"; then MODE=file; else MODE=online; fi
+fi
 MODE="${MODE,,}"; case "$MODE" in offline|local) MODE=file;; disabled|off) MODE=none;; esac; export CRL_MODE="$MODE"
 mkdir -p "$D/crl"
 CRL_SRC="${CAC_CRL_DIR:-/crl}"; $LAB && [ -z "${CAC_CRL_DIR:-}" ] && [ -d "$D/lab/conf/crl" ] && CRL_SRC="$D/lab/conf/crl"
@@ -102,6 +105,8 @@ crl_refresh() {
   esac
   "$TOOLS/cac-pki.sh" crl-health "$D/crl" || true
 }
+# lab PKI's own CRL is always installed, so mock cards keep working next to real ones
+if $LAB && [ -d "$D/lab/conf/crl" ] && [ "$MODE" != file ]; then "$TOOLS/cac-pki.sh" crl-sync "$D/lab/conf/crl" "$D/anchors" "$D/crl"; fi
 case "$MODE" in
   file)   crl_refresh ;;                       # local: fast, needed before the profile is rendered
   online) log "CRLs: downloading $(wc -l < "$D/crl-names.txt") DoD CRLs in the background (CAC logins fail closed until they arrive)";;

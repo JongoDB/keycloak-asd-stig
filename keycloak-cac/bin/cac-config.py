@@ -74,7 +74,10 @@ def pairs(var, attr):
     for item in filter(None, (x.strip() for x in (env(var) or "").split(","))):
         if "=" not in item:
             die("%s entries must be username=value (got %r)" % (var, item))
-        u, v = item.split("=", 1); out.append({"username": u.strip(), attr: v.strip()})
+        u, v = item.split("=", 1); u = u.strip()
+        if not re.fullmatch(r"[A-Za-z0-9._@-]{3,255}", u):
+            die("%s: username %r must be 3-255 characters (letters, digits, . _ @ -)" % (var, u))
+        out.append({"username": u, attr: v.strip()})
     return out
 
 def read_lines(path):
@@ -89,6 +92,9 @@ def build_profile():
     crl_files = []
     if mode == "online":
         crl_files = ["cac/crl/" + n for n in read_lines(os.path.join(PKI, "crl-names.txt")) if n]
+        # plus CRLs already installed and verified (e.g. the lab CA's next to the DoD ones)
+        crl_files += ["cac/crl/" + os.path.basename(f) for f in sorted(glob.glob(os.path.join(PKI, "crl", "*.crl")))
+                      if "cac/crl/" + os.path.basename(f) not in crl_files]
     elif mode == "file":
         crl_files = ["cac/crl/" + os.path.basename(f) for f in sorted(glob.glob(os.path.join(PKI, "crl", "*.crl")))]
         if not crl_files:
