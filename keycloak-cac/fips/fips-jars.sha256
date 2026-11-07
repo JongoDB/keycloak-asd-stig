@@ -1,0 +1,6 @@
+# Bouncy Castle FIPS jars for Keycloak 26.8 FIPS mode (fetched from Maven Central when not present here).
+# Format: sha256  artifact  version.  Verified against Maven Central's published .sha1 on 2026-11-07.
+f55fc476ede820d5c03fe87e6ced5bb0095e1dc30b387445846a3ff0274f8c0e  bc-fips  2.1.3
+af604aa5b337725872651067a819ebc03aa298685572b0b2ad5343c786faad0a  bctls-fips  2.1.25
+f44904f61552c823bcc3686a24052ee3135212d547754eaa2ff6532e210103cb  bcutil-fips  2.1.8
+cf161ba2f6b4505816f4661663b3e0771184a50ee5b178a0018c817b336f0e5c  bcpkix-fips  2.1.13

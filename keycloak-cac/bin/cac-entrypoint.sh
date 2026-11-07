@@ -90,6 +90,32 @@ if [ -z "${KC_HTTPS_CERTIFICATE_FILE:-}" ]; then
   log "lab: self-issued server certificate $KC_HTTPS_CERTIFICATE_FILE (browsers will warn)"
 fi
 
+# ---- strict FIPS: Keycloak accepts only BCFKS key/trust stores (no PEM, no PKCS#12) -> convert with BC-FIPS
+if [ "${KC_FIPS_MODE:-}" = strict ]; then
+  # BC-FIPS approved mode rejects passwords under 112 bits (14 characters), e.g. for the database SCRAM login
+  for v in KC_DB_PASSWORD KC_BOOTSTRAP_ADMIN_PASSWORD; do
+    val="${!v:-}"; if [ -n "$val" ] && [ "${#val}" -lt 14 ]; then die "strict FIPS: $v must be at least 14 characters (112 bits)"; fi
+  done
+  BCJAR=$(ls /opt/keycloak/providers/bc-fips-*.jar 2>/dev/null | head -1); [ -n "$BCJAR" ] || die "strict FIPS but no bc-fips jar in the image"
+  to_bcfks() { # src.p12 srcpass dst.bcfks dstpass [key-alias: the key gets the store password, as Keycloak expects]
+    local k=(); [ -n "${5:-}" ] && k=(-srcalias "$5" -destalias "$5" -srckeypass "$2" -destkeypass "$4")
+    rm -f "$3"; keytool -importkeystore -noprompt -srckeystore "$1" -srcstoretype PKCS12 -srcstorepass "$2" \
+      -destkeystore "$3" -deststoretype BCFKS -deststorepass "$4" ${k[@]+"${k[@]}"} -providername BCFIPS \
+      -providerclass org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider -providerpath "$BCJAR" >/dev/null 2>&1 \
+      || die "could not convert $1 to BCFKS"
+  }
+  mkdir -p "$D/fips"; KSP=$(openssl rand -hex 24); TMPP=$(openssl rand -hex 24)
+  ( umask 077; openssl pkcs12 -export -inkey "$KC_HTTPS_CERTIFICATE_KEY_FILE" -in "$KC_HTTPS_CERTIFICATE_FILE" -name server \
+      -passout "pass:$TMPP" -out "$D/fips/server.p12" ) || die "cannot read the server certificate/key"
+  to_bcfks "$D/fips/server.p12" "$TMPP" "$D/fips/server.bcfks" "$KSP" server; rm -f "$D/fips/server.p12"
+  to_bcfks "$D/client-ca.p12" "$PKI_P12_PASSWORD" "$D/fips/client-ca.bcfks" "$KSP"
+  # Keep the PEM paths for validation above; Keycloak itself gets the BCFKS stores only.
+  PEM_CERT="$KC_HTTPS_CERTIFICATE_FILE"; PEM_KEY="$KC_HTTPS_CERTIFICATE_KEY_FILE"; unset KC_HTTPS_CERTIFICATE_FILE KC_HTTPS_CERTIFICATE_KEY_FILE
+  export KC_HTTPS_KEY_STORE_FILE="$D/fips/server.bcfks" KC_HTTPS_KEY_STORE_PASSWORD="$KSP" KC_HTTPS_KEY_STORE_TYPE=bcfks \
+         KC_HTTPS_TRUST_STORE_FILE="$D/fips/client-ca.bcfks" KC_HTTPS_TRUST_STORE_PASSWORD="$KSP" KC_HTTPS_TRUST_STORE_TYPE=bcfks
+  log "strict FIPS: server key store and DoD-only client trust store converted to BCFKS"
+fi
+
 # ---- 3. revocation data
 MODE="${CRL_MODE:-}"
 if [ -z "$MODE" ]; then   # lab: the mock CA's CRL; lab + real cards: DoD CRLs too (online)
@@ -115,7 +141,7 @@ case "$MODE" in
 esac
 
 # ---- validate everything before Keycloak starts (fail fast, fail secure)
-for f in "$KC_HTTPS_CERTIFICATE_FILE" "$KC_HTTPS_CERTIFICATE_KEY_FILE"; do [ -r "$f" ] || die "cannot read $f"; done
+for f in "${PEM_CERT:-${KC_HTTPS_CERTIFICATE_FILE:-}}" "${PEM_KEY:-${KC_HTTPS_CERTIFICATE_KEY_FILE:-}}"; do [ -r "$f" ] || die "cannot read server certificate/key $f"; done
 automation_secret() {
   if [ -n "${CAC_AUTOMATION_SECRET:-}" ]; then printf %s "$CAC_AUTOMATION_SECRET"
   elif $LAB; then printf 'cac-lab-automation:%s' "${KC_BOOTSTRAP_ADMIN_PASSWORD:-}" | sha256sum | cut -c1-48

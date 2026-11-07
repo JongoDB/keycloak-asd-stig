@@ -14,7 +14,9 @@
 #   KC_HTTP_RELATIVE_PATH /  or e.g. /auth                                           (build-time in Keycloak)
 #   X509_LOOKUP           default: Keycloak terminates TLS and reads the card itself
 #                         nginx | haproxy | apache | envoy: a proxy verifies the card and forwards it
-#   FIPS                  true: Keycloak FIPS 140-2/3 mode; put the BC-FIPS jars in keycloak-cac/fips/
+#   FIPS                  true: Keycloak FIPS mode with Bouncy Castle FIPS (jars fetched + SHA-256 checked, or
+#                         taken from keycloak-cac/fips/ for offline builds)
+#   FIPS_MODE             strict (default: approved algorithms only) | non-strict
 ARG KEYCLOAK_IMAGE=quay.io/keycloak/keycloak:26.8.2
 ARG UBI_IMAGE=registry.access.redhat.com/ubi9:latest
 
@@ -42,6 +44,20 @@ RUN if ls /certs/build-trust/*.crt >/dev/null 2>&1; then cp /certs/build-trust/*
     PKI_KEEP_EXPIRED="${PKI_KEEP_EXPIRED}" cac-pki.sh bundle /out /certs \
  && cat /out/anchors.txt
 
+# ---- BC-FIPS jars (FIPS=true): from keycloak-cac/fips/ when present (offline), else Maven Central; SHA-256 pinned
+FROM ${UBI_IMAGE} AS fipsjars
+ARG FIPS=false
+COPY keycloak-cac/fips/ /in/
+COPY keycloak-cac/certs/build-trust/ /build-trust/
+RUN mkdir -p /out && if [ "$FIPS" = "true" ]; then \
+      if ls /build-trust/*.crt >/dev/null 2>&1; then cp /build-trust/*.crt /etc/pki/ca-trust/source/anchors/ && update-ca-trust; fi; \
+      grep -v '^#' /in/fips-jars.sha256 | while read -r sum n v; do f="$n-$v.jar"; \
+        if [ -f "/in/$f" ]; then cp "/in/$f" "/out/$f"; \
+        else curl -fsSL --retry 6 --retry-all-errors --retry-delay 10 -o "/out/$f" "https://repo1.maven.org/maven2/org/bouncycastle/$n/$v/$f" \
+             || { echo "download failed: $f (offline: put it in keycloak-cac/fips/)"; exit 1; }; fi; \
+        echo "$sum  /out/$f" | sha256sum -c - || exit 1; done; \
+    fi
+
 # ---- Keycloak build (Quarkus build-time options are baked here)
 FROM ${KEYCLOAK_IMAGE} AS builder
 ARG KC_DB=postgres
@@ -52,7 +68,7 @@ ARG FIPS_MODE=strict
 USER 0
 COPY --chown=1000:0 keycloak-asd-stig/assets/extension/target/stig-extensions.jar /opt/keycloak/providers/stig-extensions.jar
 COPY --chown=1000:0 keycloak-asd-stig/assets/theme/dod-stig /opt/keycloak/themes/dod-stig
-COPY --chown=1000:0 keycloak-cac/fips/ /tmp/fips/
+COPY --from=fipsjars --chown=1000:0 /out/ /tmp/fips/
 RUN if [ "$FIPS" = "true" ]; then cp /tmp/fips/*.jar /opt/keycloak/providers/; fi; rm -rf /tmp/fips
 USER 1000
 ENV KC_DB=${KC_DB} KC_HTTP_RELATIVE_PATH=${KC_HTTP_RELATIVE_PATH} KC_HEALTH_ENABLED=true KC_METRICS_ENABLED=true \

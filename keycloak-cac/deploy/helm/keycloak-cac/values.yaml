@@ -41,6 +41,8 @@ resources:                       # measured: ~4.9 GiB with all 17 DoD CRLs loade
 dataSizeLimit: 1Gi
 podDisruptionBudget: {minAvailable: 1}
 networkPolicy: {enabled: true}
+# OpenShift (restricted-v2 SCC assigns its own UID): set podSecurityContext to {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+podSecurityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 0, fsGroup: 0, seccompProfile: {type: RuntimeDefault}}
 nodeSelector: {}
 tolerations: []
 affinity: {}

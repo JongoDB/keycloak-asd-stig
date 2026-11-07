@@ -9,7 +9,7 @@ application that uses this login.
 
 | Path | What it is |
 |---|---|
-| `keycloak-cac/` | **Start here (v2).** One self-configuring container image: DoD CAC/PIV login hardened to the ASD STIG and configured only through env vars. DoD anchors are baked in at build (or dropped in offline), CRLs work online or air-gapped, and it deploys to Compose, Helm/K8s or ECS. See `keycloak-cac/README.md`. |
+| `keycloak-cac/` | **Start here (v2).** One self-configuring container image: DoD CAC/PIV login hardened to the ASD STIG and configured only through env vars. DoD anchors are baked in at build (or dropped in offline), CRLs work online or air-gapped, and it deploys to Compose, Helm/K8s or ECS. See `keycloak-cac/README.md`, and `keycloak-cac/DEPLOY.md` for each platform and registry. |
 | `keycloak-asd-stig/` | The Claude Code skill: `SKILL.md`, `scripts/kcstig.py` (render, apply, verify, assess, crosswalk, inherit, gateway), the e2e checker, image build, DoD PKI fetch, references, deploy assets (Compose, Helm, Podman, proxy), the theme and extension. |
 | `keycloak-asd-stig.skill` | The packaged skill. Install it by unzipping into `~/.claude/skills/`. |
 | `kc-cac-setup/` | `kc-cac-setup.sh`: a self-contained, one-command local CAC test stack (Docker or Podman). The README is the runbook. `build.sh` rebuilds it from `header.sh` plus the skill. |

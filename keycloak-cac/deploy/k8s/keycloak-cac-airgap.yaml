@@ -122,10 +122,16 @@ spec:
         app.kubernetes.io/instance: iam
         app.kubernetes.io/version: "26.8.2"
       annotations:
-        checksum/config: dcd6170538d6ca59953fcf160754462acc9a5e6f4ac5c52570dd49180e0e0baa
+        checksum/config: 4833b3b8d1d2e3c4e4eee9ba1d09346c167037ea50789475922e5e361f2206f3
     spec:
       automountServiceAccountToken: false
-      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 0, fsGroup: 0, seccompProfile: {type: RuntimeDefault}}
+      securityContext:
+        fsGroup: 0
+        runAsGroup: 0
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: keycloak
         image: "registry.example.mil/iam/keycloak-cac:26.8.2"

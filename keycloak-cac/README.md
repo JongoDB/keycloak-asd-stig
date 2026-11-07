@@ -38,6 +38,10 @@ To use your real CAC in the lab, set `CAC_LAB_TRUST_DOD=true` and `CAC_USERS=you
 
 ## Production
 
+**Step-by-step instructions for every platform** are in **[DEPLOY.md](DEPLOY.md)**: building (standard, FIPS, multi-arch, offline), pushing to Azure Container Registry, AWS ECR, GHCR, Google Artifact Registry, Harbor, Iron Bank or an air-gapped site, and running on Docker, Podman (including Quadlet/systemd), Kubernetes, Helm, OpenShift, AKS, Azure Container Instances, ECS/Fargate, EKS or GKE.
+
+The short version for one host:
+
 ```bash
 cd keycloak-cac/deploy/compose && cp keycloak-cac.env.example keycloak-cac.env    # edit it
 mkdir -p tls secrets clients     # tls/tls.crt + tls.key, secrets/{db_password,bootstrap_admin_password,automation_secret}
@@ -173,8 +177,11 @@ All of these were run against this image. The black-box suite is `keycloak-asd-s
 | Online: baked DoD bundle, live download of all 17 DoD CRLs, CRL cache clear | passed; the TLS handshake requests only DoD CAs (45 names) |
 | Offline drop-in build, and a tampered bundle | same 45 anchors; the tampered bundle is refused |
 | Wrong automation secret after hardening | container stops (fail secure) |
+| **Strict FIPS** build (`FIPS=true`): BCFKS stores converted at startup | 14/14; `server.fips` passes (`Fips1402StrictCryptoProvider`) |
+| Arbitrary UID (OpenShift style: random UID, group 0, read-only root) | healthy; realm applied |
+| **Live DoD CAC** (DOD ID CA-80, 16-digit UPN) in lab mode with DoD trust, live CRLs and OCSP, on Docker Desktop for Mac | login succeeded |
 | Lab mode plus DoD trust: mock CA and DoD anchors, mock CRL plus all 17 DoD CRLs | 11/11 with mock cards; 4.3 GiB memory with the DoD CRLs loaded |
 
 On the `/auth` run, the one failure was `previous_login`. That run used Keycloak's built-in admin-console client, which doesn't carry the `stig-claims` scope. The check passed in the runs that used registered clients.
 
-`kcstig.py verify` on the lab realm: 49 pass. The only failing check is `server.fips`, because this run used a non-FIPS build. That one failure accounts for all 6 Open rules.
+`kcstig.py verify` on the lab realm, standard build: 49 pass. The only failing check is `server.fips`, which accounts for all 6 Open rules. The FIPS build passes `server.fips`.
