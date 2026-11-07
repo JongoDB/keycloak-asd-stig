@@ -30,6 +30,10 @@ Import `lab-cards/doe.john.p12` (password `changeit`) into a browser and open `h
 - `unmapped.p12` is refused because no account is mapped to it.
 - `admin.alt.p12` is the Alt Token that can open `/admin`.
 
+**If a card login says "Invalid username or password":**
+- If the logs show a `LOGIN_ERROR` with no `user_not_found` and no X.509 lines, the browser didn't send a certificate. Browsers remember a client-certificate choice per address, so after switching servers on the same address, fully quit Chrome (Cmd-Q) and retry in a new private window.
+- If the logs show `user_not_found`, the mapped value doesn't match the card. That event's `username="..."` is what the card actually holds.
+
 To use your real CAC in the lab, set `CAC_LAB_TRUST_DOD=true` and `CAC_USERS=your.name=<your card's UPN>`. The username needs at least 3 characters. The container then also downloads the DoD CRLs (from crl.disa.mil, about 140 MB) and needs about 5 GB of memory. The mock cards keep working alongside your card.
 
 ## Production
