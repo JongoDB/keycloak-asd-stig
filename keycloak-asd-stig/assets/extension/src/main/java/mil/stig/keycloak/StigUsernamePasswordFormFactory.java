@@ -41,11 +41,16 @@ public class StigUsernamePasswordFormFactory extends UsernamePasswordFormFactory
             boolean userWasSet = isUserAlreadySetBeforeUsernamePasswordAuth(context);
             if (!super.validateForm(context, formData)) return false;
             UserModel user = context.getUser();
-            if (user == null || !StigAdministrators.isAdministrator(context.getRealm(), user) || StigAdministrators.hasSecondFactor(user)) {
+            if (user == null || !StigAdministrators.isAdministrator(context.getRealm(), user)) return true;
+            if (StigAdministrators.unvettedAdministrator(context.getSession(), context.getRealm(), user)) {
+                LOG.errorf("STIG-ADMIN-NOT-ALLOWLISTED realm=%s user=%s path=password: holds administrator rights but is not on the "
+                        + "allowlist - refused as if the password were wrong", context.getRealm().getName(), user.getUsername());
+            } else if (StigAdministrators.hasSecondFactor(user)) {
                 return true;
+            } else {
+                LOG.warnf("STIG-ADMIN-SECOND-FACTOR-REQUIRED realm=%s user=%s path=password: an administrator with no enrolled second "
+                        + "factor was refused as if the password were wrong (sign in with the card)", context.getRealm().getName(), user.getUsername());
             }
-            LOG.warnf("STIG-ADMIN-SECOND-FACTOR-REQUIRED realm=%s user=%s path=password: an administrator with no enrolled second "
-                    + "factor was refused as if the password were wrong (sign in with the card)", context.getRealm().getName(), user.getUsername());
             context.getAuthenticationSession().removeAuthNote(AuthenticationManager.PASSWORD_VALIDATED);
             context.getEvent().user(user);
             context.getEvent().error(Errors.INVALID_USER_CREDENTIALS);

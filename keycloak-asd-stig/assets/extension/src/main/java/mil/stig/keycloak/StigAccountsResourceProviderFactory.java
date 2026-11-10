@@ -67,6 +67,11 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
     public static final String ID = "stig-accounts";
     private static final Logger LOG = Logger.getLogger("mil.stig.audit");
     static final List<String> SETUP_ACTIONS = List.of("UPDATE_PASSWORD", "CONFIGURE_TOTP", "TERMS_AND_CONDITIONS");
+    /** Recorded on every account this endpoint creates: such an account is never made an administrator without a
+     *  credential reset and an operator-set e-mail address (the operator's tooling enforces it). */
+    static final String CREATED_BY = "stig_created_by";
+    /** Client (for a service-account caller) or realm attribute: comma list of e-mail domains; default .mil,defconai.com. */
+    static final String EMAIL_DOMAINS = "stig.accounts.email-domains";
 
     @Override public AdminRealmResourceProvider create(KeycloakSession session) { return this; }
     @Override public void init(Config.Scope config) { }
@@ -117,6 +122,34 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             return u;
         }
 
+        private boolean profileNameValid(String value, String field) {
+            org.keycloak.validate.Validator v = org.keycloak.validate.Validators.validator(session, "person-name-prohibited-characters");
+            if (v == null) return true;     // the user-profile validator is not available: AccountsPolicy.validName still applies
+            return v.validate(value, field, new org.keycloak.validate.ValidationContext(session), org.keycloak.validate.ValidatorConfig.EMPTY).isValid();
+        }
+
+        private String emailDomains() {
+            UserModel cu = auth.adminAuth().getUser();
+            String link = cu == null ? null : cu.getServiceAccountClientLink();
+            ClientModel c = link == null ? null : realm.getClientById(link);
+            String v = c == null ? null : c.getAttribute(EMAIL_DOMAINS);
+            if (v == null || v.isBlank()) v = realm.getAttribute(EMAIL_DOMAINS);
+            return v == null || v.isBlank() ? AccountsPolicy.DEFAULT_EMAIL_DOMAINS : v;
+        }
+
+        /** At most CREATE_PER_HOUR creations per caller per clock hour. */
+        private boolean underRate() {
+            UserModel cu = auth.adminAuth().getUser();
+            String key = "stig-accounts-create:" + (cu == null ? "?" : cu.getId()) + ":" + (Time.currentTime() / 3600);
+            org.keycloak.models.SingleUseObjectProvider so = session.singleUseObjects();
+            Map<String, String> cur = so.get(key);
+            int n = cur == null ? 0 : Integer.parseInt(cur.getOrDefault("n", "0"));
+            if (n >= AccountsPolicy.CREATE_PER_HOUR) return false;
+            if (cur == null) so.put(key, 3700, Map.of("n", "1"));
+            else so.replace(key, Map.of("n", String.valueOf(n + 1)));
+            return true;
+        }
+
         private boolean sendSetup(UserModel u, int lifespan) {
             ClientModel console = realm.getClientByClientId(Constants.ACCOUNT_CONSOLE_CLIENT_ID);
             String redirect = UriBuilder.fromUri(session.getContext().getUri().getBaseUri()).path("realms").path(realm.getName())
@@ -148,7 +181,18 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             Integer lifespanB = body != null && body.get("lifespan") instanceof Number n ? n.intValue() : lifespanQ;
             if (!AccountsPolicy.validUsername(username)) return err(Response.Status.BAD_REQUEST, "username must be first.last in lower case");
             if (!AccountsPolicy.validEmail(email)) return err(Response.Status.BAD_REQUEST, "invalid e-mail address");
-            if (!AccountsPolicy.validName(first) || !AccountsPolicy.validName(last)) return err(Response.Status.BAD_REQUEST, "firstName and lastName are required");
+            if (!AccountsPolicy.validName(first) || !AccountsPolicy.validName(last) || !profileNameValid(first, "firstName") || !profileNameValid(last, "lastName")) {
+                return err(Response.Status.BAD_REQUEST, "firstName and lastName are required: a person's name, no links or markup");
+            }
+            String domains = emailDomains();
+            if (!AccountsPolicy.emailDomainAllowed(email, domains)) {
+                refused("create", "e-mail domain of " + email + " not in " + domains);
+                return err(Response.Status.FORBIDDEN, "e-mail domain not allowed for this caller");
+            }
+            if (!underRate()) {
+                refused("create", "more than " + AccountsPolicy.CREATE_PER_HOUR + " accounts in an hour");
+                return err(Response.Status.TOO_MANY_REQUESTS, "too many accounts created this hour");
+            }
             int lifespan = AccountsPolicy.lifespan(lifespanB);
             if (lifespan < 0) return err(Response.Status.BAD_REQUEST, "lifespan must be 300..86400 seconds");
             GroupModel g = groupPath == null ? null : KeycloakModelUtils.findGroupByPath(session, realm, groupPath);
@@ -164,6 +208,7 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             u.setEnabled(true); u.setEmail(email); u.setEmailVerified(false); u.setFirstName(first); u.setLastName(last);
             SETUP_ACTIONS.forEach(u::addRequiredAction);
             u.joinGroup(g);
+            u.setSingleAttribute(CREATED_BY, caller() + " " + Time.currentTimeMillis());   // read by the operator's tooling
             Map<String, Object> rep = new LinkedHashMap<>();
             rep.put("id", u.getId()); rep.put("username", username); rep.put("email", email); rep.put("group", g.getId());
             adminEvent.operation(OperationType.CREATE).resource(ResourceType.USER).resourcePath("users", u.getId()).representation(rep).success();
