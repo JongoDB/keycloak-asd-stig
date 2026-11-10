@@ -45,7 +45,8 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
 
 /**
  * /admin/realms/{realm}/stig-accounts - the ONLY account operations a fine-grained delegate needs, for delegates that
- * hold no `manage-members` (so they can never set or reset a password, touch credentials or identity-provider links,
+ * hold no `manage-members`, and only for callers that also hold realm-management query-users - the IdP's user managers,
+ * not an application's fine-grained-only delegate (so they can never set or reset a password, touch credentials or identity-provider links,
  * change an e-mail address, send mail to an address of their choosing, or re-enable an account):
  *
  *   POST /users                      {username first.last, email, firstName, lastName, group "/app/ROLE"[, lifespan]}
@@ -79,9 +80,36 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
     @Override public void close() { }
     @Override public String getId() { return ID; }
 
+    /** Only callers holding this realm-management role (the IdP's user managers) may use the endpoint at all; an
+     *  application's fine-grained-only delegate (e.g. LogC2's) is refused everything, whatever its group scopes. */
+    static final String REQUIRED_ROLE = "query-users";
+
     @Override
     public Object getResource(KeycloakSession session, RealmModel realm, AdminPermissionEvaluator auth, AdminEventBuilder adminEvent) {
+        UserModel caller = auth.adminAuth().getUser();
+        ClientModel rm = realm.getClientByClientId("realm-management");
+        org.keycloak.models.RoleModel need = rm == null ? null : rm.getRole(REQUIRED_ROLE);
+        if (caller == null || need == null || !caller.hasRole(need)) {
+            LOG.warnf("STIG-ACCOUNTS-REFUSED realm=%s caller=%s: not an IdP user manager (no realm-management %s)", realm.getName(),
+                    caller == null ? "?" : caller.getUsername(), REQUIRED_ROLE);
+            return new Refused();
+        }
         return new Accounts(session, realm, auth, adminEvent);
+    }
+
+    /** Every method and path: 403. */
+    @Produces(MediaType.APPLICATION_JSON)
+    public static final class Refused {
+        private static Response no() {
+            return Response.status(Response.Status.FORBIDDEN).entity(Map.of("error", "not allowed")).type(MediaType.APPLICATION_JSON).build();
+        }
+        @GET @Path("{any: .*}") public Response g() { return no(); }
+        @GET public Response g0() { return no(); }
+        @POST @Path("{any: .*}") public Response p() { return no(); }
+        @POST public Response p0() { return no(); }
+        @PUT @Path("{any: .*}") public Response u() { return no(); }
+        @DELETE @Path("{any: .*}") public Response d() { return no(); }
+        @PATCH @Path("{any: .*}") public Response pa() { return no(); }
     }
 
     @Produces(MediaType.APPLICATION_JSON)
