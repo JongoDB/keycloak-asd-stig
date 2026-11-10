@@ -18,6 +18,12 @@ final class StigAdministrators {
         return rm != null && rm.getRolesStream().anyMatch(user::hasRole);
     }
 
+    /** A group (with its parents) carrying any realm-management role. */
+    static boolean groupCarriesAdmin(RealmModel realm, org.keycloak.models.GroupModel g) {
+        ClientModel rm = realm.getClientByClientId("realm-management");
+        return g != null && rm != null && rm.getRolesStream().anyMatch(g::hasRole);
+    }
+
     /** An enrolled OTP or two-factor WebAuthn credential. */
     static boolean hasSecondFactor(UserModel user) {
         return user.credentialManager().isConfiguredFor(OTPCredentialModel.TYPE)
