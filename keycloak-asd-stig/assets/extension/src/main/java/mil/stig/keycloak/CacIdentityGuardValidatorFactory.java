@@ -31,7 +31,9 @@ import org.keycloak.validate.ValidatorFactory;
  *  1. UNIQUE: no other account in the realm may hold the same value. Keycloak's X.509 lookup needs exactly one
  *     match; a duplicate makes the card resolve ambiguously.
  *  2. REALM ADMINS ONLY: through the admin REST API (USER_API context) the value may be set or changed only by a
- *     caller holding realm-management manage-users / realm-admin for this realm, or a master-realm administrator.
+ *     caller holding realm-management realm-admin for this realm, or a master-realm administrator. Not manage-users:
+ *     binding a card (a strong authenticator) to an account is how a user manager could make their own card open
+ *     an administrator's account, so it stays with the people who already hold every right in the realm.
  *     A delegate with fine-grained admin permissions (e.g. manage-members on a group) counts as "admin" for the
  *     user profile, but must not be able to point a card at an account. Unchanged values always pass, so such a
  *     delegate can still edit names and other attributes.
@@ -87,8 +89,8 @@ public class CacIdentityGuardValidatorFactory implements ValidatorFactory, Simpl
         return input == null || input.toString().isBlank() ? List.of() : List.of(input.toString());
     }
 
-    /** The caller of this admin request holds realm-management manage-users or realm-admin in this realm, or is a
-     *  master-realm administrator (realm role admin, or <realm>-realm manage-users/realm-admin). The caller comes
+    /** The caller of this admin request holds realm-management realm-admin in this realm, or is a master-realm
+     *  administrator (realm role admin). The caller comes
      *  from the AdminAuth that Keycloak's AdminRoot binds to the session ("AdminRoot.adminAuth"); roles are read
      *  from that account, composites and groups included (Keycloak 26 admin tokens carry neither roles nor, with
      *  lightweight tokens, a subject). Fails closed when there is no authenticated admin caller. */
@@ -104,12 +106,11 @@ public class CacIdentityGuardValidatorFactory implements ValidatorFactory, Simpl
             return false;
         }
         if (issuer.getId().equals(realm.getId())) {
-            return hasClientRole(caller, issuer.getClientByClientId("realm-management"), "manage-users", "realm-admin");
+            return hasClientRole(caller, issuer.getClientByClientId("realm-management"), "realm-admin");
         }
         if ("master".equals(issuer.getName())) {
             RoleModel admin = issuer.getRole("admin");
-            return (admin != null && caller.hasRole(admin))
-                    || hasClientRole(caller, issuer.getClientByClientId(realm.getName() + "-realm"), "manage-users", "realm-admin");
+            return admin != null && caller.hasRole(admin);
         }
         return false;
     }
