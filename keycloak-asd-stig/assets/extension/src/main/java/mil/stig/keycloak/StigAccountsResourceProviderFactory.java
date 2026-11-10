@@ -137,17 +137,16 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             return v == null || v.isBlank() ? AccountsPolicy.DEFAULT_EMAIL_DOMAINS : v;
         }
 
-        /** At most CREATE_PER_HOUR creations per caller per clock hour. */
+        /** At most CREATE_PER_HOUR creations per caller per clock hour, atomically: each creation claims one of the
+         *  hour's numbered slots with putIfAbsent (atomic in the cluster cache); with every slot taken it is refused. */
         private boolean underRate() {
             UserModel cu = auth.adminAuth().getUser();
-            String key = "stig-accounts-create:" + (cu == null ? "?" : cu.getId()) + ":" + (Time.currentTime() / 3600);
+            String base = "stig-accounts-create:" + (cu == null ? "?" : cu.getId()) + ":" + (Time.currentTime() / 3600) + ":";
             org.keycloak.models.SingleUseObjectProvider so = session.singleUseObjects();
-            Map<String, String> cur = so.get(key);
-            int n = cur == null ? 0 : Integer.parseInt(cur.getOrDefault("n", "0"));
-            if (n >= AccountsPolicy.CREATE_PER_HOUR) return false;
-            if (cur == null) so.put(key, 3700, Map.of("n", "1"));
-            else so.replace(key, Map.of("n", String.valueOf(n + 1)));
-            return true;
+            for (int i = 0; i < AccountsPolicy.CREATE_PER_HOUR; i++) {
+                if (so.putIfAbsent(base + i, 3700)) return true;
+            }
+            return false;
         }
 
         private boolean sendSetup(UserModel u, int lifespan) {
