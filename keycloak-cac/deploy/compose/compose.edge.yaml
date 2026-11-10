@@ -21,7 +21,7 @@ services:
       CAC_EDGE_PROXY_CA_FILE: /run/secrets/edge_proxy_ca
     secrets: [tls_crt, tls_key, db_password, bootstrap_admin_password, automation_secret, edge_proxy_ca]
   proxy:
-    image: ${NGINX_IMAGE:-docker.io/library/nginx:1.27-alpine}   # pin by digest in production
+    image: ${NGINX_IMAGE:-docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10}
     ports: ["${CAC_PORT:-443}:8443"]
     networks: [kc-edge]
     read_only: true

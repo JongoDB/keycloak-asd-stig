@@ -34,7 +34,9 @@ bootstrapAdminUsername: bootstrap
 # forwards it in a header that Keycloak then believes. Two controls, both required (the chart refuses to render
 # without them):
 #   - the proxy authenticates at the TLS layer: Keycloak's listener requires a client certificate issued by
-#     proxyCA (Secret key, mounted alone, 0440) and trusts that CA for nothing else;
+#     proxyCA (Secret key, mounted alone, 0440) and trusts that CA for nothing else. proxyCA must be a DEDICATED CA
+#     that issues the proxy's certificate and nothing else (anything it signs can speak for any card). Or set
+#     proxyCert to pin the proxy's own certificate: then exactly that certificate is accepted;
 #   - only the proxy can reach port 8443: every proxyFrom entry names BOTH a namespace and a pod by labels, the
 #     NetworkPolicy is on and the Service is ClusterIP.
 # Use a proxy DEDICATED to Keycloak that overwrites the certificate header on every request. A shared ingress
@@ -42,7 +44,8 @@ bootstrapAdminUsername: bootstrap
 # the one Keycloak trusts).
 edge:
   enabled: false
-  proxyCA: {secretName: "", key: ca.crt}   # CA that issued the proxy's TLS client certificate (not its private key)
+  proxyCA: {secretName: "", key: ca.crt}   # dedicated CA that issued the proxy's TLS client certificate (not its key)
+  proxyCert: {secretName: "", key: tls.crt} # optional pin: the proxy's client certificate itself (wins over proxyCA)
   proxyFrom: []                  # [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: iam-edge}}, podSelector: {matchLabels: {app: keycloak-edge-proxy}}}]
 
 service:

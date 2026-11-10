@@ -81,9 +81,11 @@ Packages start out private. Keep this one private.
 
 **Built by CI:** `.github/workflows/keycloak-cac-image.yml` builds the standard and strict-FIPS images on every pull
 request, and on `main` pushes them to `ghcr.io/<owner>/keycloak-cac` (`26.8.2`, `26.8.2-fips`, `sha-<commit>[-fips]`)
-with an SPDX SBOM and SLSA provenance attached in the registry, plus a syft SBOM as a job artifact. The job summary
-prints the digest: deploy `ghcr.io/<owner>/keycloak-cac@sha256:...`, never a tag. A host pulls it with a token that
-has `read:packages` only.
+with an SPDX SBOM and SLSA provenance attached in the registry, plus a syft SBOM as a job artifact. With the
+repository secrets `COSIGN_PRIVATE_KEY`/`COSIGN_PASSWORD` set, it also signs the digest (no public transparency log:
+verify with `cosign verify --key cosign.pub --insecure-ignore-tlog=true <ref>`). The job summary prints the digest:
+deploy `ghcr.io/<owner>/keycloak-cac@sha256:...`, never a tag. A host pulls it with a token that has `read:packages`
+only. Pull requests build and test (compose path, edge mTLS) but hold no registry credentials.
 
 **Google Artifact Registry:**
 ```bash
@@ -126,7 +128,7 @@ Tested: two replicas at once, plus the air-gapped variant.
 
 **Plain `docker run`** (equivalent):
 ```bash
-docker run -d --name keycloak-cac --restart unless-stopped -p 443:8443 --read-only --tmpfs /tmp \
+docker run -d --name keycloak-cac --restart unless-stopped -p 443:8443 --read-only --tmpfs /tmp --user 1000:1000 \
   -v kc-data:/opt/keycloak/data -v $PWD/tls:/tls:ro -v $PWD/clients:/clients:ro \
   -v $PWD/secrets/db_password:/run/secrets/db_password:ro -v $PWD/secrets/automation_secret:/run/secrets/automation_secret:ro \
   -v $PWD/secrets/bootstrap_admin_password:/run/secrets/bootstrap_admin_password:ro \

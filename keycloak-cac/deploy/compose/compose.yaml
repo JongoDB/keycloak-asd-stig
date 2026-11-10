@@ -5,12 +5,13 @@
 # Scale out: docker compose up -d --scale keycloak=2  (nodes find each other through the database, jdbc-ping)
 #
 # Secrets are mounted one file each (compose `secrets:`), never as a whole directory, so the container sees
-# exactly the files it uses. Compose (outside Swarm) bind-mounts them with their host permissions: keep the
-# host files 0440 (or 0400) and owned by a group the container's UID 1000 is in, e.g. chown root:1000.
+# exactly the files it uses. Compose (outside Swarm) bind-mounts them with their host permissions, so the service
+# runs as 1000:1000 (below) and the host files are root:1000 0440:  sudo chown root:1000 secrets/* tls/*; chmod 0440 ...
 name: keycloak-cac
 services:
   keycloak:
     image: ${KEYCLOAK_CAC_IMAGE:-keycloak-cac:26.8.2}
+    user: "1000:1000"      # the image's uid 1000, with group 1000 instead of root: secret files are root:1000 0440
     env_file: keycloak-cac.env
     environment:
       KC_HTTPS_CERTIFICATE_FILE: /run/secrets/tls_crt   # server certificate (chain included) for CAC_PUBLIC_URL

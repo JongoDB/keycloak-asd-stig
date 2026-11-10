@@ -21,6 +21,9 @@ check() { if echo "$out" | grep -q -- "$2"; then echo "PASS $1"; else echo "FAIL
 check "edge: listener requires the proxy CA"     'CAC_EDGE_PROXY_CA_FILE, value: /run/secrets/edge-proxy-ca/ca.crt'
 check "edge: proxy CA mounted alone, 0440"       'secretName: edge-proxy-ca, defaultMode: 0440, items: \[{key: ca.crt, path: ca.crt}\]'
 check "edge: 8443 admits the proxy pods only"    'app: keycloak-edge-proxy'
+pin=$(helm template t "$C" "${ok_edge[@]}" --set edge.proxyCA.secretName= --set edge.proxyCert.secretName=proxy-pin)
+if echo "$pin" | grep -q 'CAC_EDGE_PROXY_CERT_FILE' && echo "$pin" | grep -q 'secretName: proxy-pin, defaultMode: 0440, items: \[{key: tls.crt, path: ca.crt}\]'; then
+  echo "PASS edge: pinned proxy certificate (proxyCert) renders"; else echo "FAIL edge: proxyCert pin"; fail=1; fi
 def=$(helm template t "$C")
 if echo "$def" | grep -q CAC_EDGE_PROXY_CA_FILE; then echo "FAIL default render sets edge env"; fail=1; else echo "PASS default render: no edge settings"; fi
 if echo "$def" | grep -q 'runAsGroup: 0\|fsGroup: 0'; then echo "FAIL default render uses the root group"; fail=1; else echo "PASS default render: no root group"; fi

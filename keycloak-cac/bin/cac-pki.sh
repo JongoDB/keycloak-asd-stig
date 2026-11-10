@@ -135,6 +135,10 @@ crl_ok() { # crl anchors-pem -> installs only if the signature verifies against 
 # Keycloak evaluates EVERY configured CRL on every card login, and one whose issuer is not a trust anchor throws
 # "crlSignatureCertificates is null": every card is then refused. A CRL left behind by a CA that is no longer an
 # anchor (an image upgrade that retired it, lab files on a persisted volume) must therefore be removed, not kept.
+# Caveat, a CA re-keyed under the same name: its CRLs are signed with the new key, so a cached CRL signed with the OLD
+# key no longer verifies and is pruned (and the new one arrives with the next fetch; until then that CA's cards fail
+# closed). While both the old and the new CA certificate are anchors, CRLs from either key verify and are kept, and
+# Keycloak picks the CRL by issuer name - keep only the current CA certificate once DISA retires the old one.
 cmd_crl_prune() { # crl-dir anchors-dir -> delete every *.crl that does not verify against the current anchors
   local d="$1" a="$2" w n=0; [ -d "$d" ] || return 0; w=$(mktemp -d); cat "$a"/*.pem > "$w/anchors.pem"
   for f in "$d"/*.crl; do [ -e "$f" ] || continue

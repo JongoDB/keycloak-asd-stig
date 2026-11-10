@@ -45,7 +45,7 @@ The short version for one host:
 ```bash
 cd keycloak-cac/deploy/compose && cp keycloak-cac.env.example keycloak-cac.env    # edit it
 mkdir -p tls secrets clients     # tls/tls.crt + tls.key, secrets/{db_password,bootstrap_admin_password,automation_secret}
-chmod 0440 tls/tls.key secrets/* && sudo chown root:1000 tls/tls.key secrets/*   # mounted one file each, read-only
+sudo chown root:1000 tls/* secrets/* && sudo chmod 0440 tls/* secrets/*   # one file each, read by the service's uid/gid 1000:1000
 docker compose up -d             # podman compose works too; --scale keycloak=2 for HA
 ```
 
@@ -107,7 +107,8 @@ The fields are documented in `keycloak-asd-stig/references/profile.md` under cli
 | `CAC_TRUST_ANCHORS_DIR` | | **Replaces** the baked DoD bundle with these zip, p7b or PEM files. |
 | `CAC_EXTRA_ANCHORS_DIR` | | **Adds** CAs, for example ECA or a partner PKI. Their fingerprints are logged. |
 | `CAC_APPLY` | `true` | `false` leaves the realm alone, which suits GitOps-managed realms. |
-| `CAC_EDGE_PROXY_CA_FILE` | | Edge images only (`X509_LOOKUP` other than `default`): the CA that issued the verifying proxy's TLS client certificate. The listener then **requires** a client certificate from that CA (edge builds bake `https-client-auth=required`) and trusts it for that hop only; cards are still checked against the DoD anchors. Such an image refuses to start without it. See `deploy/compose/compose.edge.yaml` and the chart's `edge:` values. |
+| `CAC_EDGE_PROXY_CA_FILE` | | Edge images only (`X509_LOOKUP` other than `default`): the CA that issued the verifying proxy's TLS client certificate. The listener then **requires** a client certificate from that CA (edge builds bake `https-client-auth=required`) and trusts it for that hop only; cards are still checked against the DoD anchors. It must be a **dedicated** CA that issues the proxy's certificate and nothing else, because anything it signs can speak for any card. Such an image refuses to start without it, or without `CAC_EDGE_PROXY_CERT_FILE`. See `deploy/compose/compose.edge.yaml` and the chart's `edge:` values. |
+| `CAC_EDGE_PROXY_CERT_FILE` | | Edge images only: pin the proxy's own client certificate instead of a CA. The listener then accepts exactly that certificate (the startup log prints its SHA-256), and it takes precedence over `CAC_EDGE_PROXY_CA_FILE`. |
 | `CAC_LAB_MODE` | `false` | Generates a mock CAC PKI and a self-issued server certificate, and allows `CRL_MODE=none` and dev databases. |
 | `CAC_LAB_TRUST_DOD` | `false` | Lab mode: also trusts the baked DoD bundle, so a real card works. |
 | `KC_HTTP_RELATIVE_PATH`, `KC_DB` | `/`, `postgres` | Keycloak build-time options. A different value at run time triggers an automatic rebuild at startup, which is slower and needs a writable `/opt/keycloak/lib`. For production, use the build argument instead. |

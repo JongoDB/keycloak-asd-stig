@@ -1188,7 +1188,8 @@ class Checker:
         # --http-ports), and count a port as failing only when KEYCLOAK answers it in clear text - i.e. this
         # realm's discovery document comes back over plain HTTP. A shared host or load balancer often has other
         # services on 8080 (or a redirect-to-HTTPS listener on 80); they say nothing about Keycloak.
-        self.res("live.http_disabled", *probe_plain_http(host, [port, 8080] + list(self.http_ports), self.realm))
+        self.res("live.http_disabled", *probe_plain_http(host, [port, 8080] + list(self.http_ports), self.realm,
+                                                         prefix=u.path.rstrip("/")))
         # TLS versions
         res = {}
         for name, ver in (("TLSv1.1", ssl.TLSVersion.TLSv1_1), ("TLSv1.2", ssl.TLSVersion.TLSv1_2), ("TLSv1.3", ssl.TLSVersion.TLSv1_3)):
@@ -1205,11 +1206,12 @@ class Checker:
         self.res("live.tls_versions", res.get("TLSv1.1") is None and bool(res.get("TLSv1.2") or res.get("TLSv1.3")),
                  "TLS handshake results: %s" % res)
 
-def probe_plain_http(host, ports, realm, timeout=4):
-    """(ok, evidence) - ok is False only if some port serves the realm's OIDC discovery over clear-text HTTP."""
+def probe_plain_http(host, ports, realm, timeout=4, prefix=""):
+    """(ok, evidence) - ok is False only if some port serves the realm's OIDC discovery over clear-text HTTP.
+    prefix: the live URL's path (KC_HTTP_RELATIVE_PATH, e.g. /auth), so a relative-path Keycloak is probed where it is."""
     import http.client
     seen, bad = [], []
-    path = "/realms/%s/.well-known/openid-configuration" % q(realm)
+    path = "%s/realms/%s/.well-known/openid-configuration" % (prefix, q(realm))
     for prt in dict.fromkeys(ports):
         try:
             con = http.client.HTTPConnection(host, prt, timeout=timeout)

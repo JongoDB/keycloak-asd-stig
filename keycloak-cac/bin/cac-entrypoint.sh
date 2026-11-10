@@ -43,13 +43,17 @@ done < /opt/keycloak-cac/build-options.env
 #      set that header), so the proxy must authenticate itself with a TLS client certificate issued by
 #      CAC_EDGE_PROXY_CA_FILE: Keycloak's listener then requires one (KC_HTTPS_CLIENT_AUTH=required, baked into
 #      edge builds) and trusts that CA ONLY for the TLS hop. Cards are still validated against the DoD anchors.
+#      The CA must be DEDICATED: it issues the proxy's client certificate and nothing else, because every
+#      certificate it issues can speak for any card. CAC_EDGE_PROXY_CERT_FILE pins the proxy's own certificate
+#      instead (the trust store then holds exactly that certificate: nothing else from any CA is accepted).
 LOOKUP="${KC_SPI_X509CERT_LOOKUP__PROVIDER:-default}"
 if [ "$LOOKUP" != default ]; then
   [ "${KC_HTTPS_CLIENT_AUTH:-}" = required ] || die "X509_LOOKUP=$LOOKUP needs an image built with KC_HTTPS_CLIENT_AUTH=required (rebuild with this Containerfile)"
-  [ -n "${CAC_EDGE_PROXY_CA_FILE:-}" ] || die "this image reads the client certificate from a header (X509_LOOKUP=$LOOKUP): set CAC_EDGE_PROXY_CA_FILE to the CA that issued the verifying proxy's TLS client certificate. Keycloak then accepts connections from that proxy only. Use a proxy dedicated to Keycloak that overwrites the header on every request. Without a proxy, use the default (passthrough) image."
-  [ -r "$CAC_EDGE_PROXY_CA_FILE" ] || die "CAC_EDGE_PROXY_CA_FILE=$CAC_EDGE_PROXY_CA_FILE is not readable"
-elif [ -n "${CAC_EDGE_PROXY_CA_FILE:-}" ]; then
-  log "WARN CAC_EDGE_PROXY_CA_FILE has no effect: this image reads the card from its own TLS handshake (passthrough)"
+  [ -n "${CAC_EDGE_PROXY_CA_FILE:-}${CAC_EDGE_PROXY_CERT_FILE:-}" ] || die "this image reads the client certificate from a header (X509_LOOKUP=$LOOKUP): set CAC_EDGE_PROXY_CA_FILE to the CA that issued the verifying proxy's TLS client certificate. Keycloak then accepts connections from that proxy only. Use a proxy dedicated to Keycloak that overwrites the header on every request. Without a proxy, use the default (passthrough) image."
+  for v in CAC_EDGE_PROXY_CA_FILE CAC_EDGE_PROXY_CERT_FILE; do
+    [ -z "${!v:-}" ] || [ -r "${!v}" ] || die "$v=${!v} is not readable"; done
+elif [ -n "${CAC_EDGE_PROXY_CA_FILE:-}${CAC_EDGE_PROXY_CERT_FILE:-}" ]; then
+  log "WARN CAC_EDGE_PROXY_CA_FILE/CAC_EDGE_PROXY_CERT_FILE have no effect: this image reads the card from its own TLS handshake (passthrough)"
 fi
 REL="${KC_HTTP_RELATIVE_PATH:-/}"; REL="${REL%/}"
 [ -n "${CAC_PUBLIC_URL:-}" ] && [ -z "${KC_HOSTNAME:-}" ] && export KC_HOSTNAME="$CAC_PUBLIC_URL"
@@ -89,9 +93,15 @@ log "trust anchors ready: $(ls "$D/anchors" | wc -l) CAs, pinned roots: $(tr '\n
 #      calls), nothing else. The loopback CA's key never leaves the container's data directory and changes each start.
 if [ "$LOOKUP" != default ]; then
   E="$D/edge"; rm -rf "$E"; mkdir -p "$E/trust"; chmod 700 "$E"
-  openssl x509 -in "$CAC_EDGE_PROXY_CA_FILE" -noout -ext basicConstraints 2>/dev/null | grep -q 'CA:TRUE' \
-    || die "CAC_EDGE_PROXY_CA_FILE must be a CA certificate (basicConstraints CA:TRUE)"
-  cp "$CAC_EDGE_PROXY_CA_FILE" "$E/trust/proxy-ca.pem"
+  if [ -n "${CAC_EDGE_PROXY_CERT_FILE:-}" ]; then   # pin: exactly the proxy's certificate is a trust anchor
+    openssl x509 -in "$CAC_EDGE_PROXY_CERT_FILE" -noout >/dev/null 2>&1 || die "CAC_EDGE_PROXY_CERT_FILE is not a PEM certificate"
+    cp "$CAC_EDGE_PROXY_CERT_FILE" "$E/trust/proxy-ca.pem"
+    [ -z "${CAC_EDGE_PROXY_CA_FILE:-}" ] || log "WARN both set: CAC_EDGE_PROXY_CERT_FILE (pin) wins; CAC_EDGE_PROXY_CA_FILE is ignored"
+  else
+    openssl x509 -in "$CAC_EDGE_PROXY_CA_FILE" -noout -ext basicConstraints 2>/dev/null | grep -q 'CA:TRUE' \
+      || die "CAC_EDGE_PROXY_CA_FILE must be a CA certificate (basicConstraints CA:TRUE)"
+    cp "$CAC_EDGE_PROXY_CA_FILE" "$E/trust/proxy-ca.pem"
+  fi
   ( umask 077
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 -sha256 -subj "/CN=keycloak-cac loopback CA" \
       -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign -keyout "$E/loopback-ca.key" -out "$E/trust/loopback-ca.pem" 2>/dev/null
@@ -102,7 +112,7 @@ if [ "$LOOKUP" != default ]; then
     rm -f "$E/loopback-ca.key" "$E/loopback.csr" "$E/ext.cnf" ) || die "could not create the loopback client certificate"
   "$TOOLS/cac-pki.sh" compile "$E/trust" "$E"
   export KC_HTTPS_TRUST_STORE_FILE="$E/client-ca.p12" KCSTIG_CLIENT_CERT="$E/loopback.crt" KCSTIG_CLIENT_KEY="$E/loopback.key"
-  log "edge mode: listener requires a client certificate from the proxy CA ($(openssl x509 -in "$E/trust/proxy-ca.pem" -noout -subject -nameopt RFC2253)); card header via $LOOKUP"
+  log "edge mode: listener requires the proxy's client certificate ($([ -n "${CAC_EDGE_PROXY_CERT_FILE:-}" ] && echo "pinned" || echo "from CA") $(openssl x509 -in "$E/trust/proxy-ca.pem" -noout -subject -nameopt RFC2253), sha256 $(openssl x509 -in "$E/trust/proxy-ca.pem" -noout -fingerprint -sha256 | cut -d= -f2)); card header via $LOOKUP"
 fi
 
 # ---- server TLS certificate

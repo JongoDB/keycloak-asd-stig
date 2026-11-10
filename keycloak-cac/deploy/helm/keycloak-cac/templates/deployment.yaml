@@ -60,7 +60,11 @@ spec:
         - {name: KC_BOOTSTRAP_ADMIN_PASSWORD_FILE, value: /run/secrets/bootstrap/password}
         - {name: CAC_AUTOMATION_SECRET_FILE, value: /run/secrets/automation/secret}
         {{- if .Values.edge.enabled }}
-        - {name: CAC_EDGE_PROXY_CA_FILE, value: /run/secrets/edge-proxy-ca/ca.crt}   # listener requires the proxy's client cert
+        {{- if and .Values.edge.proxyCert .Values.edge.proxyCert.secretName }}
+        - {name: CAC_EDGE_PROXY_CERT_FILE, value: /run/secrets/edge-proxy-ca/ca.crt}  # pinned proxy certificate
+        {{- else }}
+        - {name: CAC_EDGE_PROXY_CA_FILE, value: /run/secrets/edge-proxy-ca/ca.crt}    # listener requires the proxy's client cert
+        {{- end }}
         {{- end }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
@@ -106,7 +110,8 @@ spec:
       - {name: automation, secret: {secretName: {{ .Values.secrets.automation }}, defaultMode: 0440, items: [{key: secret, path: secret}]}}
       - {name: clients, configMap: {name: {{ include "kcc.name" . }}-clients}}
       {{- if .Values.edge.enabled }}
-      - {name: edge-proxy-ca, secret: {secretName: {{ .Values.edge.proxyCA.secretName }}, defaultMode: 0440, items: [{key: {{ .Values.edge.proxyCA.key }}, path: ca.crt}]}}
+      {{- $src := ternary .Values.edge.proxyCert .Values.edge.proxyCA (and .Values.edge.proxyCert .Values.edge.proxyCert.secretName | not | not) }}
+      - {name: edge-proxy-ca, secret: {secretName: {{ $src.secretName }}, defaultMode: 0440, items: [{key: {{ $src.key }}, path: ca.crt}]}}
       {{- end }}
       {{- if .Values.extraAnchors }}
       - {name: extra-anchors, configMap: {name: {{ include "kcc.name" . }}-anchors}}
