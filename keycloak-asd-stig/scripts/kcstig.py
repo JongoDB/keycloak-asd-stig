@@ -640,7 +640,11 @@ def ensure_required_actions(kc, realm, terms):
 
 def remove_account_links(kc, realm):
     """Users must not link (or unlink) identity-provider accounts themselves: manage-account-links is taken out of
-    the account client's manage-account composite and out of the default roles."""
+    the account client's manage-account composite and out of the default roles. NOT sufficient alone: Keycloak 26.8
+    also lets manage-account itself link accounts (IdentityBrokerService, LinkedAccountsResource), so a realm with
+    identity providers also needs stig-extensions' idp-require-admin-attribute-match in its post-broker-login flow,
+    which refuses any brokered sign-in - through a new or an existing link - for an identity other than the
+    administrator-set one."""
     rr = "/realms/%s" % q(realm)
     acc = kc.api("GET", rr + "/clients?clientId=account") or []
     if not acc:
