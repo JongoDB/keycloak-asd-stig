@@ -26,7 +26,6 @@ import org.keycloak.authentication.actiontoken.execactions.ExecuteActionsActionT
 import org.keycloak.common.util.Time;
 import org.keycloak.email.EmailException;
 import org.keycloak.email.EmailTemplateProvider;
-import org.keycloak.events.EventStoreProvider;
 import org.keycloak.events.admin.OperationType;
 import org.keycloak.events.admin.ResourceType;
 import org.keycloak.models.ClientModel;
@@ -47,18 +46,15 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
 /**
  * /admin/realms/{realm}/stig-accounts - the ONLY account operations a fine-grained delegate needs, for delegates that
  * hold no `manage-members` (so they can never set or reset a password, touch credentials or identity-provider links,
- * change an e-mail address or send mail to an address of their choosing):
+ * change an e-mail address, send mail to an address of their choosing, or re-enable an account):
  *
  *   POST /users                      {username first.last, email, firstName, lastName, group "/app/ROLE"[, lifespan]}
  *                                    create into a group the caller may manage the membership of, e-mail the set-up link
  *                                    (password, TOTP, terms; at most 24 h). 201 {id, username, setupEmail}
  *   POST /users/{id}/setup-email     re-send the set-up link to the address ON RECORD, only while the account is still
  *                                    being set up (no credential, set-up actions pending; else 409); once per 15 min. 204
- *   PUT  /users/{id}/enabled         {enabled: true|false}. Disabling ends the account's sessions (back-channel) and
- *                                    marks it (stig_accounts_disabled_by); an already-disabled account is 409. Enabling
- *                                    is allowed only for an account this endpoint disabled and nothing has changed
- *                                    since (its latest admin event): never one an administrator, lockout or inactivity
- *                                    disabled. 204
+ *   POST /users/{id}/disable         disable a member and end its sessions (back-channel). 204. There is NO enable:
+ *                                    re-enabling is for realm administrators only (console, idp-admin.py user-enable).
  *   anything else                    403
  *
  * Authorisation is Keycloak's own: the admin API's token checks (audience, admin scope) and the realm's fine-grained
@@ -71,8 +67,6 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
     public static final String ID = "stig-accounts";
     private static final Logger LOG = Logger.getLogger("mil.stig.audit");
     static final List<String> SETUP_ACTIONS = List.of("UPDATE_PASSWORD", "CONFIGURE_TOTP", "TERMS_AND_CONDITIONS");
-    /** Set by this endpoint when it disables an account (admin-only attribute: delegates cannot edit accounts). */
-    static final String DISABLED_BY = "stig_accounts_disabled_by";
 
     @Override public AdminRealmResourceProvider create(KeycloakSession session) { return this; }
     @Override public void init(Config.Scope config) { }
@@ -121,17 +115,6 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                 return null;
             }
             return u;
-        }
-
-        /** The account's latest admin event on users/{id} itself is this endpoint's own disablement. */
-        private boolean lastAdminEventIsOurDisable(UserModel u) {
-            EventStoreProvider store = session.getProvider(EventStoreProvider.class);
-            if (store == null) return false;
-            return store.createAdminQuery().realm(realm.getId()).resourcePath("users/" + u.getId())
-                    .orderByDescTime().maxResults(1).getResultStream().findFirst()
-                    .map(e -> e.getOperationType() == OperationType.UPDATE && e.getRepresentation() != null
-                            && e.getRepresentation().contains("\"via\":\"" + ID + "\"") && e.getRepresentation().contains("\"enabled\":false"))
-                    .orElse(false);
         }
 
         private boolean sendSetup(UserModel u, int lifespan) {
@@ -210,38 +193,19 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             return sendSetup(u, lifespan) ? Response.noContent().build() : err(Response.Status.BAD_GATEWAY, "the e-mail could not be sent");
         }
 
-        @PUT @Path("users/{id}/enabled") @Consumes(MediaType.APPLICATION_JSON)
-        public Response enabled(@PathParam("id") String id, Map<String, Object> body) {
-            Object v = body == null ? null : body.get("enabled");
-            if (!(v instanceof Boolean on)) return err(Response.Status.BAD_REQUEST, "body must be {\"enabled\": true|false}");
-            UserModel u = target(id, "enabled");
+        @POST @Path("users/{id}/disable")
+        public Response disable(@PathParam("id") String id) {
+            UserModel u = target(id, "disable");
             if (u == null) return err(Response.Status.FORBIDDEN, "not allowed");
-            boolean was = u.isEnabled();
-            if (!on) {
-                if (!was) {   // already disabled - by an administrator, lockout policy or inactivity: not the endpoint's to own
-                    refused("disable", "account " + u.getUsername() + " is already disabled");
-                    return err(Response.Status.CONFLICT, "the account is already disabled");
-                }
-                u.setSingleAttribute(DISABLED_BY, Time.currentTimeMillis() + " " + caller());
-            } else {
-                // only an account this endpoint disabled, and nothing has touched it through the admin API since
-                if (was) return Response.noContent().build();
-                if (u.getFirstAttribute(DISABLED_BY) == null || !lastAdminEventIsOurDisable(u)) {
-                    refused("enable", "account " + u.getUsername() + " was not disabled through stig-accounts");
-                    return err(Response.Status.FORBIDDEN, "not allowed: disabled by an administrator or by policy");
-                }
-                u.removeAttribute(DISABLED_BY);
-            }
-            u.setEnabled(on);
-            if (!on) {
-                session.users().setNotBeforeForUser(realm, u, Time.currentTime());
-                session.sessions().getUserSessionsStream(realm, u).collect(Collectors.toList())
-                       .forEach(s -> AuthenticationManager.backchannelLogout(session, realm, s, session.getContext().getUri(),
-                               session.getContext().getConnection(), session.getContext().getRequestHeaders(), true));
-            }
-            Map<String, Object> rep = Map.of("enabled", on, "previousEnabled", was, "via", ID);
-            adminEvent.operation(OperationType.UPDATE).resource(ResourceType.USER).resourcePath("users", u.getId()).representation(rep).success();
-            LOG.infof("STIG-ACCOUNTS %s realm=%s caller=%s user=%s", on ? "enabled" : "disabled", realm.getName(), caller(), u.getUsername());
+            if (!u.isEnabled()) return Response.noContent().build();          // already disabled: nothing to do
+            u.setEnabled(false);
+            session.users().setNotBeforeForUser(realm, u, Time.currentTime());
+            session.sessions().getUserSessionsStream(realm, u).collect(Collectors.toList())
+                   .forEach(s -> AuthenticationManager.backchannelLogout(session, realm, s, session.getContext().getUri(),
+                           session.getContext().getConnection(), session.getContext().getRequestHeaders(), true));
+            adminEvent.operation(OperationType.UPDATE).resource(ResourceType.USER).resourcePath("users", u.getId())
+                    .representation(Map.of("enabled", false)).success();
+            LOG.infof("STIG-ACCOUNTS disabled realm=%s caller=%s user=%s", realm.getName(), caller(), u.getUsername());
             return Response.noContent().build();
         }
 
