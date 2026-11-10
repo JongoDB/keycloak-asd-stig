@@ -288,19 +288,25 @@ def browser_flow(p, *, admin_realm):
 
 DENY_DIRECT_GRANT = ("STIG Direct Grant - Deny", [("exec", "deny-access-authenticator", "REQUIRED", None)])
 
-def user_profile_attributes(p, *, admin_realm):
+def user_profile_attributes(p, *, admin_realm, extension=True):
     attrs = []
+    # The card-mapping attribute: unique in the realm, and set/changed through the admin API only by realm
+    # administrators - not by fine-grained (delegated) admins, who count as "admin" for user-profile permissions
+    # (cac-identity-guard, stig-extensions.jar). V-222552, V-222522.
+    guard = {"cac-identity-guard": {}} if extension else {}
     def a(name, display, view, edit, **extra):
         d = {"name": name, "displayName": display, "permissions": {"view": view, "edit": edit},
              "multivalued": False, "validations": {"length": {"max": "255"}}, "annotations": {}}
         d.update(extra)
         attrs.append(d)
     if admin_realm:
-        a(p["admin"]["mapping_attribute"], "Alt Token certificate UPN", ["admin"], ["admin"])
+        a(p["admin"]["mapping_attribute"], "Alt Token certificate UPN", ["admin"], ["admin"],
+          validations=dict({"length": {"max": "255"}}, **guard))
     else:
         label = {"cac_upn": "CAC certificate UPN (EDIPI@mil)", "cac_edipi": "DoD ID number (EDIPI)",
                  "cac_cn": "CAC certificate common name", "cac_subject_dn": "CAC certificate subject DN"}
-        a(p["x509"]["mapping_attribute"], label.get(p["x509"]["mapping_attribute"], "CAC certificate identity"), ["admin"], ["admin"])
+        a(p["x509"]["mapping_attribute"], label.get(p["x509"]["mapping_attribute"], "CAC certificate identity"), ["admin"], ["admin"],
+          validations=dict({"length": {"max": "255"}}, **guard))
     a("account_type", "Account type (permanent | temporary | emergency)", ["admin"], ["admin"],
       validations={"options": {"options": ["permanent", "temporary", "emergency"]}},
       annotations={"inputType": "select"})
@@ -400,14 +406,14 @@ def render(p, extension=True):
         "realm": dict(realm_settings(p, extension=extension), realm=p["realm"]["name"]),
         "browser_flow": browser_flow(p, admin_realm=False),
         "direct_grant_flow": DENY_DIRECT_GRANT,
-        "user_profile_attributes": user_profile_attributes(p, admin_realm=False),
+        "user_profile_attributes": user_profile_attributes(p, admin_realm=False, extension=extension),
         "workflows": workflows(p),
         "client_profiles": cprof, "client_policies": cpol,
         "clients": [client_rep(c, p) for c in p["clients"]],
         "admin_realm": {
             "settings": realm_settings(p, admin_realm=True, extension=extension),
             "browser_flow": browser_flow(p, admin_realm=True),
-            "user_profile_attributes": user_profile_attributes(p, admin_realm=True),
+            "user_profile_attributes": user_profile_attributes(p, admin_realm=True, extension=extension),
         },
     }
 
@@ -582,6 +588,8 @@ def ensure_user_profile(kc, realm, attrs):
             for i, cur in enumerate(up["attributes"]):
                 if cur["name"] == a["name"] and cur.get("permissions") != a["permissions"]:
                     up["attributes"][i]["permissions"] = a["permissions"]; changed = True
+                if cur["name"] == a["name"] and cur.get("validations") != a["validations"]:
+                    up["attributes"][i]["validations"] = a["validations"]; changed = True
     for cur in up["attributes"]:
         # Card holders are identified by the certificate, not by e-mail: an account provisioned with only an
         # EDIPI/UPN must not be stopped at "update profile" (the STIG does not require an e-mail address).
