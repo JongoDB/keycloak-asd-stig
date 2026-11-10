@@ -1056,6 +1056,19 @@ class Checker:
         self.res("userprofile.cac_upn_admin_only", bool(ua) and ua[0]["permissions"].get("edit") == ["admin"]
                  and up.get("unmanagedAttributePolicy") in (None, "ADMIN_VIEW"),
                  "%s permissions=%s unmanagedAttributePolicy=%s" % (attr, ua[0]["permissions"] if ua else None, up.get("unmanagedAttributePolicy")))
+        # An identity binding (an attribute cac-identity-guard keeps unique and administrator-only: the card mapping,
+        # entra_oid) must never be written by an identity-provider mapper - IMPORT or FORCE, a mapper could copy an
+        # incoming identity over the one an administrator recorded.
+        binds = {x["name"].lower() for x in up["attributes"] if "cac-identity-guard" in (x.get("validations") or {})
+                 and str((x["validations"]["cac-identity-guard"] or {}).get("unique", "true")).lower() != "false"}
+        bad = []
+        for idp in self.kc.api("GET", "/realms/%s/identity-provider/instances" % q(self.realm)) or []:
+            for mp in self.kc.api("GET", "/realms/%s/identity-provider/instances/%s/mappers" % (q(self.realm), q(idp["alias"]))) or []:
+                for k in ("user.attribute", "attribute", "attribute.name"):
+                    if ((mp.get("config") or {}).get(k) or "").strip().lower() in binds:
+                        bad.append("%s/%s -> %s" % (idp["alias"], mp["name"], mp["config"][k]))
+        self.res("idp.no_mapper_writes_identity_binding", not bad,
+                 "identity-binding attributes %s; identity-provider mappers writing one: %s" % (sorted(binds), bad or "none"))
         self.check_flows()
         self.check_policies()
         self.check_clients()

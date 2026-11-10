@@ -23,5 +23,17 @@ else    # no local JDK: the same javac in a pinned Temurin 17 container
   docker run --rm -v "$WORK:/w" -w /w --entrypoint bash "$JDK" -c \
     'javac --release 17 -encoding UTF-8 -nowarn -cp "$(ls lib/*.jar | tr "\n" ":")" -d classes $(find src/main/java -name "*.java") && cp -r src/main/resources/. classes/ && (cd classes && jar cf ../stig-extensions.jar .)'
 fi
+# unit tests (src/test/java, plain main() - no test framework): a failure fails the build
+if [ -d "$WORK/src/test/java" ]; then
+  if javac -version >/dev/null 2>&1; then
+    javac --release 17 -encoding UTF-8 -nowarn -cp "$WORK/stig-extensions.jar:$CP" -d "$WORK/tclasses" $(find "$WORK/src/test/java" -name '*.java')
+    for t in $(cd "$WORK/src/test/java" && find . -name '*Test.java' | sed 's#^\./##; s#\.java$##; s#/#.#g'); do
+      java -cp "$WORK/tclasses:$WORK/stig-extensions.jar:$CP" "$t"
+    done
+  else
+    docker run --rm -v "$WORK:/w" -w /w --entrypoint bash "$JDK" -c \
+      'CP="stig-extensions.jar:$(ls lib/*.jar | tr "\n" ":")"; javac --release 17 -encoding UTF-8 -nowarn -cp "$CP" -d tclasses $(find src/test/java -name "*.java") && for t in $(cd src/test/java && find . -name "*Test.java" | sed "s#^\./##; s#\.java\$##; s#/#.#g"); do java -cp "tclasses:$CP" "$t" || exit 1; done'
+  fi
+fi
 cp "$WORK/stig-extensions.jar" "$HERE/target/stig-extensions.jar"
 echo "built $HERE/target/stig-extensions.jar for $IMG"

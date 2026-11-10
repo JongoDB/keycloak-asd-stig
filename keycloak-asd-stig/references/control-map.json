@@ -1303,7 +1303,8 @@
    "checks": [
     "flow.x509_or_mfa",
     "userprofile.cac_upn_admin_only",
-    "realm.no_self_service_idp_link"
+    "realm.no_self_service_idp_link",
+    "idp.no_mapper_writes_identity_binding"
    ],
    "app_action": null,
    "na_condition": null,
