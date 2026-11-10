@@ -1348,7 +1348,9 @@ def live_client_auth(results, live_url):
         return
     u = urllib.parse.urlparse(live_url)
     try:
-        out = subprocess.run(["openssl", "s_client", "-connect", "%s:%s" % (u.hostname, u.port or 443), "-servername", u.hostname],
+        # KCSTIG_LIVE_CONNECT=addr:port: connect there (e.g. the node behind a load balancer) with the live URL's SNI
+        target = os.environ.get("KCSTIG_LIVE_CONNECT") or "%s:%s" % (u.hostname, u.port or 443)
+        out = subprocess.run(["openssl", "s_client", "-connect", target, "-servername", u.hostname],
                              input=b"", capture_output=True, timeout=20).stdout.decode("utf-8", "replace")
     except Exception as e:
         return
