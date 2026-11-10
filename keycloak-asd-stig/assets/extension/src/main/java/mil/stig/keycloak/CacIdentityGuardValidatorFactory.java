@@ -36,7 +36,10 @@ import org.keycloak.validate.ValidatorFactory;
  *     user profile, but must not be able to point a card at an account. Unchanged values always pass, so such a
  *     delegate can still edit names and other attributes.
  *
- * No configuration. Attach as {"cac-identity-guard": {}} in the attribute's validations.
+ * Configuration: "unique" (default "true"). Attach as {"cac-identity-guard": {}} to a card-mapping attribute, or as
+ * {"cac-identity-guard": {"unique": "false"}} to other identity evidence only realm administrators (or Keycloak itself,
+ * e.g. an identity-provider mapper, which does not go through the admin API) may write - such as the amr an
+ * identity provider reported.
  */
 public class CacIdentityGuardValidatorFactory implements ValidatorFactory, SimpleValidator {
 
@@ -59,7 +62,8 @@ public class CacIdentityGuardValidatorFactory implements ValidatorFactory, Simpl
                 : user.getAttributeStream(attr).filter(v -> v != null && !v.isBlank()).collect(Collectors.toList());
 
         // 1. uniqueness, whoever is asking
-        for (String v : wanted) {
+        boolean unique = config == null || !"false".equalsIgnoreCase(String.valueOf(config.getOrDefault("unique", "true")));
+        for (String v : unique ? wanted : List.<String>of()) {
             boolean taken = session.users().searchForUserByUserAttributeStream(realm, attr, v)
                     .anyMatch(u -> user == null || !u.getId().equals(user.getId()));
             if (taken) {
