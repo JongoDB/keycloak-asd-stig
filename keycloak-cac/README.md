@@ -45,6 +45,7 @@ The short version for one host:
 ```bash
 cd keycloak-cac/deploy/compose && cp keycloak-cac.env.example keycloak-cac.env    # edit it
 mkdir -p tls secrets clients     # tls/tls.crt + tls.key, secrets/{db_password,bootstrap_admin_password,automation_secret}
+sudo chown root:1000 tls/* secrets/* && sudo chmod 0440 tls/* secrets/*   # one file each, read by the service's uid/gid 1000:1000
 docker compose up -d             # podman compose works too; --scale keycloak=2 for HA
 ```
 
@@ -58,7 +59,7 @@ docker compose up -d             # podman compose works too; --scale keycloak=2 
 **CAC needs TLS to reach Keycloak unbroken.** Use one of these:
 - Expose port 8443 directly.
 - Use a Layer-4/TCP passthrough load balancer (an NLB, MetalLB, or HAProxy in TCP mode).
-- Build with `X509_LOOKUP=nginx` (or haproxy, apache, envoy), so that a proxy verifies the card and forwards it in a header.
+- Build with `X509_LOOKUP=nginx` (or haproxy, apache, envoy), so that a proxy verifies the card and forwards it in a header. Keycloak then believes that header, so the proxy must authenticate with a TLS client certificate (`CAC_EDGE_PROXY_CA_FILE`; the image refuses to start without it) and be the only thing that can reach Keycloak: no published port (`compose.edge.yaml`), or the chart's `edge.proxyFrom` NetworkPolicy. Use a proxy dedicated to Keycloak that overwrites the header on every request. A shared ingress controller is not acceptable, because any tenant's Ingress could set the header.
 
 An L7 ingress or ALB that decrypts traffic and forwards nothing breaks CAC login.
 
@@ -90,6 +91,8 @@ The fields are documented in `keycloak-asd-stig/references/profile.md` under cli
 | `CAC_CRL_DIR` | `/crl` | File mode: a directory of `*.crl` files. Each one is signature-checked against the anchors before use. |
 | `CAC_CRL_REFRESH_SECONDS` | `21600` | How often CRLs are re-fetched or re-read. After each refresh, every node's CRL cache is cleared. |
 | `CAC_OCSP` | on for `online`/`ocsp` | Checks OCSP in addition to CRLs. The `ocsp` mode fails closed. |
+| `CAC_OCSP_FAIL_OPEN` | `true` | With CRLs also checked, an unreachable OCSP responder is skipped (the CRL still decides). `false`: OCSP fails closed too, so responder reachability becomes a sign-in dependency. |
+| `CAC_LOCKOUT` | `permanent` | `permanent`: 3 failures in 15 min lock until an administrator unlocks. `temporary`: 15 min, growing with each further 3 failures to 24 h, failures remembered for 24 h, so nobody on the network can lock an account (an administrator's included) for good. Tune with `CAC_PROFILE_JSON='{"lockout":{...}}'`. |
 | `CAC_OCSP_RESPONDER_URI` | *(from the certificate)* | Overrides the responder, for example a local OCSP repeater. |
 | `CAC_ADMINS` | | Alt Token administrators, as `user=<Alt Token UPN>,...`. With this set, the admin realm is hardened and the bootstrap admin is deleted. |
 | `CAC_ADMINS_JSON` / `CAC_ADMINS_DIR` | | Full admin records (email, names and so on). |
@@ -106,6 +109,10 @@ The fields are documented in `keycloak-asd-stig/references/profile.md` under cli
 | `CAC_TRUST_ANCHORS_DIR` | | **Replaces** the baked DoD bundle with these zip, p7b or PEM files. |
 | `CAC_EXTRA_ANCHORS_DIR` | | **Adds** CAs, for example ECA or a partner PKI. Their fingerprints are logged. |
 | `CAC_APPLY` | `true` | `false` leaves the realm alone, which suits GitOps-managed realms. |
+| `CAC_EDGE_PROXY_CA_FILE` | | Edge images only (`X509_LOOKUP` other than `default`): the CA that issued the verifying proxy's TLS client certificate. The listener then **requires** a client certificate from that CA (edge builds bake `https-client-auth=required`) and trusts it for that hop only; cards are still checked against the DoD anchors. It must be a **dedicated** CA that issues the proxy's certificate and nothing else, because anything it signs can speak for any card. Such an image refuses to start without it, or without `CAC_EDGE_PROXY_CERT_FILE`. See `deploy/compose/compose.edge.yaml` and the chart's `edge:` values. |
+| `CAC_EDGE_PROXY_CERT_FILE` | | Edge images only: pin the proxy's own client certificate instead of a CA. The listener then accepts exactly that certificate (the startup log prints its SHA-256), and it takes precedence over `CAC_EDGE_PROXY_CA_FILE`. |
+| `STIG_PUBLIC_PATHS` | | Network allowlist of raw paths (`stig-extensions` PublicPathAllowlistFilter). Comma separated; an entry ending in `/` is a prefix, anything else is exact. For network clients, a raw path with `%`, `;`, `\`, `//`, a `.` or `..` segment, whitespace, a control character or non-ASCII is refused (404), and so is anything not listed. Example for one realm: `/realms/r,/realms/r/,/admin/r/,/admin/realms/r,/admin/realms/r/,/admin/serverinfo,/resources/` (exactly what the realm's admin console and sign-in pages request, verified in a browser on 26.8.2). The master realm and any unlisted realm are then unreachable from the network. Needs `STIG_TRUSTED_SOURCES`. |
+| `STIG_TRUSTED_SOURCES` | | TCP peer IPs that bypass the allowlist, for example `127.0.0.1` and the host's Docker network gateway. Forwarded headers are never trusted. Set it together with `STIG_PUBLIC_PATHS`, or the container refuses to start. **Migration:** the earlier `STIG_ADMIN_REALM_ALLOWED_SOURCES` is retired, and setting it now stops the container with a message naming these two variables. |
 | `CAC_LAB_MODE` | `false` | Generates a mock CAC PKI and a self-issued server certificate, and allows `CRL_MODE=none` and dev databases. |
 | `CAC_LAB_TRUST_DOD` | `false` | Lab mode: also trusts the baked DoD bundle, so a real card works. |
 | `KC_HTTP_RELATIVE_PATH`, `KC_DB` | `/`, `postgres` | Keycloak build-time options. A different value at run time triggers an automatic rebuild at startup, which is slower and needs a writable `/opt/keycloak/lib`. For production, use the build argument instead. |

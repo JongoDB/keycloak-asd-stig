@@ -107,7 +107,11 @@ def build_profile():
     if flag("CAC_LAB_MODE") and flag("CAC_LAB_USERS", True) and os.path.isdir(os.path.join(PKI, "lab")):
         lu, la = lab_users(os.path.join(PKI, "lab"), src, attr)
         users += lu; admins += la
+    lockout = (env("CAC_LOCKOUT", "permanent") or "permanent").lower()
+    if lockout not in ("permanent", "temporary"):
+        die("CAC_LOCKOUT must be permanent | temporary (got %r)" % lockout)
     p = {
+        "lockout": {"permanent": lockout == "permanent"},
         "keycloak": {"url": "https://127.0.0.1:%s%s" % (env("KC_HTTPS_PORT", "8443"), rel), "admin_realm": "master"},
         "realm": {"name": realm, "display_name": env("CAC_REALM_DISPLAY_NAME", realm)},
         "auth_mode": env("CAC_AUTH_MODE", "cac"),
@@ -115,6 +119,7 @@ def build_profile():
         "x509": {
             "mapping_attribute": attr, "mapping_source": source, "regex": regex,
             "ocsp": ocsp, "ocsp_responder_uri": env("CAC_OCSP_RESPONDER_URI", ""),
+            "ocsp_fail_open": flag("CAC_OCSP_FAIL_OPEN", True),
             "crl": mode in ("online", "file"), "crl_files": crl_files or ["cac/crl/none.crl"],
             "ca_subject_dns": [l for l in read_lines(os.path.join(PKI, "ca-subject-dns.txt")) if l],
             "certificate_policies": [x for x in (env("CAC_CERT_POLICIES", "") or "").split(",") if x],

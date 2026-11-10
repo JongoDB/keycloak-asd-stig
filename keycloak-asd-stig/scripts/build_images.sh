@@ -14,7 +14,7 @@
 #   cosign verify --key cosign.pub --insecure-ignore-tlog=true <ref>   (drop the flag if you set SIGN_TLOG=true) The images run unchanged on Docker, Podman, Kubernetes, OpenShift.
 set -euo pipefail
 SK="$(cd "$(dirname "$0")/.." && pwd)"
-ENGINE=""; REG="localhost"; TAG="26.8.2-stig"; BASE="quay.io/keycloak/keycloak:26.8.2"; FIPS=false; FIPS_MODE=strict
+ENGINE=""; REG="localhost"; TAG="26.8.2-stig"; BASE="quay.io/keycloak/keycloak:26.8.2@sha256:723b1d6e254c0fc96d5cffec860c7e0744d6a3277822b865bb538cf891575e41"; FIPS=false; FIPS_MODE=strict
 PUSH=false; SBOM=false; SIGN=""; OUT="$PWD/dist"; LOOKUP=default
 while [ $# -gt 0 ]; do case "$1" in
   --engine) ENGINE=$2; shift;; --registry) REG=$2; shift;; --tag) TAG=$2; shift;; --base-image) BASE=$2; shift;;

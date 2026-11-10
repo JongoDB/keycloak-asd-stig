@@ -10,6 +10,7 @@ Standard library only. Drives real browser-style logins over HTTPS (with client 
       [--pw-user U --pw-temp-password P --pw-new-password N]       # password+TOTP path (consumes the account)
       [--lockout-user U --lockout-password P]                      # 3 failures then correct password -> must fail
       [--admin-cert a.crt --admin-key a.key]                       # Alt Token into the admin console
+      [--admin-url https://sso-admin:8443]                         # admin console on its own host (hostname-admin)
       [--session-limit 3]
 Each test prints PASS/FAIL with the STIG IDs it exercises; exit code 1 if any test fails.
 """
@@ -91,14 +92,16 @@ class Flow:
     def __init__(self, a):
         self.a = a
         self.base = a.url.rstrip("/")
+        # The admin console may live on a separate hostname (hostname-admin, V-222574); default: the same URL.
+        self.admin_base = (getattr(a, "admin_url", None) or a.url).rstrip("/")
 
-    def auth_url(self, realm=None, client=None, redirect=None, extra=None):
+    def auth_url(self, realm=None, client=None, redirect=None, extra=None, base=None):
         ver = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
         chal = base64.urlsafe_b64encode(hashlib.sha256(ver.encode()).digest()).rstrip(b"=").decode()
         q = {"client_id": client or self.a.client, "redirect_uri": redirect or self.a.redirect, "response_type": "code",
              "scope": "openid", "state": "st", "nonce": "n", "code_challenge": chal, "code_challenge_method": "S256"}
         q.update(extra or {})
-        return "%s/realms/%s/protocol/openid-connect/auth?%s" % (self.base, realm or self.a.realm, urllib.parse.urlencode(q)), ver
+        return "%s/realms/%s/protocol/openid-connect/auth?%s" % (base or self.base, realm or self.a.realm, urllib.parse.urlencode(q)), ver
 
     def finish(self, b, kind, url, page, ctx, stop=None):
         """Walk post-authentication pages (x509 confirm, T&C banner, OTP setup, update password) until redirect."""
@@ -152,9 +155,9 @@ def claims(jwt):
     p = jwt.split(".")[1]
     return json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))
 
-def cac_login(fl, cert, key, realm=None, client=None, redirect=None):
+def cac_login(fl, cert, key, realm=None, client=None, redirect=None, base=None):
     b = Browser(fl.a.cacert, cert, key)
-    url, ver = fl.auth_url(realm, client, redirect)
+    url, ver = fl.auth_url(realm, client, redirect, base=base)
     kind, u, page = b.go(url, None, redirect or fl.a.redirect)
     first = page_id(page) if kind == "page" else kind
     banner = "dod-banner.js" in page if kind == "page" else False
@@ -238,7 +241,7 @@ def main():
         ap.add_argument("--" + o, required=True)
     for o in ("client-secret", "cacert", "cac-cert", "cac-key", "revoked-cert", "revoked-key", "unmapped-cert", "unmapped-key",
               "rogue-cert", "rogue-key", "pw-user", "pw-temp-password", "pw-new-password", "lockout-user", "lockout-password", "admin-cert", "admin-key",
-              "admin-realm", "gateway-url", "gateway-norole-cert", "gateway-norole-key"):
+              "admin-realm", "admin-url", "gateway-url", "gateway-norole-cert", "gateway-norole-key"):
         ap.add_argument("--" + o)
     ap.add_argument("--session-limit", type=int, default=0)
     ap.add_argument("--gateway-idle-wait", type=int, default=0, help="seconds to stay idle before re-requesting through the gateway (set > realm SSO idle)")
@@ -363,11 +366,11 @@ def main():
                "%d of %d logins succeeded; last pages=%s" % (sessions, a.session_limit + 1, last))
 
     if a.admin_cert:
-        adm_redirect = "%s/admin/%s/console/" % (fl.base, a.admin_realm)
-        _, final, seen, _, _ = cac_login(fl, a.admin_cert, a.admin_key, a.admin_realm, "security-admin-console", adm_redirect)
+        adm_redirect = "%s/admin/%s/console/" % (fl.admin_base, a.admin_realm)
+        _, final, seen, _, _ = cac_login(fl, a.admin_cert, a.admin_key, a.admin_realm, "security-admin-console", adm_redirect, base=fl.admin_base)
         report("Admin console via Alt Token", bool(final), "V-222523", "pages=%s" % seen)
         if a.cac_cert:
-            _, final, seen, _, _ = cac_login(fl, a.cac_cert, a.cac_key, a.admin_realm, "security-admin-console", adm_redirect)
+            _, final, seen, _, _ = cac_login(fl, a.cac_cert, a.cac_key, a.admin_realm, "security-admin-console", adm_redirect, base=fl.admin_base)
             report("Everyday CAC cannot reach admin console", not final, "V-222523", "pages=%s" % seen)
 
     if a.lockout_user:

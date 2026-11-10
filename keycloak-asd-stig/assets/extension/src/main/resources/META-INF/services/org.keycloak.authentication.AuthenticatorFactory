@@ -1,0 +1,4 @@
+mil.stig.keycloak.IdpLinkByAdminAttributeAuthenticatorFactory
+mil.stig.keycloak.AdminSecondFactorRequiredAuthenticatorFactory
+mil.stig.keycloak.ConditionalAdministratorAuthenticatorFactory
+mil.stig.keycloak.IdpRequireAdminAttributeMatchAuthenticatorFactory

@@ -30,6 +30,24 @@ db:
   username: keycloak
 bootstrapAdminUsername: bootstrap
 
+# Edge mode: ONLY for an image built with X509_LOOKUP=nginx|haproxy|apache|envoy, where a proxy verifies the card and
+# forwards it in a header that Keycloak then believes. Two controls, both required (the chart refuses to render
+# without them):
+#   - the proxy authenticates at the TLS layer: Keycloak's listener requires a client certificate issued by
+#     proxyCA (Secret key, mounted alone, 0440) and trusts that CA for nothing else. proxyCA must be a DEDICATED CA
+#     that issues the proxy's certificate and nothing else (anything it signs can speak for any card). Or set
+#     proxyCert to pin the proxy's own certificate: then exactly that certificate is accepted;
+#   - only the proxy can reach port 8443: every proxyFrom entry names BOTH a namespace and a pod by labels, the
+#     NetworkPolicy is on and the Service is ClusterIP.
+# Use a proxy DEDICATED to Keycloak that overwrites the certificate header on every request. A shared ingress
+# controller is not acceptable: any tenant's Ingress could set that header (and its client certificate would be
+# the one Keycloak trusts).
+edge:
+  enabled: false
+  proxyCA: {secretName: "", key: ca.crt}   # dedicated CA that issued the proxy's TLS client certificate (not its key)
+  proxyCert: {secretName: "", key: tls.crt} # optional pin: the proxy's client certificate itself (wins over proxyCA)
+  proxyFrom: []                  # [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: iam-edge}}, podSelector: {matchLabels: {app: keycloak-edge-proxy}}}]
+
 service:
   type: LoadBalancer             # CAC needs TLS to reach Keycloak intact: L4/TCP passthrough (NLB, MetalLB, ...)
   port: 443
@@ -42,7 +60,9 @@ dataSizeLimit: 1Gi
 podDisruptionBudget: {minAvailable: 1}
 networkPolicy: {enabled: true}
 # OpenShift (restricted-v2 SCC assigns its own UID): set podSecurityContext to {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
-podSecurityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 0, fsGroup: 0, seccompProfile: {type: RuntimeDefault}}
+# No root group: the image's files are owned by UID 1000, and fsGroup 1000 makes the data volume and the 0440 secret
+# files readable to the pod without group 0.
+podSecurityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
 nodeSelector: {}
 tolerations: []
 affinity: {}

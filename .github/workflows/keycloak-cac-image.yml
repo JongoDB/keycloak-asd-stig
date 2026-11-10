@@ -1,0 +1,164 @@
+# keycloak-cac images: test on every pull request, publish to GHCR from main, deployed BY DIGEST.
+#   guards   render guards + CRL pruning (fast)
+#   build    standard, strict-FIPS and edge (test-only) images, built and LOADED locally, then tested:
+#            compose path with root:1000 0440 secrets (standard), edge-mode mTLS incl. pinning (edge), baked anchors.
+#            No registry credentials: this job holds contents:read only, on pull requests and on main.
+#   publish  main / manual only: rebuild from the build cache, push ghcr.io/<owner>/keycloak-cac with BuildKit SBOM +
+#            SLSA provenance attestations, syft SPDX artifact, cosign signature (when COSIGN_PRIVATE_KEY is set,
+#            no public transparency log). The digest is in the job summary. The package inherits the repository's
+#            visibility (private); keep it private.
+name: keycloak-cac image
+on:
+  pull_request:
+    paths: ["keycloak-cac/**", "keycloak-asd-stig/assets/extension/**", "keycloak-asd-stig/assets/theme/**",
+            "keycloak-asd-stig/scripts/**", "keycloak-asd-stig/references/**", ".github/workflows/keycloak-cac-image.yml"]
+  push:
+    branches: [main]
+    paths: ["keycloak-cac/**", "keycloak-asd-stig/assets/extension/**", "keycloak-asd-stig/assets/theme/**",
+            "keycloak-asd-stig/scripts/**", "keycloak-asd-stig/references/**", ".github/workflows/keycloak-cac-image.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: keycloak-cac-image-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  KEYCLOAK_VERSION: "26.8.2"
+  # same pin as keycloak-cac/Containerfile's KEYCLOAK_IMAGE default
+  KEYCLOAK_BASE: quay.io/keycloak/keycloak:26.8.2@sha256:723b1d6e254c0fc96d5cffec860c7e0744d6a3277822b865bb538cf891575e41
+jobs:
+  guards:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with: {persist-credentials: false}
+      - name: Chart render guards
+        run: keycloak-cac/tests/chart-guards.sh
+      - name: Stale CRLs (issuer no longer an anchor) are pruned
+        run: keycloak-cac/tests/crl-prune.sh
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4.9.1
+        with: {distribution: temurin, java-version: "17"}
+      - name: Public path allowlist (bypass variants refused, the listed realm allowed)
+        run: keycloak-cac/tests/public-path-policy.sh
+      - name: Half or retired allowlist configuration stops the container
+        run: keycloak-cac/tests/allowlist-config.sh
+
+  build:
+    needs: guards
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - {name: standard, args: "FIPS=false", suffix: ""}
+          - {name: fips, args: "FIPS=true", suffix: "-fips"}
+          - {name: edge, args: "X509_LOOKUP=nginx", suffix: "-edge-test"}   # tested, never published
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with: {persist-credentials: false}
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4.9.1
+        with: {distribution: temurin, java-version: "17"}
+      - name: Rebuild stig-extensions.jar from source (against the pinned base image)
+        run: keycloak-asd-stig/assets/extension/build.sh "$KEYCLOAK_BASE"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f   # v3.12.0
+      - name: Build (loaded locally, not pushed)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8        # v6.19.2
+        with:
+          context: .
+          file: keycloak-cac/Containerfile
+          build-args: ${{ matrix.variant.args }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: keycloak-cac:ci${{ matrix.variant.suffix }}
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
+      - name: Trust anchors baked into the image
+        run: docker run --rm --entrypoint cat "keycloak-cac:ci${{ matrix.variant.suffix }}" /opt/keycloak-cac/pki/anchors.txt
+      - name: Compose path (single-file secrets root:1000 0440, user 1000:1000, read-only root)
+        if: matrix.variant.name == 'standard'
+        run: keycloak-cac/tests/compose-path.sh keycloak-cac:ci
+      - name: Edge mode requires the proxy's client certificate (CA and pinned)
+        if: matrix.variant.name == 'edge'
+        run: keycloak-cac/tests/edge-mtls.sh keycloak-cac:ci-edge-test
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - {name: standard, args: "FIPS=false", suffix: ""}
+          - {name: fips, args: "FIPS=true", suffix: "-fips"}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with: {persist-credentials: false}
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4.9.1
+        with: {distribution: temurin, java-version: "17"}
+      - name: Rebuild stig-extensions.jar from source
+        run: keycloak-asd-stig/assets/extension/build.sh "$KEYCLOAK_BASE"
+      - id: owner
+        run: echo "lc=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f   # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9            # v3.7.0
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051          # v5.10.0
+        with:
+          images: ghcr.io/${{ steps.owner.outputs.lc }}/keycloak-cac
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ env.KEYCLOAK_VERSION }}${{ matrix.variant.suffix }},enable={{is_default_branch}}
+            type=sha,prefix=sha-,suffix=${{ matrix.variant.suffix }}
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8        # v6.19.2
+        with:
+          context: .
+          file: keycloak-cac/Containerfile
+          build-args: ${{ matrix.variant.args }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+      - name: SBOM (SPDX JSON, syft)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c             # v0.24.3
+        with:
+          image: ghcr.io/${{ steps.owner.outputs.lc }}/keycloak-cac@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          artifact-name: keycloak-cac-${{ matrix.variant.name }}.spdx.json
+          upload-release-assets: false
+      # Key-based cosign, no Rekor upload: keyless signing would publish this private image's digest and repository
+      # identity to the public transparency log (and GitHub artifact attestations need a public or Enterprise repo).
+      - name: Sign (cosign, key in COSIGN_PRIVATE_KEY, no transparency log)
+        id: sign
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          REF: ghcr.io/${{ steps.owner.outputs.lc }}/keycloak-cac@${{ steps.build.outputs.digest }}
+        run: |
+          if [ -z "$COSIGN_PRIVATE_KEY" ]; then echo "signed=no (COSIGN_PRIVATE_KEY not set)" >> "$GITHUB_OUTPUT"; exit 0; fi
+          curl -fsSL -o cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
+          echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -   # v2.6.5 checksums.txt
+          chmod +x cosign
+          ./cosign sign --yes --key env://COSIGN_PRIVATE_KEY --tlog-upload=false "$REF"
+          echo "signed=yes" >> "$GITHUB_OUTPUT"
+      - name: Digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          OWNER: ${{ steps.owner.outputs.lc }}
+          VARIANT: ${{ matrix.variant.name }}
+          SIGNED: ${{ steps.sign.outputs.signed }}
+        run: |
+          {
+            echo "### keycloak-cac (${VARIANT})"
+            echo "Deploy by digest: \`ghcr.io/${OWNER}/keycloak-cac@${DIGEST}\`"
+            echo "cosign: ${SIGNED}"
+          } >> "$GITHUB_STEP_SUMMARY"

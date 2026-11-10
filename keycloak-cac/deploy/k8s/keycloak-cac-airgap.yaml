@@ -126,8 +126,9 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        fsGroup: 0
-        runAsGroup: 0
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        runAsGroup: 1000
         runAsNonRoot: true
         runAsUser: 1000
         seccompProfile:
@@ -186,10 +187,10 @@ spec:
       volumes:
       - {name: data, emptyDir: {sizeLimit: 1Gi}}
       - {name: tmp, emptyDir: {}}
-      - {name: tls, secret: {secretName: keycloak-cac-tls}}
-      - {name: db, secret: {secretName: keycloak-cac-db}}
-      - {name: bootstrap, secret: {secretName: keycloak-cac-bootstrap}}
-      - {name: automation, secret: {secretName: keycloak-cac-automation}}
+      - {name: tls, secret: {secretName: keycloak-cac-tls, defaultMode: 0440, items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]}}
+      - {name: db, secret: {secretName: keycloak-cac-db, defaultMode: 0440, items: [{key: password, path: password}]}}
+      - {name: bootstrap, secret: {secretName: keycloak-cac-bootstrap, defaultMode: 0440, items: [{key: password, path: password}]}}
+      - {name: automation, secret: {secretName: keycloak-cac-automation, defaultMode: 0440, items: [{key: secret, path: secret}]}}
       - {name: clients, configMap: {name: iam-keycloak-cac-clients}}
       - name: crl
         persistentVolumeClaim:
