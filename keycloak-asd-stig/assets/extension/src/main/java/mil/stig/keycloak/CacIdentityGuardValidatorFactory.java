@@ -105,12 +105,14 @@ public class CacIdentityGuardValidatorFactory implements ValidatorFactory, Simpl
         if (issuer == null || caller == null || !caller.isEnabled()) {
             return false;
         }
-        if (issuer.getId().equals(realm.getId())) {
-            return hasClientRole(caller, issuer.getClientByClientId("realm-management"), "realm-admin");
-        }
+        // A master-realm administrator administers every realm, master included (master has no realm-management
+        // client: its administrators hold the realm role admin). Checked first, so master's own users work too.
         if ("master".equals(issuer.getName())) {
             RoleModel admin = issuer.getRole("admin");
             return admin != null && caller.hasRole(admin);
+        }
+        if (issuer.getId().equals(realm.getId())) {
+            return hasClientRole(caller, issuer.getClientByClientId("realm-management"), "realm-admin");
         }
         return false;
     }
