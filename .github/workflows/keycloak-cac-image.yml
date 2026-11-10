@@ -40,6 +40,8 @@ jobs:
         with: {distribution: temurin, java-version: "17"}
       - name: Public path allowlist (bypass variants refused, the listed realm allowed)
         run: keycloak-cac/tests/public-path-policy.sh
+      - name: Half or retired allowlist configuration stops the container
+        run: keycloak-cac/tests/allowlist-config.sh
 
   build:
     needs: guards

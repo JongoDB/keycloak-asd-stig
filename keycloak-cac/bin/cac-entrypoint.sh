@@ -55,6 +55,19 @@ if [ "$LOOKUP" != default ]; then
 elif [ -n "${CAC_EDGE_PROXY_CA_FILE:-}${CAC_EDGE_PROXY_CERT_FILE:-}" ]; then
   log "WARN CAC_EDGE_PROXY_CA_FILE/CAC_EDGE_PROXY_CERT_FILE have no effect: this image reads the card from its own TLS handshake (passthrough)"
 fi
+# ---- network path allowlist (stig-extensions PublicPathAllowlistFilter): both variables or neither. A half
+#      configuration, or the retired STIG_ADMIN_REALM_ALLOWED_SOURCES alone, would silently leave the filter off.
+# >>> allowlist-config
+if [ -n "${STIG_ADMIN_REALM_ALLOWED_SOURCES:-}" ] && { [ -z "${STIG_PUBLIC_PATHS:-}" ] || [ -z "${STIG_TRUSTED_SOURCES:-}" ]; }; then
+  die "STIG_ADMIN_REALM_ALLOWED_SOURCES was replaced: set STIG_TRUSTED_SOURCES (the same addresses) and STIG_PUBLIC_PATHS (the paths network clients may use, e.g. /realms/<realm>,/realms/<realm>/,/admin/<realm>/,/admin/realms/<realm>/,/admin/serverinfo,/resources/). Without them the admin realm would be reachable from the network."
+fi
+if [ -n "${STIG_PUBLIC_PATHS:-}" ] && [ -z "${STIG_TRUSTED_SOURCES:-}" ]; then
+  die "STIG_PUBLIC_PATHS is set but STIG_TRUSTED_SOURCES is not: the allowlist filter needs both (it would stay off)"
+fi
+if [ -z "${STIG_PUBLIC_PATHS:-}" ] && [ -n "${STIG_TRUSTED_SOURCES:-}" ]; then
+  die "STIG_TRUSTED_SOURCES is set but STIG_PUBLIC_PATHS is not: the allowlist filter needs both (it would stay off)"
+fi
+# <<< allowlist-config
 REL="${KC_HTTP_RELATIVE_PATH:-/}"; REL="${REL%/}"
 [ -n "${CAC_PUBLIC_URL:-}" ] && [ -z "${KC_HOSTNAME:-}" ] && export KC_HOSTNAME="$CAC_PUBLIC_URL"
 if [ -z "${KC_HOSTNAME:-}" ]; then
