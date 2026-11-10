@@ -265,8 +265,8 @@ X509_FORMS = {"auth-x509-client-username-form", "stig-x509-client-username-form"
 RESET_GATE = "stig-admin-reset-credentials-gate"
 
 def reset_flow(extension):
-    """Reset credentials (only reachable when resetPasswordAllowed): no e-mail for an administrator without a second
-    factor, and a held OTP is asked for after the e-mailed link (never reset by it, as Keycloak's own flow does)."""
+    """Reset credentials (only reachable when resetPasswordAllowed): no self-service reset for any administrator, and
+    a held OTP is asked for after the e-mailed link (never reset by it, as Keycloak's own flow does)."""
     if not extension:
         return None
     return ("STIG Reset Credentials", [

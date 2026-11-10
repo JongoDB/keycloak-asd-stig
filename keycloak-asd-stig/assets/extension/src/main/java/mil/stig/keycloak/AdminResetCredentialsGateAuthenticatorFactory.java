@@ -17,9 +17,9 @@ import org.keycloak.provider.ProviderConfigProperty;
 import org.keycloak.services.messages.Messages;
 
 /**
- * Reset-credentials flow, between "choose user" and "send e-mail": an administrator with no enrolled second factor
- * gets NO reset e-mail, and the same "you should receive an e-mail" page anyone else gets (no enumeration). An
- * administrator never sets a password through an e-mailed link and then enrols a second factor on its strength.
+ * Reset-credentials flow, between "choose user" and "send e-mail": an ADMINISTRATOR (any realm-management role) gets
+ * NO self-service reset e-mail, whatever factors it holds (OTP, WebAuthn, card), and the same "you should receive an
+ * e-mail" page anyone else gets (no enumeration). Administrators recover through the operator.
  * Logged as STIG-ADMIN-RESET-REFUSED.
  */
 public class AdminResetCredentialsGateAuthenticatorFactory implements Authenticator, AuthenticatorFactory {
@@ -29,8 +29,8 @@ public class AdminResetCredentialsGateAuthenticatorFactory implements Authentica
     @Override
     public void authenticate(AuthenticationFlowContext context) {
         UserModel user = context.getUser();
-        if (user != null && StigAdministrators.isAdministrator(context.getRealm(), user) && !StigAdministrators.hasSecondFactor(user)) {
-            LOG.warnf("STIG-ADMIN-RESET-REFUSED realm=%s user=%s: no reset e-mail for an administrator without an enrolled second factor",
+        if (user != null && StigAdministrators.isAdministrator(context.getRealm(), user)) {
+            LOG.warnf("STIG-ADMIN-RESET-REFUSED realm=%s user=%s: no self-service reset e-mail for an administrator",
                     context.getRealm().getName(), user.getUsername());
             context.forkWithSuccessMessage(new FormMessage(Messages.EMAIL_SENT));
             return;
@@ -47,7 +47,7 @@ public class AdminResetCredentialsGateAuthenticatorFactory implements Authentica
     @Override public void init(Config.Scope config) { }
     @Override public void postInit(KeycloakSessionFactory factory) { }
     @Override public String getId() { return ID; }
-    @Override public String getDisplayType() { return "Reset: no e-mail for an administrator without a second factor"; }
+    @Override public String getDisplayType() { return "Reset: no self-service reset for administrators"; }
     @Override public String getReferenceCategory() { return null; }
     @Override public boolean isConfigurable() { return false; }
     @Override public AuthenticationExecutionModel.Requirement[] getRequirementChoices() {
