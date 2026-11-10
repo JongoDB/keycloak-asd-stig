@@ -134,6 +134,7 @@ if [ "${KC_FIPS_MODE:-}" = strict ]; then
     local k=(); [ -n "${5:-}" ] && k=(-srcalias "$5" -destalias "$5" -srckeypass "$2" -destkeypass "$4")
     rm -f "$3"; keytool -importkeystore -noprompt -srckeystore "$1" -srcstoretype PKCS12 -srcstorepass "$2" \
       -destkeystore "$3" -deststoretype BCFKS -deststorepass "$4" ${k[@]+"${k[@]}"} -providername BCFIPS \
+      -J-Dorg.bouncycastle.native.cpu_variant=java \
       -providerclass org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider -providerpath "$BCJAR" >/dev/null 2>&1 \
       || die "could not convert $1 to BCFKS"
   }
