@@ -33,6 +33,8 @@ jobs:
         with: {persist-credentials: false}
       - name: Chart render guards
         run: keycloak-cac/tests/chart-guards.sh
+      - name: Stale CRLs (issuer no longer an anchor) are pruned
+        run: keycloak-cac/tests/crl-prune.sh
       - name: Edge mode requires the proxy's client certificate
         run: keycloak-cac/tests/edge-mtls.sh
   image:

@@ -156,6 +156,9 @@ if [ -z "$MODE" ]; then   # lab: the mock CA's CRL; lab + real cards: DoD CRLs t
 fi
 MODE="${MODE,,}"; case "$MODE" in offline|local) MODE=file;; disabled|off) MODE=none;; esac; export CRL_MODE="$MODE"
 mkdir -p "$D/crl"
+# A data directory that survived a restart or an image upgrade may hold CRLs of CAs that are no longer anchors;
+# a single one makes Keycloak refuse every card. Remove them before Keycloak (or the profile) sees the directory.
+"$TOOLS/cac-pki.sh" crl-prune "$D/crl" "$D/anchors"
 CRL_SRC="${CAC_CRL_DIR:-/crl}"; $LAB && [ -z "${CAC_CRL_DIR:-}" ] && [ -d "$D/lab/conf/crl" ] && CRL_SRC="$D/lab/conf/crl"
 crl_refresh() {
   case "$MODE" in

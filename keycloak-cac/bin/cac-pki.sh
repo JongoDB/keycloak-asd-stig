@@ -8,6 +8,7 @@
 #                                                 crl-names.txt (CRL file names the issuing CAs publish)
 #   cac-pki.sh crl-fetch <anchors-dir> <crl-dir>  download + signature-check the CRLs of the issuing CAs (online mode)
 #   cac-pki.sh crl-sync  <src-dir> <anchors-dir> <crl-dir>   copy signature-checked CRLs from a mounted dir (air-gapped)
+#   cac-pki.sh crl-prune <crl-dir> <anchors-dir>  delete CRLs whose issuer is no longer an anchor (also after fetch/sync)
 #   cac-pki.sh crl-health <crl-dir>               exit 1 if a CRL expires within 24h
 #
 # Every anchor must be a CA certificate. A zip that ships a signed SHA-256 manifest (the DISA bundles do) must verify.
@@ -131,6 +132,16 @@ crl_ok() { # crl anchors-pem -> installs only if the signature verifies against 
   openssl crl -inform $fmt -in "$1" -CAfile "$2" -noout 2>&1 | grep -q 'verify OK'
 }
 
+# Keycloak evaluates EVERY configured CRL on every card login, and one whose issuer is not a trust anchor throws
+# "crlSignatureCertificates is null": every card is then refused. A CRL left behind by a CA that is no longer an
+# anchor (an image upgrade that retired it, lab files on a persisted volume) must therefore be removed, not kept.
+cmd_crl_prune() { # crl-dir anchors-dir -> delete every *.crl that does not verify against the current anchors
+  local d="$1" a="$2" w n=0; [ -d "$d" ] || return 0; w=$(mktemp -d); cat "$a"/*.pem > "$w/anchors.pem"
+  for f in "$d"/*.crl; do [ -e "$f" ] || continue
+    crl_ok "$f" "$w/anchors.pem" || { rm -f "$f"; n=$((n+1)); log "STIG-CRL-PRUNED $(basename "$f"): issuer is not a current trust anchor - removed"; }
+  done; rm -rf "$w"; [ $n -eq 0 ] || log "CRLs pruned: $n"
+}
+
 cmd_crl_fetch() {
   local a="$1" d="$2" w; w=$(mktemp -d); mkdir -p "$d"; cat "$a"/*.pem > "$w/anchors.pem"
   local ok=0 bad=0
@@ -142,6 +153,7 @@ cmd_crl_fetch() {
     else log "WARN $n.crl: download or signature check failed - keeping cached copy"; bad=$((bad+1)); fi
   done
   rm -rf "$w"; log "CRLs refreshed: $ok ok, $bad failed (from $CRL_BASE)"
+  cmd_crl_prune "$d" "$a"
 }
 
 cmd_crl_sync() {
@@ -153,6 +165,7 @@ cmd_crl_sync() {
     else log "STIG-CRL-UNTRUSTED $(basename "$f"): issuer not trusted or bad signature - NOT installed"; fi
   done
   rm -rf "$w"; log "CRLs synced from $src: $ok installed"
+  cmd_crl_prune "$d" "$a"
 }
 
 cmd_crl_health() {
@@ -167,5 +180,5 @@ cmd_crl_health() {
 c="${1:-}"; shift || true
 case "$c" in
   bundle) cmd_bundle "$@";; compile) cmd_compile "$@";; crl-fetch) cmd_crl_fetch "$@";;
-  crl-sync) cmd_crl_sync "$@";; crl-health) cmd_crl_health "$@";; *) sed -n '2,13p' "$0"; exit 2;;
+  crl-sync) cmd_crl_sync "$@";; crl-prune) cmd_crl_prune "$@";; crl-health) cmd_crl_health "$@";; *) sed -n '2,14p' "$0"; exit 2;;
 esac
