@@ -427,6 +427,10 @@ class KC:
             # In-container automation over loopback only (keycloak-cac image): the server certificate names the
             # public host, not 127.0.0.1. Never honoured for any other host.
             self.ctx.check_hostname = False; self.ctx.verify_mode = ssl.CERT_NONE
+            # Edge-mode keycloak-cac requires a TLS client certificate on its listener; the container presents its
+            # own per-start loopback certificate for these calls.
+            if os.environ.get("KCSTIG_CLIENT_CERT") and os.environ.get("KCSTIG_CLIENT_KEY"):
+                self.ctx.load_cert_chain(os.environ["KCSTIG_CLIENT_CERT"], os.environ["KCSTIG_CLIENT_KEY"])
         self.token = None
 
     def login(self):

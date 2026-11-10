@@ -60,7 +60,7 @@ spec:
         - {name: KC_BOOTSTRAP_ADMIN_PASSWORD_FILE, value: /run/secrets/bootstrap/password}
         - {name: CAC_AUTOMATION_SECRET_FILE, value: /run/secrets/automation/secret}
         {{- if .Values.edge.enabled }}
-        - {name: CAC_EDGE_TRUSTED_PROXY, value: "true"}   # port 8443 admits only edge.proxyFrom (NetworkPolicy)
+        - {name: CAC_EDGE_PROXY_CA_FILE, value: /run/secrets/edge-proxy-ca/ca.crt}   # listener requires the proxy's client cert
         {{- end }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
@@ -86,6 +86,9 @@ spec:
         - {name: bootstrap, mountPath: /run/secrets/bootstrap, readOnly: true}
         - {name: automation, mountPath: /run/secrets/automation, readOnly: true}
         - {name: clients, mountPath: /clients, readOnly: true}
+        {{- if .Values.edge.enabled }}
+        - {name: edge-proxy-ca, mountPath: /run/secrets/edge-proxy-ca, readOnly: true}
+        {{- end }}
         {{- if .Values.extraAnchors }}
         - {name: extra-anchors, mountPath: /extra-anchors, readOnly: true}
         {{- end }}
@@ -102,6 +105,9 @@ spec:
       - {name: bootstrap, secret: {secretName: {{ .Values.secrets.bootstrap }}, defaultMode: 0440, items: [{key: password, path: password}]}}
       - {name: automation, secret: {secretName: {{ .Values.secrets.automation }}, defaultMode: 0440, items: [{key: secret, path: secret}]}}
       - {name: clients, configMap: {name: {{ include "kcc.name" . }}-clients}}
+      {{- if .Values.edge.enabled }}
+      - {name: edge-proxy-ca, secret: {secretName: {{ .Values.edge.proxyCA.secretName }}, defaultMode: 0440, items: [{key: {{ .Values.edge.proxyCA.key }}, path: ca.crt}]}}
+      {{- end }}
       {{- if .Values.extraAnchors }}
       - {name: extra-anchors, configMap: {name: {{ include "kcc.name" . }}-anchors}}
       {{- end }}

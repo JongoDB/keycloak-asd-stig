@@ -23,7 +23,20 @@ concurrency:
 env:
   KEYCLOAK_VERSION: "26.8.2"
 jobs:
+  guards:
+    # Render guards (edge mode needs mTLS + NetworkPolicy, single-key secrets, no root group) and the behavioural
+    # edge-mode test (no/rogue client certificate refused, proxy certificate accepted).
+    runs-on: ubuntu-24.04
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with: {persist-credentials: false}
+      - name: Chart render guards
+        run: keycloak-cac/tests/chart-guards.sh
+      - name: Edge mode requires the proxy's client certificate
+        run: keycloak-cac/tests/edge-mtls.sh
   image:
+    needs: guards
     runs-on: ubuntu-24.04
     permissions:
       contents: read

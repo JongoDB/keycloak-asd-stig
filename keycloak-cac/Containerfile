@@ -73,10 +73,13 @@ RUN if [ "$FIPS" = "true" ]; then cp /tmp/fips/*.jar /opt/keycloak/providers/; f
 USER 1000
 ENV KC_DB=${KC_DB} KC_HTTP_RELATIVE_PATH=${KC_HTTP_RELATIVE_PATH} KC_HEALTH_ENABLED=true KC_METRICS_ENABLED=true \
     KC_HTTPS_CLIENT_AUTH=request KC_HTTPS_MANAGEMENT_CLIENT_AUTH=none KC_LOG_MDC_ENABLED=true
+# Edge images (X509_LOOKUP != default) take the card from a header, so the listener REQUIRES a TLS client
+# certificate: the verifying proxy's (CAC_EDGE_PROXY_CA_FILE at run time). Passthrough images only request one.
 RUN set -e; if [ "$FIPS" = "true" ]; then export KC_FEATURES=fips KC_FIPS_MODE=$FIPS_MODE; fi; \
     export KC_SPI_X509CERT_LOOKUP__PROVIDER=$X509_LOOKUP; \
+    if [ "$X509_LOOKUP" != default ]; then export KC_HTTPS_CLIENT_AUTH=required; else export KC_HTTPS_CLIENT_AUTH=request; fi; \
     /opt/keycloak/bin/kc.sh build; \
-    { echo "KC_DB=$KC_DB"; echo "KC_HTTP_RELATIVE_PATH=$KC_HTTP_RELATIVE_PATH"; \
+    { echo "KC_DB=$KC_DB"; echo "KC_HTTP_RELATIVE_PATH=$KC_HTTP_RELATIVE_PATH"; echo "KC_HTTPS_CLIENT_AUTH=$KC_HTTPS_CLIENT_AUTH"; \
       echo "KC_SPI_X509CERT_LOOKUP__PROVIDER=$X509_LOOKUP"; [ "$FIPS" = "true" ] && echo "KC_FEATURES=fips" && echo "KC_FIPS_MODE=$FIPS_MODE"; true; } \
       > /opt/keycloak/conf/cac-build-options.env
 
@@ -111,7 +114,7 @@ ENV KC_HTTP_ENABLED=false KC_HTTPS_PORT=8443 KC_HTTPS_PROTOCOLS=TLSv1.3,TLSv1.2 
     KC_SPI_EVENTS_LISTENER__WORKFLOW_EVENT_LISTENER__STEP_RUNNER_TASK_INTERVAL=900 \
     KC_CACHE=ispn KC_CACHE_STACK=jdbc-ping \
     KC_DB=${KC_DB} KC_HTTP_RELATIVE_PATH=${KC_HTTP_RELATIVE_PATH} KC_SPI_X509CERT_LOOKUP__PROVIDER=${X509_LOOKUP} \
-    KC_HEALTH_ENABLED=true KC_METRICS_ENABLED=true KC_HTTPS_CLIENT_AUTH=request KC_HTTPS_MANAGEMENT_CLIENT_AUTH=none \
+    KC_HEALTH_ENABLED=true KC_METRICS_ENABLED=true KC_HTTPS_MANAGEMENT_CLIENT_AUTH=none \
     KC_LOG_MDC_ENABLED=true \
     CAC_REALM=dod-cac CRL_MODE= CAC_USERNAME_SOURCE=upn
 HEALTHCHECK --interval=15s --timeout=10s --start-period=180s --retries=4 CMD ["/opt/keycloak-cac/bin/cac-entrypoint.sh", "health"]

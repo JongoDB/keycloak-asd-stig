@@ -31,12 +31,19 @@ db:
 bootstrapAdminUsername: bootstrap
 
 # Edge mode: ONLY for an image built with X509_LOOKUP=nginx|haproxy|apache|envoy, where a proxy verifies the card and
-# forwards it in a header. Keycloak then believes that header, so port 8443 must be reachable from the proxy alone:
-# the chart refuses to render unless every proxyFrom entry names BOTH a namespace and a pod by labels, the
-# NetworkPolicy is on and the Service is ClusterIP. Leave disabled for the default (TLS passthrough) image.
+# forwards it in a header that Keycloak then believes. Two controls, both required (the chart refuses to render
+# without them):
+#   - the proxy authenticates at the TLS layer: Keycloak's listener requires a client certificate issued by
+#     proxyCA (Secret key, mounted alone, 0440) and trusts that CA for nothing else;
+#   - only the proxy can reach port 8443: every proxyFrom entry names BOTH a namespace and a pod by labels, the
+#     NetworkPolicy is on and the Service is ClusterIP.
+# Use a proxy DEDICATED to Keycloak that overwrites the certificate header on every request. A shared ingress
+# controller is not acceptable: any tenant's Ingress could set that header (and its client certificate would be
+# the one Keycloak trusts).
 edge:
   enabled: false
-  proxyFrom: []                  # [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}, podSelector: {matchLabels: {app.kubernetes.io/name: ingress-nginx}}}]
+  proxyCA: {secretName: "", key: ca.crt}   # CA that issued the proxy's TLS client certificate (not its private key)
+  proxyFrom: []                  # [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: iam-edge}}, podSelector: {matchLabels: {app: keycloak-edge-proxy}}}]
 
 service:
   type: LoadBalancer             # CAC needs TLS to reach Keycloak intact: L4/TCP passthrough (NLB, MetalLB, ...)

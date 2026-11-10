@@ -59,7 +59,7 @@ docker compose up -d             # podman compose works too; --scale keycloak=2 
 **CAC needs TLS to reach Keycloak unbroken.** Use one of these:
 - Expose port 8443 directly.
 - Use a Layer-4/TCP passthrough load balancer (an NLB, MetalLB, or HAProxy in TCP mode).
-- Build with `X509_LOOKUP=nginx` (or haproxy, apache, envoy), so that a proxy verifies the card and forwards it in a header. Keycloak then believes that header, so only the proxy may reach it: no published port (`compose.edge.yaml`), or the chart's `edge.proxyFrom` NetworkPolicy. The image refuses to start in that mode until `CAC_EDGE_TRUSTED_PROXY=true` says so.
+- Build with `X509_LOOKUP=nginx` (or haproxy, apache, envoy), so that a proxy verifies the card and forwards it in a header. Keycloak then believes that header, so the proxy must authenticate with a TLS client certificate (`CAC_EDGE_PROXY_CA_FILE`; the image refuses to start without it) and be the only thing that can reach Keycloak: no published port (`compose.edge.yaml`), or the chart's `edge.proxyFrom` NetworkPolicy. Use a proxy dedicated to Keycloak that overwrites the header on every request. A shared ingress controller is not acceptable, because any tenant's Ingress could set the header.
 
 An L7 ingress or ALB that decrypts traffic and forwards nothing breaks CAC login.
 
@@ -107,7 +107,7 @@ The fields are documented in `keycloak-asd-stig/references/profile.md` under cli
 | `CAC_TRUST_ANCHORS_DIR` | | **Replaces** the baked DoD bundle with these zip, p7b or PEM files. |
 | `CAC_EXTRA_ANCHORS_DIR` | | **Adds** CAs, for example ECA or a partner PKI. Their fingerprints are logged. |
 | `CAC_APPLY` | `true` | `false` leaves the realm alone, which suits GitOps-managed realms. |
-| `CAC_EDGE_TRUSTED_PROXY` | `false` | Edge images only (`X509_LOOKUP` other than `default`): states that port 8443 is reachable from the verifying proxy alone. Such an image refuses to start without it, because it believes the certificate header. See `deploy/compose/compose.edge.yaml` and the chart's `edge:` values. |
+| `CAC_EDGE_PROXY_CA_FILE` | | Edge images only (`X509_LOOKUP` other than `default`): the CA that issued the verifying proxy's TLS client certificate. The listener then **requires** a client certificate from that CA (edge builds bake `https-client-auth=required`) and trusts it for that hop only; cards are still checked against the DoD anchors. Such an image refuses to start without it. See `deploy/compose/compose.edge.yaml` and the chart's `edge:` values. |
 | `CAC_LAB_MODE` | `false` | Generates a mock CAC PKI and a self-issued server certificate, and allows `CRL_MODE=none` and dev databases. |
 | `CAC_LAB_TRUST_DOD` | `false` | Lab mode: also trusts the baked DoD bundle, so a real card works. |
 | `KC_HTTP_RELATIVE_PATH`, `KC_DB` | `/`, `postgres` | Keycloak build-time options. A different value at run time triggers an automatic rebuild at startup, which is slower and needs a writable `/opt/keycloak/lib`. For production, use the build argument instead. |

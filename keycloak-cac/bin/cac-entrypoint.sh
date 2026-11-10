@@ -39,15 +39,17 @@ while IFS='=' read -r k v; do
   fi
 done < /opt/keycloak-cac/build-options.env
 # ---- edge mode: an image built with X509_LOOKUP=nginx|haproxy|apache|envoy takes the client certificate from a
-#      request HEADER. Anyone who can reach port 8443 directly could then claim any card, so the operator must
-#      state that only the verifying proxy can reach it (NetworkPolicy / no published port), or we refuse to start.
+#      request HEADER. Network isolation alone is not enough (a shared ingress controller lets any tenant's Ingress
+#      set that header), so the proxy must authenticate itself with a TLS client certificate issued by
+#      CAC_EDGE_PROXY_CA_FILE: Keycloak's listener then requires one (KC_HTTPS_CLIENT_AUTH=required, baked into
+#      edge builds) and trusts that CA ONLY for the TLS hop. Cards are still validated against the DoD anchors.
 LOOKUP="${KC_SPI_X509CERT_LOOKUP__PROVIDER:-default}"
-if [ "$LOOKUP" != default ] && ! truthy "${CAC_EDGE_TRUSTED_PROXY:-false}"; then
-  $LAB || die "this image reads the client certificate from a header (X509_LOOKUP=$LOOKUP). Expose port 8443 to the verifying proxy ONLY (no published port, a NetworkPolicy admitting just the proxy), then set CAC_EDGE_TRUSTED_PROXY=true. Without a proxy, use the default (passthrough) image."
-  log "WARN lab: X509_LOOKUP=$LOOKUP without CAC_EDGE_TRUSTED_PROXY=true: a forged header would be believed"
-fi
-if [ "$LOOKUP" = default ] && truthy "${CAC_EDGE_TRUSTED_PROXY:-false}"; then
-  log "WARN CAC_EDGE_TRUSTED_PROXY=true has no effect: this image reads the card from its own TLS handshake (passthrough)"
+if [ "$LOOKUP" != default ]; then
+  [ "${KC_HTTPS_CLIENT_AUTH:-}" = required ] || die "X509_LOOKUP=$LOOKUP needs an image built with KC_HTTPS_CLIENT_AUTH=required (rebuild with this Containerfile)"
+  [ -n "${CAC_EDGE_PROXY_CA_FILE:-}" ] || die "this image reads the client certificate from a header (X509_LOOKUP=$LOOKUP): set CAC_EDGE_PROXY_CA_FILE to the CA that issued the verifying proxy's TLS client certificate. Keycloak then accepts connections from that proxy only. Use a proxy dedicated to Keycloak that overwrites the header on every request. Without a proxy, use the default (passthrough) image."
+  [ -r "$CAC_EDGE_PROXY_CA_FILE" ] || die "CAC_EDGE_PROXY_CA_FILE=$CAC_EDGE_PROXY_CA_FILE is not readable"
+elif [ -n "${CAC_EDGE_PROXY_CA_FILE:-}" ]; then
+  log "WARN CAC_EDGE_PROXY_CA_FILE has no effect: this image reads the card from its own TLS handshake (passthrough)"
 fi
 REL="${KC_HTTP_RELATIVE_PATH:-/}"; REL="${REL%/}"
 [ -n "${CAC_PUBLIC_URL:-}" ] && [ -z "${KC_HOSTNAME:-}" ] && export KC_HOSTNAME="$CAC_PUBLIC_URL"
@@ -82,6 +84,26 @@ export PKI_P12_PASSWORD="${CAC_CLIENT_CA_PASSWORD:-cac-anchors}"
 "$TOOLS/cac-pki.sh" compile "$D/anchors" "$D"
 export KC_TRUSTSTORE_PATHS="$D/anchors" KC_HTTPS_TRUST_STORE_FILE="$D/client-ca.p12" KC_HTTPS_TRUST_STORE_PASSWORD="$PKI_P12_PASSWORD"
 log "trust anchors ready: $(ls "$D/anchors" | wc -l) CAs, pinned roots: $(tr '\n' ';' < "$D/ca-subject-dns.txt")"
+
+# ---- edge mode: the TLS listener trusts the proxy's CA and a per-start loopback CA (for this container's own admin
+#      calls), nothing else. The loopback CA's key never leaves the container's data directory and changes each start.
+if [ "$LOOKUP" != default ]; then
+  E="$D/edge"; rm -rf "$E"; mkdir -p "$E/trust"; chmod 700 "$E"
+  openssl x509 -in "$CAC_EDGE_PROXY_CA_FILE" -noout -ext basicConstraints 2>/dev/null | grep -q 'CA:TRUE' \
+    || die "CAC_EDGE_PROXY_CA_FILE must be a CA certificate (basicConstraints CA:TRUE)"
+  cp "$CAC_EDGE_PROXY_CA_FILE" "$E/trust/proxy-ca.pem"
+  ( umask 077
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 -sha256 -subj "/CN=keycloak-cac loopback CA" \
+      -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign -keyout "$E/loopback-ca.key" -out "$E/trust/loopback-ca.pem" 2>/dev/null
+    openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=keycloak-cac loopback" -keyout "$E/loopback.key" -out "$E/loopback.csr" 2>/dev/null
+    printf 'extendedKeyUsage=clientAuth\nkeyUsage=critical,digitalSignature\n' > "$E/ext.cnf"
+    openssl x509 -req -in "$E/loopback.csr" -CA "$E/trust/loopback-ca.pem" -CAkey "$E/loopback-ca.key" -CAcreateserial -days 30 -sha256 \
+      -extfile "$E/ext.cnf" -out "$E/loopback.crt" 2>/dev/null
+    rm -f "$E/loopback-ca.key" "$E/loopback.csr" "$E/ext.cnf" ) || die "could not create the loopback client certificate"
+  "$TOOLS/cac-pki.sh" compile "$E/trust" "$E"
+  export KC_HTTPS_TRUST_STORE_FILE="$E/client-ca.p12" KCSTIG_CLIENT_CERT="$E/loopback.crt" KCSTIG_CLIENT_KEY="$E/loopback.key"
+  log "edge mode: listener requires a client certificate from the proxy CA ($(openssl x509 -in "$E/trust/proxy-ca.pem" -noout -subject -nameopt RFC2253)); card header via $LOOKUP"
+fi
 
 # ---- server TLS certificate
 if [ -n "${CAC_TLS_CERT_PEM:-}" ]; then   # platforms that inject secrets as env only (ECS, some PaaS)
@@ -119,12 +141,12 @@ if [ "${KC_FIPS_MODE:-}" = strict ]; then
   ( umask 077; openssl pkcs12 -export -inkey "$KC_HTTPS_CERTIFICATE_KEY_FILE" -in "$KC_HTTPS_CERTIFICATE_FILE" -name server \
       -passout "pass:$TMPP" -out "$D/fips/server.p12" ) || die "cannot read the server certificate/key"
   to_bcfks "$D/fips/server.p12" "$TMPP" "$D/fips/server.bcfks" "$KSP" server; rm -f "$D/fips/server.p12"
-  to_bcfks "$D/client-ca.p12" "$PKI_P12_PASSWORD" "$D/fips/client-ca.bcfks" "$KSP"
+  to_bcfks "$KC_HTTPS_TRUST_STORE_FILE" "$PKI_P12_PASSWORD" "$D/fips/client-ca.bcfks" "$KSP"   # DoD anchors, or the proxy CA in edge mode
   # Keep the PEM paths for validation above; Keycloak itself gets the BCFKS stores only.
   PEM_CERT="$KC_HTTPS_CERTIFICATE_FILE"; PEM_KEY="$KC_HTTPS_CERTIFICATE_KEY_FILE"; unset KC_HTTPS_CERTIFICATE_FILE KC_HTTPS_CERTIFICATE_KEY_FILE
   export KC_HTTPS_KEY_STORE_FILE="$D/fips/server.bcfks" KC_HTTPS_KEY_STORE_PASSWORD="$KSP" KC_HTTPS_KEY_STORE_TYPE=bcfks \
          KC_HTTPS_TRUST_STORE_FILE="$D/fips/client-ca.bcfks" KC_HTTPS_TRUST_STORE_PASSWORD="$KSP" KC_HTTPS_TRUST_STORE_TYPE=bcfks
-  log "strict FIPS: server key store and DoD-only client trust store converted to BCFKS"
+  log "strict FIPS: server key store and TLS client trust store converted to BCFKS"
 fi
 
 # ---- 3. revocation data
