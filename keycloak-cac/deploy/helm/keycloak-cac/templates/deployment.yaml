@@ -1,3 +1,4 @@
+{{- include "kcc.guards" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -58,6 +59,9 @@ spec:
         - {name: KC_BOOTSTRAP_ADMIN_USERNAME, value: {{ .Values.bootstrapAdminUsername | quote }}}
         - {name: KC_BOOTSTRAP_ADMIN_PASSWORD_FILE, value: /run/secrets/bootstrap/password}
         - {name: CAC_AUTOMATION_SECRET_FILE, value: /run/secrets/automation/secret}
+        {{- if .Values.edge.enabled }}
+        - {name: CAC_EDGE_TRUSTED_PROXY, value: "true"}   # port 8443 admits only edge.proxyFrom (NetworkPolicy)
+        {{- end }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -91,10 +95,12 @@ spec:
       volumes:
       - {name: data, emptyDir: {sizeLimit: {{ .Values.dataSizeLimit }}}}
       - {name: tmp, emptyDir: {}}
-      - {name: tls, secret: {secretName: {{ .Values.secrets.tls }}}}
-      - {name: db, secret: {secretName: {{ .Values.secrets.db }}}}
-      - {name: bootstrap, secret: {secretName: {{ .Values.secrets.bootstrap }}}}
-      - {name: automation, secret: {secretName: {{ .Values.secrets.automation }}}}
+      # Only the named keys, read-only to the owner and the pod's group (0440): nothing else stored in the Secret
+      # (a ca.crt, another app's key) is exposed to the container.
+      - {name: tls, secret: {secretName: {{ .Values.secrets.tls }}, defaultMode: 0440, items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]}}
+      - {name: db, secret: {secretName: {{ .Values.secrets.db }}, defaultMode: 0440, items: [{key: password, path: password}]}}
+      - {name: bootstrap, secret: {secretName: {{ .Values.secrets.bootstrap }}, defaultMode: 0440, items: [{key: password, path: password}]}}
+      - {name: automation, secret: {secretName: {{ .Values.secrets.automation }}, defaultMode: 0440, items: [{key: secret, path: secret}]}}
       - {name: clients, configMap: {name: {{ include "kcc.name" . }}-clients}}
       {{- if .Values.extraAnchors }}
       - {name: extra-anchors, configMap: {name: {{ include "kcc.name" . }}-anchors}}

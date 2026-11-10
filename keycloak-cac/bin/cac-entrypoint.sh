@@ -38,6 +38,17 @@ while IFS='=' read -r k v; do
     log "  for production build the image with that value instead, see README 'Build arguments')"; OPTIMIZED=""
   fi
 done < /opt/keycloak-cac/build-options.env
+# ---- edge mode: an image built with X509_LOOKUP=nginx|haproxy|apache|envoy takes the client certificate from a
+#      request HEADER. Anyone who can reach port 8443 directly could then claim any card, so the operator must
+#      state that only the verifying proxy can reach it (NetworkPolicy / no published port), or we refuse to start.
+LOOKUP="${KC_SPI_X509CERT_LOOKUP__PROVIDER:-default}"
+if [ "$LOOKUP" != default ] && ! truthy "${CAC_EDGE_TRUSTED_PROXY:-false}"; then
+  $LAB || die "this image reads the client certificate from a header (X509_LOOKUP=$LOOKUP). Expose port 8443 to the verifying proxy ONLY (no published port, a NetworkPolicy admitting just the proxy), then set CAC_EDGE_TRUSTED_PROXY=true. Without a proxy, use the default (passthrough) image."
+  log "WARN lab: X509_LOOKUP=$LOOKUP without CAC_EDGE_TRUSTED_PROXY=true: a forged header would be believed"
+fi
+if [ "$LOOKUP" = default ] && truthy "${CAC_EDGE_TRUSTED_PROXY:-false}"; then
+  log "WARN CAC_EDGE_TRUSTED_PROXY=true has no effect: this image reads the card from its own TLS handshake (passthrough)"
+fi
 REL="${KC_HTTP_RELATIVE_PATH:-/}"; REL="${REL%/}"
 [ -n "${CAC_PUBLIC_URL:-}" ] && [ -z "${KC_HOSTNAME:-}" ] && export KC_HOSTNAME="$CAC_PUBLIC_URL"
 if [ -z "${KC_HOSTNAME:-}" ]; then

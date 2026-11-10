@@ -45,6 +45,7 @@ The short version for one host:
 ```bash
 cd keycloak-cac/deploy/compose && cp keycloak-cac.env.example keycloak-cac.env    # edit it
 mkdir -p tls secrets clients     # tls/tls.crt + tls.key, secrets/{db_password,bootstrap_admin_password,automation_secret}
+chmod 0440 tls/tls.key secrets/* && sudo chown root:1000 tls/tls.key secrets/*   # mounted one file each, read-only
 docker compose up -d             # podman compose works too; --scale keycloak=2 for HA
 ```
 
@@ -58,7 +59,7 @@ docker compose up -d             # podman compose works too; --scale keycloak=2 
 **CAC needs TLS to reach Keycloak unbroken.** Use one of these:
 - Expose port 8443 directly.
 - Use a Layer-4/TCP passthrough load balancer (an NLB, MetalLB, or HAProxy in TCP mode).
-- Build with `X509_LOOKUP=nginx` (or haproxy, apache, envoy), so that a proxy verifies the card and forwards it in a header.
+- Build with `X509_LOOKUP=nginx` (or haproxy, apache, envoy), so that a proxy verifies the card and forwards it in a header. Keycloak then believes that header, so only the proxy may reach it: no published port (`compose.edge.yaml`), or the chart's `edge.proxyFrom` NetworkPolicy. The image refuses to start in that mode until `CAC_EDGE_TRUSTED_PROXY=true` says so.
 
 An L7 ingress or ALB that decrypts traffic and forwards nothing breaks CAC login.
 
@@ -106,6 +107,7 @@ The fields are documented in `keycloak-asd-stig/references/profile.md` under cli
 | `CAC_TRUST_ANCHORS_DIR` | | **Replaces** the baked DoD bundle with these zip, p7b or PEM files. |
 | `CAC_EXTRA_ANCHORS_DIR` | | **Adds** CAs, for example ECA or a partner PKI. Their fingerprints are logged. |
 | `CAC_APPLY` | `true` | `false` leaves the realm alone, which suits GitOps-managed realms. |
+| `CAC_EDGE_TRUSTED_PROXY` | `false` | Edge images only (`X509_LOOKUP` other than `default`): states that port 8443 is reachable from the verifying proxy alone. Such an image refuses to start without it, because it believes the certificate header. See `deploy/compose/compose.edge.yaml` and the chart's `edge:` values. |
 | `CAC_LAB_MODE` | `false` | Generates a mock CAC PKI and a self-issued server certificate, and allows `CRL_MODE=none` and dev databases. |
 | `CAC_LAB_TRUST_DOD` | `false` | Lab mode: also trusts the baked DoD bundle, so a real card works. |
 | `KC_HTTP_RELATIVE_PATH`, `KC_DB` | `/`, `postgres` | Keycloak build-time options. A different value at run time triggers an automatic rebuild at startup, which is slower and needs a writable `/opt/keycloak/lib`. For production, use the build argument instead. |

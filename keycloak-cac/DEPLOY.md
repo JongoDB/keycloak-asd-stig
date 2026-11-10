@@ -79,6 +79,12 @@ docker tag keycloak-cac:26.8.2 ghcr.io/<owner>/keycloak-cac:26.8.2 && docker pus
 ```
 Packages start out private. Keep this one private.
 
+**Built by CI:** `.github/workflows/keycloak-cac-image.yml` builds the standard and strict-FIPS images on every pull
+request, and on `main` pushes them to `ghcr.io/<owner>/keycloak-cac` (`26.8.2`, `26.8.2-fips`, `sha-<commit>[-fips]`)
+with an SPDX SBOM and SLSA provenance attached in the registry, plus a syft SBOM as a job artifact. The job summary
+prints the digest: deploy `ghcr.io/<owner>/keycloak-cac@sha256:...`, never a tag. A host pulls it with a token that
+has `read:packages` only.
+
 **Google Artifact Registry:**
 ```bash
 gcloud auth configure-docker us-east4-docker.pkg.dev
@@ -121,7 +127,9 @@ Tested: two replicas at once, plus the air-gapped variant.
 **Plain `docker run`** (equivalent):
 ```bash
 docker run -d --name keycloak-cac --restart unless-stopped -p 443:8443 --read-only --tmpfs /tmp \
-  -v kc-data:/opt/keycloak/data -v $PWD/tls:/tls:ro -v $PWD/secrets:/run/secrets:ro -v $PWD/clients:/clients:ro \
+  -v kc-data:/opt/keycloak/data -v $PWD/tls:/tls:ro -v $PWD/clients:/clients:ro \
+  -v $PWD/secrets/db_password:/run/secrets/db_password:ro -v $PWD/secrets/automation_secret:/run/secrets/automation_secret:ro \
+  -v $PWD/secrets/bootstrap_admin_password:/run/secrets/bootstrap_admin_password:ro \
   -e CAC_PUBLIC_URL=https://sso.example.mil -e CAC_ADMINS=smith.alex.adm=3456789012.alt@mil \
   -e KC_HTTPS_CERTIFICATE_FILE=/tls/tls.crt -e KC_HTTPS_CERTIFICATE_KEY_FILE=/tls/tls.key \
   -e KC_DB_URL='jdbc:postgresql://db.example.mil/keycloak?sslmode=verify-full' -e KC_DB_USERNAME=keycloak \

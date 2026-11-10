@@ -30,6 +30,14 @@ db:
   username: keycloak
 bootstrapAdminUsername: bootstrap
 
+# Edge mode: ONLY for an image built with X509_LOOKUP=nginx|haproxy|apache|envoy, where a proxy verifies the card and
+# forwards it in a header. Keycloak then believes that header, so port 8443 must be reachable from the proxy alone:
+# the chart refuses to render unless every proxyFrom entry names BOTH a namespace and a pod by labels, the
+# NetworkPolicy is on and the Service is ClusterIP. Leave disabled for the default (TLS passthrough) image.
+edge:
+  enabled: false
+  proxyFrom: []                  # [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}, podSelector: {matchLabels: {app.kubernetes.io/name: ingress-nginx}}}]
+
 service:
   type: LoadBalancer             # CAC needs TLS to reach Keycloak intact: L4/TCP passthrough (NLB, MetalLB, ...)
   port: 443
@@ -42,7 +50,9 @@ dataSizeLimit: 1Gi
 podDisruptionBudget: {minAvailable: 1}
 networkPolicy: {enabled: true}
 # OpenShift (restricted-v2 SCC assigns its own UID): set podSecurityContext to {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
-podSecurityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 0, fsGroup: 0, seccompProfile: {type: RuntimeDefault}}
+# No root group: the image's files are owned by UID 1000, and fsGroup 1000 makes the data volume and the 0440 secret
+# files readable to the pod without group 0.
+podSecurityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
 nodeSelector: {}
 tolerations: []
 affinity: {}

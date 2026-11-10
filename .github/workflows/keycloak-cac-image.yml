@@ -1,0 +1,97 @@
+# Builds the keycloak-cac image (standard and strict FIPS) and publishes it to GHCR, to be deployed BY DIGEST.
+#   pull request  -> build only (proves the Containerfile, the DoD bundle download and the extension still build)
+#   push to main  -> build + push ghcr.io/<owner>/keycloak-cac:{26.8.2,26.8.2-fips,sha-<short>[-fips]}
+#   manual run    -> same as main, from the chosen ref
+# Every pushed image carries BuildKit's SPDX SBOM and SLSA provenance as registry attestations, and the job also
+# uploads a syft SPDX SBOM as an artifact. The digest is printed in the job summary: deploy that, never a tag.
+# The package inherits this repository's visibility (private); keep it private.
+name: keycloak-cac image
+on:
+  pull_request:
+    paths: ["keycloak-cac/**", "keycloak-asd-stig/assets/extension/**", "keycloak-asd-stig/assets/theme/**",
+            "keycloak-asd-stig/scripts/**", "keycloak-asd-stig/references/**", ".github/workflows/keycloak-cac-image.yml"]
+  push:
+    branches: [main]
+    paths: ["keycloak-cac/**", "keycloak-asd-stig/assets/extension/**", "keycloak-asd-stig/assets/theme/**",
+            "keycloak-asd-stig/scripts/**", "keycloak-asd-stig/references/**", ".github/workflows/keycloak-cac-image.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: keycloak-cac-image-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  KEYCLOAK_VERSION: "26.8.2"
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - {name: standard, fips: "false", suffix: ""}
+          - {name: fips, fips: "true", suffix: "-fips"}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with: {persist-credentials: false}
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4.9.1
+        with: {distribution: temurin, java-version: "17"}
+      - name: Rebuild stig-extensions.jar from source (against the base image the Containerfile uses)
+        run: keycloak-asd-stig/assets/extension/build.sh "quay.io/keycloak/keycloak:${KEYCLOAK_VERSION}"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f   # v3.12.0
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9            # v3.7.0
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051          # v5.10.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/keycloak-cac
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ env.KEYCLOAK_VERSION }}${{ matrix.variant.suffix }},enable={{is_default_branch}}
+            type=sha,prefix=sha-,suffix=${{ matrix.variant.suffix }}
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8        # v6.19.2
+        with:
+          context: .
+          file: keycloak-cac/Containerfile
+          build-args: |
+            FIPS=${{ matrix.variant.fips }}
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: ${{ github.event_name != 'pull_request' }}
+          provenance: ${{ github.event_name != 'pull_request' && 'mode=max' || 'false' }}
+      - name: Trust anchors baked into the image
+        if: github.event_name == 'pull_request'
+        env:
+          IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+        run: docker run --rm --entrypoint cat "$IMAGE" /opt/keycloak-cac/pki/anchors.txt
+      - name: SBOM (SPDX JSON, syft)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c             # v0.24.3
+        with:
+          image: ${{ github.event_name == 'pull_request' && fromJSON(steps.meta.outputs.json).tags[0] || format('ghcr.io/{0}/keycloak-cac@{1}', github.repository_owner, steps.build.outputs.digest) }}
+          format: spdx-json
+          artifact-name: keycloak-cac-${{ matrix.variant.name }}.spdx.json
+          upload-release-assets: false
+      - name: Digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          OWNER: ${{ github.repository_owner }}
+          VARIANT: ${{ matrix.variant.name }}
+          PUSHED: ${{ github.event_name != 'pull_request' }}
+        run: |
+          {
+            echo "### keycloak-cac (${VARIANT})"
+            if [ "$PUSHED" = true ]; then
+              echo "Deploy by digest: \`ghcr.io/${OWNER,,}/keycloak-cac@${DIGEST}\`"
+            else
+              echo "Built (not pushed: pull request). Image ID: \`${DIGEST}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

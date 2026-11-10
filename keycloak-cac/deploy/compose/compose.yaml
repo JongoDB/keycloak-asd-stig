@@ -1,20 +1,25 @@
 # Production shape: keycloak-cac only (bring your own PostgreSQL, TLS certificate and secrets).
 #   cp keycloak-cac.env.example keycloak-cac.env   # edit
-#   mkdir -p secrets tls clients && put the files listed below there
+#   mkdir -p secrets tls clients && put the files listed below there; chmod 0440 secrets/* tls/tls.key
 #   docker compose up -d          (podman compose / podman-compose work the same)
 # Scale out: docker compose up -d --scale keycloak=2  (nodes find each other through the database, jdbc-ping)
+#
+# Secrets are mounted one file each (compose `secrets:`), never as a whole directory, so the container sees
+# exactly the files it uses. Compose (outside Swarm) bind-mounts them with their host permissions: keep the
+# host files 0440 (or 0400) and owned by a group the container's UID 1000 is in, e.g. chown root:1000.
 name: keycloak-cac
 services:
   keycloak:
     image: ${KEYCLOAK_CAC_IMAGE:-keycloak-cac:26.8.2}
     env_file: keycloak-cac.env
     environment:
-      KC_HTTPS_CERTIFICATE_FILE: /tls/tls.crt          # server certificate (chain included) for CAC_PUBLIC_URL
-      KC_HTTPS_CERTIFICATE_KEY_FILE: /tls/tls.key
+      KC_HTTPS_CERTIFICATE_FILE: /run/secrets/tls_crt   # server certificate (chain included) for CAC_PUBLIC_URL
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /run/secrets/tls_key
       KC_DB_PASSWORD_FILE: /run/secrets/db_password
       KC_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_admin_password   # first start only
       CAC_AUTOMATION_SECRET_FILE: /run/secrets/automation_secret                # keep it stable
       CAC_CLIENTS_DIR: /clients                                                  # one <app>.json per relying app
+    secrets: [tls_crt, tls_key, db_password, bootstrap_admin_password, automation_secret]
     ports: ["${CAC_PORT:-443}:8443"]
     mem_limit: 8g          # ~4.9 GiB measured with all 17 DoD CRLs loaded
     read_only: true
@@ -22,8 +27,12 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     volumes:
-      - ./tls:/tls:ro
-      - ./secrets:/run/secrets:ro
       - ./clients:/clients:ro
       - /opt/keycloak/data   # per-replica scratch (anchors, CRLs, Keycloak tmp); all state lives in PostgreSQL
     restart: unless-stopped
+secrets:
+  tls_crt: {file: ./tls/tls.crt}
+  tls_key: {file: ./tls/tls.key}
+  db_password: {file: ./secrets/db_password}
+  bootstrap_admin_password: {file: ./secrets/bootstrap_admin_password}
+  automation_secret: {file: ./secrets/automation_secret}

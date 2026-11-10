@@ -867,7 +867,8 @@ def cmd_render(a):
 # Verify
 # --------------------------------------------------------------------------------------------
 class Checker:
-    def __init__(self, kc, p, caps, live_url, client_cert=None):
+    def __init__(self, kc, p, caps, live_url, client_cert=None, http_ports=()):
+        self.http_ports = tuple(http_ports)
         self.kc, self.p, self.caps, self.live_url, self.client_cert = kc, p, caps, live_url, client_cert
         self.realm = p["realm"]["name"]
         self.ar = kc.admin_realm
@@ -1179,12 +1180,11 @@ class Checker:
                 hdrs.get("content-security-policy")))
         except Exception as e:
             self.res("live.cookie_flags", "manual", "could not fetch login page: %s" % e)
-        # plain HTTP must not answer
-        try:
-            s = socket.create_connection((host, 8080), timeout=3); s.close()
-            self.res("live.http_disabled", False, "TCP 8080 (HTTP) is listening on %s" % host)
-        except OSError:
-            self.res("live.http_disabled", True, "no HTTP listener on %s:8080" % host)
+        # Keycloak must not answer plain HTTP. Probe the HTTPS port itself and Keycloak's default HTTP port (plus
+        # --http-ports), and count a port as failing only when KEYCLOAK answers it in clear text - i.e. this
+        # realm's discovery document comes back over plain HTTP. A shared host or load balancer often has other
+        # services on 8080 (or a redirect-to-HTTPS listener on 80); they say nothing about Keycloak.
+        self.res("live.http_disabled", *probe_plain_http(host, [port, 8080] + list(self.http_ports), self.realm))
         # TLS versions
         res = {}
         for name, ver in (("TLSv1.1", ssl.TLSVersion.TLSv1_1), ("TLSv1.2", ssl.TLSVersion.TLSv1_2), ("TLSv1.3", ssl.TLSVersion.TLSv1_3)):
@@ -1200,6 +1200,26 @@ class Checker:
                 res[name] = None
         self.res("live.tls_versions", res.get("TLSv1.1") is None and bool(res.get("TLSv1.2") or res.get("TLSv1.3")),
                  "TLS handshake results: %s" % res)
+
+def probe_plain_http(host, ports, realm, timeout=4):
+    """(ok, evidence) - ok is False only if some port serves the realm's OIDC discovery over clear-text HTTP."""
+    import http.client
+    seen, bad = [], []
+    path = "/realms/%s/.well-known/openid-configuration" % q(realm)
+    for prt in dict.fromkeys(ports):
+        try:
+            con = http.client.HTTPConnection(host, prt, timeout=timeout)
+            con.request("GET", path, headers={"Host": host})
+            r = con.getresponse(); body = r.read(65536).decode("utf-8", "replace"); con.close()
+        except (OSError, http.client.HTTPException) as e:
+            seen.append("%s: no clear-text HTTP (%s)" % (prt, type(e).__name__)); continue
+        if r.status == 200 and '"issuer"' in body and ("/realms/%s" % realm) in body:
+            bad.append(prt); seen.append("%s: KEYCLOAK serves %s over plain HTTP" % (prt, path))
+        else:
+            loc = r.getheader("Location") or ""
+            seen.append("%s: HTTP %s from something that is not this realm%s" % (
+                prt, r.status, (" (redirect to %s)" % loc[:80]) if loc else ""))
+    return (not bad), "%s on %s" % ("; ".join(seen), host)
 
 def deploy_checks(results, deploy_dir):
     """Deployment evidence, runtime-agnostic. Scans every text file under --deploy-dir (runtime.env, keycloak.conf,
@@ -1415,7 +1435,8 @@ def cmd_verify(a):
     p = load_profile(a.profile, getattr(a, 'clients_dir', None))
     kc = KC(a.url or p["keycloak"]["url"], p["keycloak"]["admin_realm"], os.environ.get("KC_CACERT"))
     caps = server_capabilities(kc)
-    ch = Checker(kc, p, caps, a.live_url or (a.url or p["keycloak"]["url"]))
+    ch = Checker(kc, p, caps, a.live_url or (a.url or p["keycloak"]["url"]),
+                 http_ports=[int(x) for x in (getattr(a, "http_ports", "") or "").split(",") if x.strip()])
     results = ch.run()
     live_client_auth(results, a.live_url or (a.url or p["keycloak"]["url"]))
     deploy_checks(results, a.deploy_dir)
@@ -1931,6 +1952,7 @@ def main():
     ap_.add_argument("--clients-dir", help="directory of per-service client *.json files (or STIG_CLIENTS_DIR)"); ap_.set_defaults(fn=cmd_apply)
     v = sub.add_parser("verify"); v.add_argument("--profile", required=True); v.add_argument("--url")
     v.add_argument("--live-url"); v.add_argument("--deploy-dir"); v.add_argument("--out", default="reports")
+    v.add_argument("--http-ports", default="", help="extra comma-separated ports to probe for a clear-text HTTP Keycloak listener (the HTTPS port and 8080 are always probed)")
     v.add_argument("--strict", action="store_true", help="exit 1 on any failing check (CI gate)"); v.add_argument("--clients-dir", help="directory of per-service client *.json files (or STIG_CLIENTS_DIR)"); v.set_defaults(fn=cmd_verify)
     l = sub.add_parser("lookup"); l.add_argument("ids", nargs="*"); l.add_argument("--grep"); l.add_argument("--disposition")
     l.add_argument("--brief", action="store_true"); l.set_defaults(fn=cmd_lookup)

@@ -8,3 +8,14 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/name: keycloak-cac
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
+
+{{- define "kcc.guards" -}}
+{{- if .Values.edge.enabled }}
+{{- if not .Values.networkPolicy.enabled }}{{ fail "edge.enabled=true needs networkPolicy.enabled=true: Keycloak trusts the certificate header, so only the proxy may reach it" }}{{ end }}
+{{- if ne .Values.service.type "ClusterIP" }}{{ fail "edge.enabled=true needs service.type=ClusterIP: a LoadBalancer/NodePort would let clients bypass the verifying proxy and forge the certificate header" }}{{ end }}
+{{- if not .Values.edge.proxyFrom }}{{ fail "edge.enabled=true needs edge.proxyFrom: the proxy pods allowed to reach port 8443" }}{{ end }}
+{{- range $i, $p := .Values.edge.proxyFrom }}
+{{- if or (not $p.namespaceSelector) (not $p.namespaceSelector.matchLabels) (not $p.podSelector) (not $p.podSelector.matchLabels) }}{{ fail (printf "edge.proxyFrom[%d] must give namespaceSelector.matchLabels AND podSelector.matchLabels (an empty selector admits every namespace or every pod)" $i) }}{{ end }}
+{{- end }}
+{{- end }}
+{{- end -}}
