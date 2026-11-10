@@ -30,10 +30,41 @@ import org.keycloak.utils.KeycloakSessionUtil;
 public class AdminApiGuardFilter implements ContainerRequestFilter {
     private static final Logger LOG = Logger.getLogger("mil.stig.audit");
 
+    enum Kind { ADMIN, NOT_ADMIN, UNCLASSIFIABLE }
+
+    /** Decided on structure, not substrings: the request's decoded path SEGMENTS (matrix parameters removed, empty
+     *  segments dropped) contain "admin" followed by "realms"; or a path naming admin in any form that has matrix
+     *  parameters, empty segments, dot segments or encoded separators - which cannot be classified - is refused. */
+    static Kind classify(List<String> segments, String rawPath) {
+        List<String> seg = segments.stream().filter(x -> x != null && !x.isEmpty()).toList();
+        for (int i = 0; i + 1 < seg.size(); i++) {
+            if ("admin".equals(seg.get(i)) && "realms".equals(seg.get(i + 1))) return Kind.ADMIN;
+        }
+        String raw = rawPath == null ? "" : rawPath.toLowerCase(Locale.ROOT);
+        if (raw.contains("admin") && (raw.contains(";") || raw.contains("//") || raw.contains("%2f") || raw.contains("%5c")
+                || raw.contains("\\") || raw.contains("%2e") || raw.contains("%25") || raw.contains("/./") || raw.contains("/../")
+                || raw.endsWith("/.") || raw.endsWith("/.."))) {
+            return Kind.UNCLASSIFIABLE;
+        }
+        return Kind.NOT_ADMIN;
+    }
+
     @Override
     public void filter(ContainerRequestContext req) {
+        List<String> seg = req.getUriInfo().getPathSegments(true).stream().map(jakarta.ws.rs.core.PathSegment::getPath).toList();
+        Kind kind = classify(seg, req.getUriInfo().getRequestUri().getRawPath());
+        if (kind == Kind.NOT_ADMIN && req.getUriInfo().getMatchedResources().stream()
+                .anyMatch(r -> r != null && r.getClass().getName().startsWith("org.keycloak.services.resources.admin.")
+                        && !r.getClass().getSimpleName().equals("AdminConsole"))) {
+            kind = Kind.ADMIN;                // matched by Keycloak's admin resources whatever the path looked like
+        }
+        if (kind == Kind.UNCLASSIFIABLE) {
+            LOG.warnf("STIG-ADMIN-PATH-UNCLASSIFIABLE %s %s: refused", req.getMethod(), req.getUriInfo().getRequestUri().getRawPath());
+            req.abortWith(forbidden());
+            return;
+        }
+        if (kind != Kind.ADMIN) return;
         String path = req.getUriInfo().getPath();
-        if (path == null || !(path.startsWith("/admin/realms/") || path.startsWith("admin/realms/") || path.contains("/admin/realms/"))) return;
         KeycloakSession session = KeycloakSessionUtil.getKeycloakSession();
         if (session == null) return;
         AdminAuth auth = AdminRoot.getRealmAdminAuth(session).orElse(null);
