@@ -91,6 +91,8 @@ The fields are documented in `keycloak-asd-stig/references/profile.md` under cli
 | `CAC_CRL_DIR` | `/crl` | File mode: a directory of `*.crl` files. Each one is signature-checked against the anchors before use. |
 | `CAC_CRL_REFRESH_SECONDS` | `21600` | How often CRLs are re-fetched or re-read. After each refresh, every node's CRL cache is cleared. |
 | `CAC_OCSP` | on for `online`/`ocsp` | Checks OCSP in addition to CRLs. The `ocsp` mode fails closed. |
+| `CAC_OCSP_FAIL_OPEN` | `true` | With CRLs also checked, an unreachable OCSP responder is skipped (the CRL still decides). `false`: OCSP fails closed too, so responder reachability becomes a sign-in dependency. |
+| `CAC_LOCKOUT` | `permanent` | `permanent`: 3 failures in 15 min lock until an administrator unlocks. `temporary`: 15 min, growing with each further 3 failures to 24 h, failures remembered for 24 h, so nobody on the network can lock an account (an administrator's included) for good. Tune with `CAC_PROFILE_JSON='{"lockout":{...}}'`. |
 | `CAC_OCSP_RESPONDER_URI` | *(from the certificate)* | Overrides the responder, for example a local OCSP repeater. |
 | `CAC_ADMINS` | | Alt Token administrators, as `user=<Alt Token UPN>,...`. With this set, the admin realm is hardened and the bootstrap admin is deleted. |
 | `CAC_ADMINS_JSON` / `CAC_ADMINS_DIR` | | Full admin records (email, names and so on). |

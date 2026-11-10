@@ -33,7 +33,7 @@ DEFAULTS = {
         "mapping_attribute": "cac_upn",
         "mapping_source": "Subject's Alternative Name otherName (UPN)",
         "regex": "(.*?)(?:$)",          # used by the "Match SubjectDN using regular expression" sources
-        "ocsp": True, "ocsp_responder_uri": "",
+        "ocsp": True, "ocsp_responder_uri": "", "ocsp_fail_open": True,
         "crl": True, "crl_files": ["crl.pem"], "crldp": False,
         "key_usage": "digitalSignature", "extended_key_usage": "",
         "certificate_policies": [], "certificate_policy_mode": "Any",
@@ -41,7 +41,9 @@ DEFAULTS = {
     },
     "sessions": {"user_idle_minutes": 15, "admin_idle_minutes": 10, "max_hours": 8,
                  "max_per_user": 3, "access_token_minutes": 5},
-    "lockout": {"max_failures": 3, "window_minutes": 15, "permanent": True},
+    # permanent=False: temporary lockout of window_minutes, growing by window_minutes per further max_failures
+    # (MULTIPLE) up to max_wait_hours; the failure count resets reset_hours after the last failure.
+    "lockout": {"max_failures": 3, "window_minutes": 15, "permanent": True, "max_wait_hours": 24, "reset_hours": 24},
     "password": {"min_length": 15, "max_length": 128, "history": 5, "max_age_days": 60, "min_age_hours": 24,
                  "hash": "pbkdf2-sha512", "iterations": 210000},
     "accounts": {"inactive_days": 35, "temp_hours": 72},
@@ -172,8 +174,12 @@ def realm_settings(p, *, admin_realm=False, event_types=None, extension=True):
         "verifyEmail": False,
         # V-222432 / V-222433
         "bruteForceProtected": True, "permanentLockout": bool(lk["permanent"]), "maxTemporaryLockouts": 0,
-        "failureFactor": lk["max_failures"], "maxDeltaTimeSeconds": lk["window_minutes"] * 60,
-        "waitIncrementSeconds": lk["window_minutes"] * 60, "maxFailureWaitSeconds": lk["window_minutes"] * 60,
+        "bruteForceStrategy": "MULTIPLE", "failureFactor": lk["max_failures"],
+        # permanent: failures counted over window_minutes. Temporary: a lock of window_minutes per max_failures
+        # failures, growing (MULTIPLE) to max_wait_hours; failures are remembered for reset_hours, so a lock can grow.
+        "maxDeltaTimeSeconds": lk["window_minutes"] * 60 if lk["permanent"] else max(lk["window_minutes"] * 60, int(lk.get("reset_hours", 24) * 3600)),
+        "waitIncrementSeconds": lk["window_minutes"] * 60,
+        "maxFailureWaitSeconds": lk["window_minutes"] * 60 if lk["permanent"] else max(lk["window_minutes"] * 60, int(lk.get("max_wait_hours", 24) * 3600)),
         "minimumQuickLoginWaitSeconds": 60, "quickLoginCheckMilliSeconds": 1000,
         # V-222389 / V-222390 / V-222520
         "ssoSessionIdleTimeout": idle, "ssoSessionMaxLifespan": s["max_hours"] * 3600,
@@ -234,7 +240,8 @@ def x509_config(p, attr, admin_realm=False):
         "x509-cert-auth.ocsp-checking-enabled": str(bool(x["ocsp"])).lower(),
         # V-222553: Keycloak evaluates BOTH the local CRL cache and OCSP on every login. OCSP may fail
         # open (responder unreachable) only when the CRL check is on, so revocation is never skipped.
-        "x509-cert-auth.ocsp-fail-open": str(bool(x["ocsp"] and x["crl"])).lower(),
+        # x509.ocsp_fail_open=false makes OCSP fail closed too (an unreachable responder refuses the sign-in).
+        "x509-cert-auth.ocsp-fail-open": str(bool(x["ocsp"] and x["crl"] and x.get("ocsp_fail_open", True))).lower(),
         "x509-cert-auth.keyusage": x["key_usage"],
         "x509-cert-auth.extendedkeyusage": x["extended_key_usage"],
         "x509-cert-auth.confirmation-page-disallowed": str(not x["confirmation_page"]).lower(),
@@ -250,7 +257,9 @@ def x509_config(p, attr, admin_realm=False):
         cfg["x509-cert-auth.casubjectdn"] = "##".join(x["ca_subject_dns"])
     return cfg
 
-def browser_flow(p, *, admin_realm):
+ADMIN_GATE = "stig-admin-second-factor-required"     # stig-extensions.jar
+
+def browser_flow(p, *, admin_realm, extension=True):
     """Nested flow spec: (alias, [(kind, provider_or_alias, requirement, config|children)])."""
     prefix = "STIG Admin Browser" if admin_realm else "STIG Browser"
     s = p["sessions"]
@@ -270,8 +279,11 @@ def browser_flow(p, *, admin_realm):
         authn.append(("exec", "auth-x509-client-username-form", "REQUIRED" if single else "ALTERNATIVE",
                       {"alias": (prefix + " x509").lower().replace(" ", "-"), "config": x509_config(p, attr, admin_realm)}))
     if use_pw:
+        # An administrator with no enrolled second factor is refused after the password, before the second-factor
+        # step could offer enrolment: an administrator's OTP/WebAuthn is never enrolled on the strength of a password.
+        gate = [("exec", ADMIN_GATE, "REQUIRED", None)] if extension else []
         authn.append(("flow", prefix + " - Password and MFA", "REQUIRED" if single else "ALTERNATIVE", [
-            ("exec", "auth-username-password-form", "REQUIRED", None),
+            ("exec", "auth-username-password-form", "REQUIRED", None)] + gate + [
             ("exec", second, "REQUIRED", None),
         ]))
     return (prefix, [
@@ -404,7 +416,7 @@ def render(p, extension=True):
     cprof, cpol = client_policies()
     return {
         "realm": dict(realm_settings(p, extension=extension), realm=p["realm"]["name"]),
-        "browser_flow": browser_flow(p, admin_realm=False),
+        "browser_flow": browser_flow(p, admin_realm=False, extension=extension),
         "direct_grant_flow": DENY_DIRECT_GRANT,
         "user_profile_attributes": user_profile_attributes(p, admin_realm=False, extension=extension),
         "workflows": workflows(p),
@@ -412,7 +424,7 @@ def render(p, extension=True):
         "clients": [client_rep(c, p) for c in p["clients"]],
         "admin_realm": {
             "settings": realm_settings(p, admin_realm=True, extension=extension),
-            "browser_flow": browser_flow(p, admin_realm=True),
+            "browser_flow": browser_flow(p, admin_realm=True, extension=extension),
             "user_profile_attributes": user_profile_attributes(p, admin_realm=True, extension=extension),
         },
     }
@@ -595,6 +607,9 @@ def ensure_user_profile(kc, realm, attrs):
         # EDIPI/UPN must not be stopped at "update profile" (the STIG does not require an e-mail address).
         if cur["name"] == "email" and cur.get("required"):
             cur.pop("required"); changed = True
+        # the address set-up and credential e-mails go to: users read it, administrators set it
+        if cur["name"] == "email" and (cur.get("permissions") or {}).get("edit") != ["admin"]:
+            cur["permissions"] = {"view": ["admin", "user"], "edit": ["admin"]}; changed = True
     if up.get("unmanagedAttributePolicy") == "ENABLED":
         up.pop("unmanagedAttributePolicy"); changed = True  # users must not set arbitrary attributes
     if changed:
@@ -612,7 +627,9 @@ def ensure_required_actions(kc, realm, terms):
         have = {a["alias"]: a for a in kc.api("GET", base + "/required-actions")}
     want = {"CONFIGURE_TOTP": (True, False), "UPDATE_PASSWORD": (True, False), "webauthn-register": (True, False),
             "TERMS_AND_CONDITIONS": (bool(terms), bool(terms)), "VERIFY_PROFILE": (True, False),
-            "delete_account": (False, False)}
+            "delete_account": (False, False),
+            # accounts are linked to an identity provider only by an administrator-set attribute, never by the user
+            "idp_link": (False, False)}
     for alias, (enabled, default) in want.items():
         if alias in have:
             a = have[alias]
@@ -620,6 +637,23 @@ def ensure_required_actions(kc, realm, terms):
                 a["enabled"], a["defaultAction"] = enabled, default
                 kc.api("PUT", base + "/required-actions/%s" % q(alias), a)
     log("required actions ensured (T&C banner backstop=%s)" % bool(terms))
+
+def remove_account_links(kc, realm):
+    """Users must not link (or unlink) identity-provider accounts themselves: manage-account-links is taken out of
+    the account client's manage-account composite and out of the default roles."""
+    rr = "/realms/%s" % q(realm)
+    acc = kc.api("GET", rr + "/clients?clientId=account") or []
+    if not acc:
+        return
+    links = kc.api("GET", rr + "/clients/%s/roles/manage-account-links" % acc[0]["id"], ok404=True)
+    if not links:
+        return
+    ma = kc.api("GET", rr + "/clients/%s/roles/manage-account" % acc[0]["id"], ok404=True)
+    dr = kc.api("GET", rr + "/roles/default-roles-%s" % q(realm.lower()), ok404=True)
+    for holder in (ma, dr):
+        if holder and any(c["id"] == links["id"] for c in kc.api("GET", rr + "/roles-by-id/%s/composites" % holder["id"]) or []):
+            kc.api("DELETE", rr + "/roles-by-id/%s/composites" % holder["id"], [links])
+            log("manage-account-links removed from %s" % holder["name"])
 
 def remove_offline_access(kc, realm):
     rr = "/realms/%s" % q(realm)
@@ -744,6 +778,7 @@ def apply_realm(kc, p, caps, rendered):
     ensure_user_profile(kc, name, rendered["user_profile_attributes"])
     ensure_required_actions(kc, name, p["banner"]["terms_required_action"])
     remove_offline_access(kc, name)
+    remove_account_links(kc, name)
     sid = ensure_stig_claims_scope(kc, name)
     bf = build_flow(kc, name, rendered["browser_flow"])
     dg = build_flow(kc, name, rendered["direct_grant_flow"])
@@ -1041,6 +1076,17 @@ class Checker:
         self.res("flow.x509_or_mfa", bool(primary) and (bool(x509_paths) or not need_x509) and not weak,
                  "browserFlow='%s' authentication paths=%s" % (bf, [sorted(x) for x in primary]))
         self.res("flow.no_password_only", not weak, "paths lacking CAC or second factor: %s" % weak)
+        pw_paths = [pa for pa in primary if "auth-username-password-form" in pa]
+        if self.caps.get("extension") and pw_paths:
+            self.res("flow.admin_second_factor_gate", all(ADMIN_GATE in pa for pa in pw_paths),
+                     "password paths with %s (no second-factor enrolment after a password for administrators): %s" % (
+                         ADMIN_GATE, [ADMIN_GATE in pa for pa in pw_paths]))
+        ras = {x["alias"]: x for x in self.kc.api("GET", "/realms/%s/authentication/required-actions" % q(realm))}
+        acc = self.kc.api("GET", "/realms/%s/clients?clientId=account" % q(realm)) or []
+        ma = self.kc.api("GET", "/realms/%s/clients/%s/roles/manage-account/composites" % (q(realm), acc[0]["id"]), ok404=True) or [] if acc else []
+        self.res("realm.no_self_service_idp_link", not ras.get("idp_link", {}).get("enabled")
+                 and not any(c["name"] == "manage-account-links" for c in ma),
+                 "idp_link enabled=%s; manage-account composites=%s" % (ras.get("idp_link", {}).get("enabled"), sorted(c["name"] for c in ma)))
         sl = [e for e in ex if e.get("providerId") == "user-session-limits"]
         cfg = self.exec_config(realm, sl[0]) if sl else {}
         self.res("flow.session_limits", bool(sl) and sl[0]["requirement"] == "REQUIRED" and int(cfg.get("userRealmLimit", "0") or 0) > 0,

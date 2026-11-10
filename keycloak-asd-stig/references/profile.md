@@ -35,6 +35,7 @@ Defaults are the STIG values - only change them to be **stricter** (organization
 | `mapping_source` | Keycloak option text | `Subject's Alternative Name otherName (UPN)` | Which certificate field identifies the user. Other values: `Subject's Common Name`, `Subject's Alternative Name E-mail`, `Match SubjectDN using regular expression`, `SHA-256 Thumbprint`, ... |
 | `ocsp` | bool | `true` | Check revocation with OCSP (AIA URL or `ocsp_responder_uri`) |
 | `ocsp_responder_uri` | URL | `""` | Override the OCSP URL from the certificate |
+| `ocsp_fail_open` | bool | `true` | With `crl` on, skip OCSP when the responder is unreachable (the CRL still decides). `false`: OCSP fails closed too |
 | `crl` | bool | `true` | Check the local CRL cache. Keep on: OCSP may only fail open when this is on (V-222553) |
 | `crl_files` | list of paths | `["crl.pem"]` | Paths **relative to `/opt/keycloak/conf`**, e.g. `crl/DODIDCA_71.crl`. Paste the fragment printed by `fetch_dod_pki.sh` |
 | `crldp` | bool | `false` | Also download CRLs from the certificate's CRL distribution point at login (slow; leave off with a local cache) |
@@ -57,6 +58,8 @@ Defaults are the STIG values - only change them to be **stricter** (organization
 | `lockout.max_failures` | 3 | <= 3 | Failures before lockout | V-222432 |
 | `lockout.window_minutes` | 15 | >= 15 | Counting window (and wait if not permanent) | V-222432 |
 | `lockout.permanent` | true | - | Locked until an admin unlocks (approved procedure) | V-222433 |
+| `lockout.max_wait_hours` | 24 | - | Temporary lockout only: the lock grows by `window_minutes` per further `max_failures` failures, up to this | V-222432 |
+| `lockout.reset_hours` | 24 | >= window | Temporary lockout only: how long failures are remembered (so the lock can grow) | V-222432 |
 | `password.min_length` | 15 | >= 15 | `length()` | V-222536 |
 | `password.max_length` | 128 | - | `maxLength()` | - |
 | `password.history` | 5 | >= 5 | `passwordHistory()` | V-222546 |
