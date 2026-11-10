@@ -6,7 +6,7 @@ import java.util.List;
 public final class PublicPathPolicyTest {
     static int failed = 0;
     static final PublicPathPolicy P = new PublicPathPolicy(List.of("/realms/defconai", "/realms/defconai/", "/admin/defconai/",
-            "/admin/realms/defconai/", "/admin/serverinfo", "/resources/"));
+            "/admin/realms/defconai", "/admin/realms/defconai/", "/admin/serverinfo", "/resources/"));
     static void expect(boolean allow, String raw) {
         boolean got = P.allows(raw);
         System.out.println((got == allow ? "PASS " : "FAIL ") + (allow ? "allowed " : "refused ") + raw.replace("\u0000", "\\0"));
@@ -27,7 +27,7 @@ public final class PublicPathPolicyTest {
         for (String ok : new String[] {
                 "/realms/defconai", "/realms/defconai/", "/realms/defconai/.well-known/openid-configuration",
                 "/realms/defconai/protocol/openid-connect/auth", "/realms/defconai/account/", "/realms/defconai/broker/entra/endpoint",
-                "/admin/defconai/console/", "/admin/defconai/console/whoami", "/admin/realms/defconai/users",
+                "/admin/defconai/console/", "/admin/defconai/console/whoami", "/admin/realms/defconai", "/admin/realms/defconai/users",
                 "/admin/serverinfo", "/resources/b8x1q/login/dod-stig/js/dod-banner.js"}) {
             expect(true, ok);
         }
