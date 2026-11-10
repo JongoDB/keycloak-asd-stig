@@ -15,8 +15,9 @@ import org.jboss.logging.Logger;
 
 /**
  * Keeps the admin (master) realm off the network: requests for /realms/{admin realm}/..., /admin/{admin realm}/...
- * and /admin/realms/{admin realm}/... are answered 404 unless they come from an allowed source address (default:
- * loopback only), whatever host or port they arrive on. The user-facing realms - including their own admin console
+ * and /admin/realms/{admin realm}/... are answered 404 unless they come from an allowed source address, whatever
+ * host or port they arrive on. Paths are matched by AdminRealmPathMatcher on decoded segments (matrix parameters,
+ * doubled or encoded slashes, dot segments and case variants all normalised; anything unreadable is denied). The user-facing realms - including their own admin console
  * - are untouched. Use it when the admin console must stay reachable for a user realm but the master realm should be
  * break-glass only (V-222574 compensating control).
  *
@@ -40,25 +41,26 @@ public class AdminRealmNetworkGuard implements ContainerRequestFilter {
         return v == null || v.isBlank() ? d : v;
     }
 
-    static boolean guarded(String path) {
-        String p = path.startsWith("/") ? path : "/" + path;
-        String r = "/" + REALM;
-        for (String prefix : new String[] {"/realms" + r, "/admin" + r, "/admin/realms" + r}) {
-            if (p.equals(prefix) || p.startsWith(prefix + "/")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     @Override
     public void filter(ContainerRequestContext ctx) {
-        if (ALLOWED.isEmpty() || !guarded(ctx.getUriInfo().getPath())) {
+        if (ALLOWED.isEmpty()) {
+            return;
+        }
+        boolean guarded;
+        try {
+            List<String> segs = ctx.getUriInfo().getPathSegments(true).stream()
+                    .map(jakarta.ws.rs.core.PathSegment::getPath).collect(Collectors.toList());
+            guarded = AdminRealmPathMatcher.guarded(segs, REALM);
+        } catch (RuntimeException e) {
+            guarded = true;                        // cannot parse the path confidently: default deny
+        }
+        if (!guarded) {
             return;
         }
         String peer = request == null || request.remoteAddress() == null ? "" : request.remoteAddress().host();
         if (!ALLOWED.contains(peer)) {
-            LOG.warnf("STIG-ADMIN-REALM-BLOCKED path=%s peer=%s", ctx.getUriInfo().getPath(), peer);
+            LOG.warnf("STIG-ADMIN-REALM-BLOCKED path=%s peer=%s",
+                    AdminRealmPathMatcher.printable(ctx.getUriInfo().getRequestUri().getRawPath()), AdminRealmPathMatcher.printable(peer));
             ctx.abortWith(Response.status(Response.Status.NOT_FOUND).build());
         }
     }
