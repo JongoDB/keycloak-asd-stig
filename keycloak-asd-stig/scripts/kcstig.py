@@ -263,6 +263,7 @@ ADMIN_GATE = "stig-admin-second-factor-required"     # stig-extensions.jar (post
 PW_FORMS = {"auth-username-password-form", "stig-username-password-form"}
 X509_FORMS = {"auth-x509-client-username-form", "stig-x509-client-username-form"}
 RESET_GATE = "stig-admin-reset-credentials-gate"
+ALLOWLIST_GATE = "stig-admin-allowlist-gate"
 
 def reset_flow(extension):
     """Reset credentials (only reachable when resetPasswordAllowed): no self-service reset for any administrator, and
@@ -306,16 +307,22 @@ def browser_flow(p, *, admin_realm, extension=True):
             ("exec", "stig-username-password-form" if extension else "auth-username-password-form", "REQUIRED", None)] + [
             ("exec", second, "REQUIRED", None),
         ]))
-    return (prefix, [
-        ("exec", "auth-cookie", "ALTERNATIVE", None),
-        ("flow", prefix + " - Forms", "ALTERNATIVE", [
+    forms = ("flow", prefix + " - Forms", "ALTERNATIVE", [
             ("flow", prefix + " - Authenticate", "REQUIRED", authn),
             ("exec", "user-session-limits", "REQUIRED",
              {"alias": (prefix + " session limits").lower().replace(" ", "-"),
               "config": {"userRealmLimit": str(s["max_per_user"]), "userClientLimit": "0",
                          "behavior": "Deny new session",
                          "errorMessage": "Maximum concurrent sessions reached. Log out of another session first."}}),
-        ]),
+        ])
+    if not extension:
+        return (prefix, [("exec", "auth-cookie", "ALTERNATIVE", None), forms])
+    # stig-extensions: after ANY sign-in - an SSO cookie included - an administrator who is not on the realm's
+    # allowlist (master-realm attribute stig.admin-allowlist.<realm>), or holds a realm-management role beyond its
+    # entry (stig.admin-allowlist-roles.<realm>), is refused; no allowlist = no effect
+    return (prefix, [
+        ("flow", prefix + " - Sign in", "REQUIRED", [("exec", "auth-cookie", "ALTERNATIVE", None), forms]),
+        ("exec", ALLOWLIST_GATE, "REQUIRED", None),
     ])
 
 DENY_DIRECT_GRANT = ("STIG Direct Grant - Deny", [("exec", "deny-access-authenticator", "REQUIRED", None)])
@@ -1108,7 +1115,7 @@ class Checker:
         ex = self.flow_execs(realm, bf)
         provs = [e.get("providerId") for e in ex]
         paths = self.paths(ex)
-        primary = [pa for pa in paths if pa != {"auth-cookie"}]
+        primary = [pa for pa in paths if (pa - {ALLOWLIST_GATE}) != {"auth-cookie"}]
         x509_paths = [pa for pa in primary if bool(X509_FORMS & pa)]
         weak = [sorted(pa) for pa in primary if not (X509_FORMS & pa) and not
                 ({"auth-otp-form", "webauthn-authenticator", "webauthn-authenticator-passwordless"} & pa)]
@@ -1122,6 +1129,9 @@ class Checker:
             gated = [("stig-username-password-form" in pa) or (ADMIN_GATE in pa) for pa in pw_paths]
             self.res("flow.admin_second_factor_gate", all(gated),
                      "password paths refusing an administrator without an enrolled second factor (stig-username-password-form): %s" % gated)
+            top = [(e.get("providerId"), e.get("requirement")) for e in ex if e.get("level") == 0]
+            self.res("flow.admin_allowlist_gate", (ALLOWLIST_GATE, "REQUIRED") in top,
+                     "browser flow top level %s: every sign-in (an SSO cookie included) passes %s" % (top, ALLOWLIST_GATE))
             rf = [e.get("providerId") for e in self.flow_execs(realm, R.get("resetCredentialsFlow"))]
             self.res("flow.reset_admin_gate", RESET_GATE in rf,
                      "resetCredentialsFlow='%s' (resetPasswordAllowed=%s) providers=%s" % (R.get("resetCredentialsFlow"), R.get("resetPasswordAllowed"), rf))
@@ -1215,7 +1225,7 @@ class Checker:
     def check_admin_realm(self):
         A, ar = self.A, self.ar
         ex = self.flow_execs(ar, A.get("browserFlow"))
-        paths = [pa for pa in self.paths(ex) if pa != {"auth-cookie"}]
+        paths = [pa for pa in self.paths(ex) if (pa - {ALLOWLIST_GATE}) != {"auth-cookie"}]
         mfa = self.p["admin"]["mfa"]
         if mfa == "x509":
             ok = bool(paths) and all(bool(X509_FORMS & pa) for pa in paths)

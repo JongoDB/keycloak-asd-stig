@@ -148,6 +148,17 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
             // STIG: NOT refused for password-failure lockout. A card cannot be guessed (AC-7 is about guessing), and
             // three bad passwords typed by anyone on the internet must not lock a card holder out - least of all the
             // sole administrator. Revocation, trust, validity and the mapping are all still checked above.
+            if (StigAdministrators.unvettedAdministrator(context.getSession(), context.getRealm(), user)) {
+                logger.errorf("STIG-ADMIN-NOT-ALLOWLISTED realm=%s user=%s path=card: holds administrator rights it is not vetted for (not on the allowlist, or beyond its entry)",
+                        context.getRealm().getName(), user.getUsername());
+                context.getEvent().user(user);
+                context.getEvent().error(Errors.ACCESS_DENIED);
+                context.challenge(createErrorResponse(context, certs[0].getSubjectDN().getName(),
+                        "X509 certificate authentication's failed.", "Invalid user"));
+                context.attempted();
+                return;
+            }
+
             if (!userEnabled(context, user)) {
                 // TODO use specific locale to load error messages
                 String errorMessage = "X509 certificate authentication's failed.";
