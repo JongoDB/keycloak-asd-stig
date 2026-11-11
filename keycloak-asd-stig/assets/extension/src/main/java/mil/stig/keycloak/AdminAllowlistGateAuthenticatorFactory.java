@@ -28,10 +28,11 @@ import org.keycloak.services.messages.Messages;
 public class AdminAllowlistGateAuthenticatorFactory implements Authenticator, AuthenticatorFactory, ServerInfoAwareProviderFactory {
     /** Capability marker, published in the server info (providers.authenticator.stig-admin-allowlist-gate
      *  .operationalInfo): 1 = every allowlist check also refuses an administrator holding a realm-management role
-     *  beyond its entry (stig.admin-allowlist-roles.<realm>). The operator's guard reads it, and while it is missing
+     *  beyond its entry (stig.admin-allowlist-roles.<realm>); 2 = entries name the granted groups / roles
+     *  (group:<path>, role:<name>), expanded when the check runs. The operator's guard reads it, and while it is missing
      *  or older it contains what an over-entitled account changed. */
     public static final String ROLE_EXTENT_KEY = "allowlist-role-extent";
-    public static final String ROLE_EXTENT_VERSION = "1";
+    public static final String ROLE_EXTENT_VERSION = "2";      // 2: entries name what was GRANTED, expanded at check time
 
     @Override
     public java.util.Map<String, String> getOperationalInfo() {

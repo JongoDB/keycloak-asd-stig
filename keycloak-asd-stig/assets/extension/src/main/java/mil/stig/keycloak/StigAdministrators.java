@@ -25,23 +25,37 @@ final class StigAdministrators {
     }
 
     /** Master-realm attribute holding the realm's VETTED administrators (comma-separated user ids). Only the master
-     *  realm (the operator's tooling, break-glass) can write it; absent = not enforced for that realm. */
+     *  realm (the operator's tooling, break-glass) can write it. */
     static final String ALLOWLIST_ATTR_PREFIX = "stig.admin-allowlist.";
 
-    /** The realm's allowlisted administrator ids, or null when the realm does not enforce an allowlist. */
+    /** Realms that ENFORCE an allowlist whatever the master realm holds (deployment configuration, comma-separated):
+     *  for these a missing allowlist refuses every administrator instead of switching the check off. */
+    static final java.util.Set<String> ENFORCED_REALMS = enforcedRealms(System.getenv("STIG_ALLOWLIST_ENFORCED_REALMS"));
+
+    static java.util.Set<String> enforcedRealms(String v) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (v != null) for (String r : v.split(",")) if (!r.isBlank()) out.add(r.trim());
+        return out;
+    }
+
+    /** The realm's allowlisted administrator ids; an EMPTY set (nobody vetted) when the realm is enforced by
+     *  configuration but its allowlist is missing; null when the realm does not enforce an allowlist at all. */
     static java.util.Set<String> allowlist(org.keycloak.models.KeycloakSession session, RealmModel realm) {
         RealmModel master = session.realms().getRealmByName(org.keycloak.Config.getAdminRealm());
         if (master == null || master.getId().equals(realm.getId())) return null;
         String v = master.getAttribute(ALLOWLIST_ATTR_PREFIX + realm.getName());
-        if (v == null) return null;
+        if (v == null) return ENFORCED_REALMS.contains(realm.getName()) ? new java.util.HashSet<>() : null;
         java.util.Set<String> out = new java.util.HashSet<>();
         for (String id : v.split(",")) if (!id.isBlank()) out.add(id.trim());
         return out;
     }
 
-    /** Master-realm attribute holding, for each vetted administrator, the realm-management roles its entry permits
-     *  (EFFECTIVE role names): {@code <user id>=<role>,<role>;<user id>=...}. Written with the id list, by the same
-     *  tooling (grant / promote), never by the realm itself. */
+    /** Master-realm attribute holding, for each vetted administrator, WHAT WAS GRANTED: {@code <user id>=<item>,<item>;...}
+     *  where an item is {@code group:<group path>} (e.g. group:/roles/idp-admin) or {@code role:<realm-management role>}
+     *  (a bare name is read as a role). What an item permits is expanded when the check runs - the group's roles (with
+     *  its parents) or the role's composites, recursively - so a role added to realm-admin, or to a granted /roles group,
+     *  never makes a vetted administrator "over its entry"; only a role reached outside the grant does. Written with
+     *  the id list, by the same tooling (grant / promote), never by the realm itself. */
     static final String ALLOWLIST_ROLES_ATTR_PREFIX = "stig.admin-allowlist-roles.";
 
     /** Parse the entries; null when the value is absent or malformed in any part (callers fail closed). */
@@ -63,6 +77,26 @@ final class StigAdministrators {
         return out;
     }
 
+    /** The realm-management role names an entry's granted items permit NOW; null if any item cannot be resolved
+     *  (an unknown group or role: fail closed). */
+    static java.util.Set<String> permitted(org.keycloak.models.KeycloakSession session, RealmModel realm, java.util.Set<String> items) {
+        ClientModel rm = realm.getClientByClientId("realm-management");
+        if (rm == null || items == null) return null;
+        java.util.Set<String> out = new java.util.HashSet<>();
+        for (String it : items) {
+            if (it.startsWith("group:")) {
+                org.keycloak.models.GroupModel g = org.keycloak.models.utils.KeycloakModelUtils.findGroupByPath(session, realm, it.substring(6));
+                if (g == null) return null;
+                rm.getRolesStream().filter(g::hasRole).forEach(r -> out.add(r.getName()));
+            } else {
+                org.keycloak.models.RoleModel granted = rm.getRole(it.startsWith("role:") ? it.substring(5) : it);
+                if (granted == null) return null;
+                rm.getRolesStream().filter(granted::hasRole).forEach(r -> out.add(r.getName()));
+            }
+        }
+        return out;
+    }
+
     /** True when the user holds an effective realm-management role its entry does not permit, or there is no entry. */
     static boolean exceedsEntry(java.util.Set<String> effective, java.util.Set<String> entry) {
         return entry == null || !entry.containsAll(effective);
@@ -78,8 +112,8 @@ final class StigAdministrators {
     }
 
     /** An administrator (any realm-management role, by any route) who is NOT vetted for what it holds: not on the
-     *  realm's allowlist, or holding a realm-management role beyond its entry. Where the realm enforces an allowlist,
-     *  an entry or role list that cannot be read counts as no entry (fail closed). */
+     *  realm's allowlist, or holding a realm-management role beyond what its entry's grants permit now. Where the realm
+     *  enforces an allowlist, an entry, a grant or a list that cannot be read counts as no entry (fail closed). */
     static boolean unvettedAdministrator(org.keycloak.models.KeycloakSession session, RealmModel realm, UserModel user) {
         if (user == null || !isAdministrator(realm, user)) return false;
         java.util.Set<String> al = allowlist(session, realm);
@@ -88,7 +122,8 @@ final class StigAdministrators {
         RealmModel master = session.realms().getRealmByName(org.keycloak.Config.getAdminRealm());
         java.util.Map<String, java.util.Set<String>> entries = master == null ? null
                 : parseEntries(master.getAttribute(ALLOWLIST_ROLES_ATTR_PREFIX + realm.getName()));
-        return exceedsEntry(effectiveAdminRoles(realm, user), entries == null ? null : entries.get(user.getId()));
+        java.util.Set<String> items = entries == null ? null : entries.get(user.getId());
+        return exceedsEntry(effectiveAdminRoles(realm, user), items == null ? null : permitted(session, realm, items));
     }
 
     /** An enrolled OTP or two-factor WebAuthn credential. */

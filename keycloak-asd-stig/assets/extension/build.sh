@@ -9,7 +9,7 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"; docker rm -f stig-ext-cp >/dev/null 2
 docker create --name stig-ext-cp "$IMG" >/dev/null
 mkdir -p "$WORK/lib"
 JARS=$(docker run --rm --entrypoint bash "$IMG" -c 'find /opt/keycloak/lib/lib -name "*.jar"' \
-  | grep -E '(keycloak-server-spi-|keycloak-server-spi-private-|keycloak-core-|keycloak-common-|keycloak-services-|org\.jboss\.logging\.jboss-logging-[0-9]|jakarta\.ws\.rs\.jakarta\.ws\.rs-api-|io\.vertx\.vertx-core-[0-9])')
+  | grep -E '(keycloak-server-spi-|keycloak-server-spi-private-|keycloak-core-|keycloak-common-|keycloak-services-|org\.jboss\.logging\.jboss-logging-[0-9]|jakarta\.ws\.rs\.jakarta\.ws\.rs-api-|io\.vertx\.vertx-core-[0-9]|com\.fasterxml\.jackson\.(core|datatype|module)\.jackson-)')
 for f in $JARS; do docker cp "stig-ext-cp:$f" "$WORK/lib/" >/dev/null; done
 CP="$(ls "$WORK"/lib/*.jar | tr '\n' ':')"
 mkdir -p "$WORK/classes" "$HERE/target"
