@@ -45,7 +45,7 @@ public class IdpRequireAdminAttributeMatchAuthenticatorFactory implements Authen
         if (s == null || user == null) {
             why = "not a brokered sign-in";
         } else if (StigAdministrators.unvettedAdministrator(context.getSession(), context.getRealm(), user)) {
-            why = "holds administrator rights but is not on the allowlist (STIG-ADMIN-NOT-ALLOWLISTED)";
+            why = "holds administrator rights it is not vetted for (not on the allowlist, or beyond its entry) (STIG-ADMIN-NOT-ALLOWLISTED)";
         } else {
             BrokeredIdentityContext b = s.deserialize(context.getSession(), as);
             idp = b.getIdpConfig() == null ? null : b.getIdpConfig().getAlias();

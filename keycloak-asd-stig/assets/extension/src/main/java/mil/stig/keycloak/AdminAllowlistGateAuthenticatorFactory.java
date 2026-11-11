@@ -20,8 +20,8 @@ import org.keycloak.services.messages.Messages;
 
 /**
  * After ANY way of signing in to the browser flow - an existing SSO cookie included - refuse an account that holds
- * administrator rights (any realm-management role, by any route) but is not on the realm's allowlist (a master-realm
- * attribute only the operator's tooling writes). An administrator made in the console, not by the tooling, therefore
+ * administrator rights (any realm-management role, by any route) but is not on the realm's allowlist, or holds a
+ * realm-management role beyond its entry (master-realm attributes only the operator's tooling writes). An administrator made in the console, not by the tooling, therefore
  * cannot sign in as one at all - not even with a session it already had.
  */
 public class AdminAllowlistGateAuthenticatorFactory implements Authenticator, AuthenticatorFactory {
@@ -35,7 +35,7 @@ public class AdminAllowlistGateAuthenticatorFactory implements Authenticator, Au
             context.success();
             return;
         }
-        LOG.errorf("STIG-ADMIN-NOT-ALLOWLISTED realm=%s user=%s path=browser: holds administrator rights but is not on the allowlist",
+        LOG.errorf("STIG-ADMIN-NOT-ALLOWLISTED realm=%s user=%s path=browser: holds administrator rights it is not vetted for (not on the allowlist, or beyond its entry)",
                 context.getRealm().getName(), u.getUsername());
         context.getEvent().user(u).error(Errors.ACCESS_DENIED);
         Response page = context.form().setError(Messages.ACCESS_DENIED).createErrorPage(Response.Status.FORBIDDEN);
@@ -59,6 +59,6 @@ public class AdminAllowlistGateAuthenticatorFactory implements Authenticator, Au
                 AuthenticationExecutionModel.Requirement.DISABLED};
     }
     @Override public boolean isUserSetupAllowed() { return false; }
-    @Override public String getHelpText() { return "Refuses an administrator who is not on the realm's allowlist (master realm attribute)."; }
+    @Override public String getHelpText() { return "Refuses an administrator who is not on the realm's allowlist, or holds a realm-management role beyond its entry (master realm attributes)."; }
     @Override public List<ProviderConfigProperty> getConfigProperties() { return List.of(); }
 }

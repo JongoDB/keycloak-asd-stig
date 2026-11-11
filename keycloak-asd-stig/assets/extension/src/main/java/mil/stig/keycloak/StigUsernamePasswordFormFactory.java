@@ -43,8 +43,8 @@ public class StigUsernamePasswordFormFactory extends UsernamePasswordFormFactory
             UserModel user = context.getUser();
             if (user == null || !StigAdministrators.isAdministrator(context.getRealm(), user)) return true;
             if (StigAdministrators.unvettedAdministrator(context.getSession(), context.getRealm(), user)) {
-                LOG.errorf("STIG-ADMIN-NOT-ALLOWLISTED realm=%s user=%s path=password: holds administrator rights but is not on the "
-                        + "allowlist - refused as if the password were wrong", context.getRealm().getName(), user.getUsername());
+                LOG.errorf("STIG-ADMIN-NOT-ALLOWLISTED realm=%s user=%s path=password: holds administrator rights it is not vetted for "
+                        + "(not on the allowlist, or beyond its entry) - refused as if the password were wrong", context.getRealm().getName(), user.getUsername());
             } else if (StigAdministrators.hasSecondFactor(user)) {
                 return true;
             } else {

@@ -19,7 +19,8 @@ import org.keycloak.utils.KeycloakSessionUtil;
 
 /**
  * Every admin-API request (/admin/realms/...), before it reaches its resource:
- *   - refused (403) for an account that holds administrator rights but is NOT on the realm's allowlist - so a token,
+ *   - refused (403) for an account that holds administrator rights but is NOT on the realm's allowlist, or holds a
+ *     realm-management role beyond its entry - so a token,
  *     refresh token or session obtained before (or without) vetting cannot be used against the API either;
  *   - refused (403) for anyone but a realm administrator or the master realm when any query parameter names a
  *     concealed attribute (q=cac_edipi:..., on /users, /users/count, group members, ...): no probing by value.

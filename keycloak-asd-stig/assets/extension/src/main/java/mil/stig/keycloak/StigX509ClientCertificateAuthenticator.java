@@ -149,7 +149,7 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
             // three bad passwords typed by anyone on the internet must not lock a card holder out - least of all the
             // sole administrator. Revocation, trust, validity and the mapping are all still checked above.
             if (StigAdministrators.unvettedAdministrator(context.getSession(), context.getRealm(), user)) {
-                logger.errorf("STIG-ADMIN-NOT-ALLOWLISTED realm=%s user=%s path=card: holds administrator rights but is not on the allowlist",
+                logger.errorf("STIG-ADMIN-NOT-ALLOWLISTED realm=%s user=%s path=card: holds administrator rights it is not vetted for (not on the allowlist, or beyond its entry)",
                         context.getRealm().getName(), user.getUsername());
                 context.getEvent().user(user);
                 context.getEvent().error(Errors.ACCESS_DENIED);

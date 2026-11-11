@@ -318,7 +318,8 @@ def browser_flow(p, *, admin_realm, extension=True):
     if not extension:
         return (prefix, [("exec", "auth-cookie", "ALTERNATIVE", None), forms])
     # stig-extensions: after ANY sign-in - an SSO cookie included - an administrator who is not on the realm's
-    # allowlist (master-realm attribute stig.admin-allowlist.<realm>) is refused; no allowlist = no effect
+    # allowlist (master-realm attribute stig.admin-allowlist.<realm>), or holds a realm-management role beyond its
+    # entry (stig.admin-allowlist-roles.<realm>), is refused; no allowlist = no effect
     return (prefix, [
         ("flow", prefix + " - Sign in", "REQUIRED", [("exec", "auth-cookie", "ALTERNATIVE", None), forms]),
         ("exec", ALLOWLIST_GATE, "REQUIRED", None),
