@@ -16,6 +16,7 @@ import org.keycloak.models.KeycloakSessionFactory;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.provider.ProviderConfigProperty;
+import org.keycloak.provider.ServerInfoAwareProviderFactory;
 import org.keycloak.services.messages.Messages;
 
 /**
@@ -24,7 +25,19 @@ import org.keycloak.services.messages.Messages;
  * realm-management role beyond its entry (master-realm attributes only the operator's tooling writes). An administrator made in the console, not by the tooling, therefore
  * cannot sign in as one at all - not even with a session it already had.
  */
-public class AdminAllowlistGateAuthenticatorFactory implements Authenticator, AuthenticatorFactory {
+public class AdminAllowlistGateAuthenticatorFactory implements Authenticator, AuthenticatorFactory, ServerInfoAwareProviderFactory {
+    /** Capability marker, published in the server info (providers.authenticator.stig-admin-allowlist-gate
+     *  .operationalInfo): 1 = every allowlist check also refuses an administrator holding a realm-management role
+     *  beyond its entry (stig.admin-allowlist-roles.<realm>). The operator's guard reads it, and while it is missing
+     *  or older it contains what an over-entitled account changed. */
+    public static final String ROLE_EXTENT_KEY = "allowlist-role-extent";
+    public static final String ROLE_EXTENT_VERSION = "1";
+
+    @Override
+    public java.util.Map<String, String> getOperationalInfo() {
+        return java.util.Map.of(ROLE_EXTENT_KEY, ROLE_EXTENT_VERSION);
+    }
+
     public static final String ID = "stig-admin-allowlist-gate";
     private static final Logger LOG = Logger.getLogger("mil.stig.audit");
 
