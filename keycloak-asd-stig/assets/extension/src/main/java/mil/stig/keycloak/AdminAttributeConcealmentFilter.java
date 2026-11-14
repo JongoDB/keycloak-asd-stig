@@ -18,7 +18,9 @@ import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.RoleModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.representations.idm.AdminEventRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
+import org.keycloak.util.JsonSerialization;
 import org.keycloak.services.resources.admin.AdminAuth;
 import org.keycloak.services.resources.admin.AdminRoot;
 import org.keycloak.utils.KeycloakSessionUtil;
@@ -28,7 +30,9 @@ import org.keycloak.utils.KeycloakSessionUtil;
  * are visible through the admin API ONLY to true realm administrators (realm-admin) and the master realm. A
  * fine-grained delegate counts as "admin" for user-profile permissions, so the user profile cannot hide them; this
  * filter removes them from every user representation the admin API returns to anyone else, and empties a user search
- * that names one of them (no probing by value). STIG_CONCEALED_ATTRIBUTES overrides the list (comma-separated).
+ * that names one of them (no probing by value). The same names are removed from the representation an admin event
+ * carries (an auditor reading admin events sees what was changed, not the card mapping); a representation that cannot
+ * be cleaned is withheld. STIG_CONCEALED_ATTRIBUTES overrides the list (comma-separated).
  */
 @Provider
 public class AdminAttributeConcealmentFilter implements ContainerResponseFilter {
@@ -64,6 +68,40 @@ public class AdminAttributeConcealmentFilter implements ContainerResponseFilter 
 
     static Object stripAny(Object o) {
         if (o instanceof UserRepresentation u) strip(u);
+        else if (o instanceof AdminEventRepresentation e) e.setRepresentation(scrub(e.getRepresentation()));
+        return o;
+    }
+
+    /** An admin event's representation (JSON) without any concealed name, at any depth; null (withheld) when it
+     *  cannot be parsed, or when a concealed name still appears anywhere after cleaning (e.g. inside a value). */
+    static String scrub(String json) {
+        if (json == null || !mentionsConcealed(json)) return json;
+        try {
+            Object tree = JsonSerialization.readValue(json, Object.class);
+            String out = JsonSerialization.writeValueAsString(prune(tree));
+            return mentionsConcealed(out) ? null : out;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    static boolean mentionsConcealed(String s) {
+        String l = s.toLowerCase(Locale.ROOT);
+        return CONCEALED.stream().anyMatch(a -> l.contains(a.toLowerCase(Locale.ROOT)));
+    }
+
+    @SuppressWarnings("unchecked")
+    static Object prune(Object o) {
+        if (o instanceof Map<?, ?> m) {
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                String k = String.valueOf(e.getKey());
+                if (CONCEALED.stream().anyMatch(a -> a.equalsIgnoreCase(k))) continue;
+                out.put(k, prune(e.getValue()));
+            }
+            return out;
+        }
+        if (o instanceof List<?> l) return l.stream().map(AdminAttributeConcealmentFilter::prune).collect(Collectors.toList());
         return o;
     }
 
