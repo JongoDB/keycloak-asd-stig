@@ -209,6 +209,9 @@ automation_secret() {
 }
 if truthy "${CAC_APPLY:-true}"; then
   python3 "$TOOLS/cac-config.py" profile "$D/profile.json" || die "configuration rejected (see above)"
+  # extra realms (CAC_EXTRA_REALM_PROFILES): validated now, applied after the main realm on every start
+  rm -rf "$D/extra"
+  python3 "$TOOLS/cac-config.py" extra-profiles "$D/extra" "$D/profile.json" > "$D/extra-realms.txt" || die "extra realm profile rejected (see above)"
   ( umask 077; automation_secret > "$D/.automation-secret" ) || { rm -f "$D/.automation-secret"
     die "set CAC_AUTOMATION_SECRET[_FILE]: the secret of the admin-API service account that applies the STIG realm (any long random string; keep it the same across restarts)"; }
   [ "$(wc -c < "$D/.automation-secret")" -ge 24 ] || die "CAC_AUTOMATION_SECRET must be at least 24 characters"
@@ -228,13 +231,26 @@ apply() {
   else
     log "WARN no CAC_ADMINS: the admin realm is NOT hardened (no Alt Token admins) and the bootstrap admin is kept."
   fi
-  local i
+  local i ok=false
   for i in 1 2 3; do
     if python3 /opt/kcstig/scripts/kcstig.py apply --profile "$D/profile.json" ${args[@]+"${args[@]}"} --secret-out /dev/null; then
-      date -u +%FT%TZ > "$D/.applied"; log "STIG realm applied: ${KC_HOSTNAME}/realms/$(python3 -c "import json;print(json.load(open('$D/profile.json'))['realm']['name'])")"; return 0; fi
+      ok=true; log "STIG realm applied: ${KC_HOSTNAME}/realms/$(python3 -c "import json;print(json.load(open('$D/profile.json'))['realm']['name'])")"; break; fi
     log "apply attempt $i failed; retrying"; sleep $((RANDOM % 10 + 5))
   done
-  return 1
+  $ok || return 1
+  # every extra realm, after the main one (which hardened master): never --harden-master, and only its own clients
+  local name prof cdir
+  while read -r name prof cdir; do
+    [ -n "$name" ] || continue
+    ok=false
+    for i in 1 2 3; do
+      if STIG_CLIENTS_DIR="$cdir" python3 /opt/kcstig/scripts/kcstig.py apply --profile "$prof" --clients-dir "$cdir" --secret-out /dev/null; then
+        ok=true; log "STIG realm applied: ${KC_HOSTNAME}/realms/$name (extra realm)"; break; fi
+      log "extra realm $name: apply attempt $i failed; retrying"; sleep $((RANDOM % 10 + 5))
+    done
+    $ok || return 1
+  done < "$D/extra-realms.txt"
+  date -u +%FT%TZ > "$D/.applied"; return 0
 }
 crl_loop() {
   [ "$MODE" = online ] && { crl_refresh; python3 "$TOOLS/cac-config.py" clear-crl-cache || true; touch "$D/.crl-loaded"; }

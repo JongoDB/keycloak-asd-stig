@@ -2,6 +2,8 @@
 """cac-config - turns the container's environment into a kcstig profile, and small runtime helpers.
 
   cac-config.py profile <out.json>        render the profile from CAC_* env (see README "Environment")
+  cac-config.py extra-profiles <out-dir>  render one profile per extra realm (CAC_EXTRA_REALM_PROFILES); prints
+                                          "<realm> <profile> <clients-dir>" per realm, in apply order
   cac-config.py wait-ready <seconds>      wait for Keycloak's readiness endpoint on the management port
   cac-config.py clear-crl-cache           make every node drop its cached CRLs (after a refresh on disk)
   cac-config.py lab-users <pki-dir>       print users/admins JSON for the generated mock CACs (lab mode)
@@ -139,6 +141,48 @@ def build_profile():
     p["clients"] = p.get("clients", []) + json_items("CAC_CLIENTS_JSON", "")
     return p
 
+# Keys an extra realm's profile may not set: the server, the admin realm and its administrators belong to the main
+# profile (only its apply hardens master), and the realm's clients come from its own clients directory.
+EXTRA_FORBIDDEN = ("keycloak", "admin")
+
+def extra_profiles(main):
+    """CAC_EXTRA_REALM_PROFILES: a directory of kcstig profiles, one per additional realm, applied after the main realm
+    on every start (so a restart re-hardens every realm). Each is merged over the main profile - an extra CAC realm
+    inherits the PKI, CRL and lockout settings - without the main realm's users and clients. Its clients come from
+    <CAC_CLIENTS_DIR>/<realm>/*.json only (never the main realm's), its users from its own profile."""
+    from kcstig import deep_merge
+    d = env("CAC_EXTRA_REALM_PROFILES")
+    if not d:
+        return []
+    if not os.path.isdir(d):
+        die("CAC_EXTRA_REALM_PROFILES=%s is not a directory" % d)
+    # inherited: server, PKI/CRL, sessions, lockout, password, banner, events...; NOT the realm's own choices
+    base = {k: v for k, v in main.items() if k not in ("users", "clients", "realm", "registration_flow", "webauthn")}
+    base["admin"] = dict(main["admin"], users=[])          # an extra realm's apply never touches the admin realm
+    seen, out = {main["realm"]["name"], "master"}, []
+    for f in sorted(glob.glob(os.path.join(d, "*.json"))):
+        try:
+            raw = json.load(open(f))
+        except (OSError, ValueError) as e:
+            die("%s: not a JSON profile (%s)" % (f, e))
+        if not isinstance(raw, dict):
+            die("%s: a profile is one JSON object" % f)
+        bad = [k for k in EXTRA_FORBIDDEN if k in raw]
+        if bad:
+            die("%s: %s may only be set by the main realm's profile" % (f, ", ".join(bad)))
+        name = ((raw.get("realm") or {}).get("name") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
+            die("%s: realm.name must be 1-64 letters, digits, . _ -" % f)
+        if name.lower() in {x.lower() for x in seen}:
+            die("%s: realm %s is the main realm, master, or already defined by another profile" % (f, name))
+        seen.add(name)
+        p = deep_merge(base, raw)
+        p.setdefault("users", raw.get("users", []))
+        p["clients"] = list(raw.get("clients", []))
+        cdir = os.path.join(env("CAC_CLIENTS_DIR", "") or "/nonexistent", name)
+        out.append((name, p, cdir))
+    return out
+
 def lab_users(labdir, src, attr):
     """The mock CACs from make_test_pki.sh, mapped the same way real cards would be."""
     users, admins = [], []
@@ -197,6 +241,23 @@ if __name__ == "__main__":
             prof["realm"]["name"], prof["auth_mode"], username_source(), crl_mode(), len(x["crl_files"]) if x["crl"] else 0,
             x["ocsp"], len(prof["users"]), len(prof["admin"]["users"]),
             len(prof.get("clients", [])) + len(glob.glob(os.path.join(env("CAC_CLIENTS_DIR", "/nonexistent"), "*.json")))), file=sys.stderr)
+    elif c == "extra-profiles":
+        os.makedirs(sys.argv[2], mode=0o700, exist_ok=True)
+        main = json.load(open(os.path.join(PKI, "profile.json"))) if len(sys.argv) < 4 else json.load(open(sys.argv[3]))
+        sys.path.insert(0, "/opt/kcstig/scripts")
+        import kcstig
+        for name, prof, cdir in extra_profiles(main):
+            path = os.path.join(sys.argv[2], "%s.json" % name)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(prof, f, indent=1)
+            try:   # fail fast: the profile must load (auth mode, WebAuthn names, STIG limits) before Keycloak starts
+                kcstig.load_profile(path, cdir if os.path.isdir(cdir) else "/nonexistent")
+            except SystemExit as e:
+                die("extra realm %s: %s" % (name, e))
+            print("%s %s %s" % (name, path, cdir))
+            print("cac-config: extra realm=%s auth=%s clients=%s" % (name, prof["auth_mode"], cdir if os.path.isdir(cdir) else "none"),
+                  file=sys.stderr)
     elif c == "wait-ready":
         wait_ready(int(sys.argv[2]) if len(sys.argv) > 2 else 300)
     elif c == "clear-crl-cache":
