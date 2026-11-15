@@ -64,13 +64,16 @@ check("... attestation none, any attachment, RP ID the IdP's own host",
       R["webAuthnPolicyPasswordlessAttestationConveyancePreference"] == "none"
       and R["webAuthnPolicyPasswordlessAuthenticatorAttachment"] == "not specified" and R["webAuthnPolicyPasswordlessRpId"] == "")
 check("registration flow bound to a deny flow", r["registration_flow"] == ("STIG Registration - Deny", [("exec", "deny-access-authenticator", "REQUIRED", None)]))
-flat = json.dumps(r["browser_flow"])
-check("browser flow: username form, CONDITIONAL [credential not used -> passkey], allowlist gate",
-      '"auth-username-form"' in flat and '"CONDITIONAL"' in flat and '"conditional-credential"' in flat
+check("the default sign-in is discoverable (no username is ever asked for)", p["webauthn"]["sign_in"] == "discoverable")
+pu, _ = load(K.deep_merge(base, {"webauthn": {"sign_in": "username"}}))
+ru = K.render(pu)
+flat = json.dumps(ru["browser_flow"])
+check("sign_in=username: stig-passkey-username-form, CONDITIONAL [credential not used -> passkey], allowlist gate",
+      '"stig-passkey-username-form"' in flat and '"auth-username-form"' not in flat and '"CONDITIONAL"' in flat and '"conditional-credential"' in flat
       and '"webauthn-passwordless", "included": "false"' in flat and K.PASSKEY_AUTH in flat and K.ALLOWLIST_GATE in flat)
-auth = [x for x in r["browser_flow"][1][0][3][1][3][0][3]]   # Sign in > Forms > Authenticate
+auth = [x for x in ru["browser_flow"][1][0][3][1][3][0][3]]   # Sign in > Forms > Authenticate
 check("browser flow: stig-passkey-required REQUIRED directly after the username form (no enrolment at sign-in)",
-      [(x[1], x[2]) for x in auth[:2]] == [("auth-username-form", "REQUIRED"), ("stig-passkey-required", "REQUIRED")], [(x[1], x[2]) for x in auth])
+      [(x[1], x[2]) for x in auth[:2]] == [("stig-passkey-username-form", "REQUIRED"), ("stig-passkey-required", "REQUIRED")], [(x[1], x[2]) for x in auth])
 try:
     K.render(p, extension=False); ne = None
 except SystemExit as e:
@@ -79,9 +82,8 @@ check("a passkey realm is refused on a server without stig-extensions", ne and "
 check("browser flow: no password, OTP, two-factor WebAuthn or certificate step",
       not any(x in flat for x in ('"stig-username-password-form"', '"auth-username-password-form"', '"auth-otp-form"',
                                   '"webauthn-authenticator"', "x509")))
-pd, _ = load(K.deep_merge(base, {"webauthn": {"sign_in": "discoverable"}}))
-fd = json.dumps(K.render(pd)["browser_flow"])
-check("sign_in=discoverable: the passkey step alone, no username form", K.PASSKEY_AUTH in fd and "auth-username-form" not in fd
+fd = json.dumps(r["browser_flow"])
+check("sign_in=discoverable: the passkey step alone, no username form", K.PASSKEY_AUTH in fd and "username-form" not in fd
       and "conditional-credential" not in fd and K.ALLOWLIST_GATE in fd)
 wf = r["workflows"][0]
 check("the disabled marker is declared in the user profile, administrators only",

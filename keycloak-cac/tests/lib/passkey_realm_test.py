@@ -162,6 +162,36 @@ for label, ra, verified in (("invited, not set up", ["VERIFY_EMAIL", "TERMS_AND_
           and not kc.api("GET", RR + "/users/%s/credentials" % vid), hops)
     time.sleep(1)
     check("... logged STIG-PASSKEY-NOT-ENROLLED", "STIG-PASSKEY-NOT-ENROLLED" in logs(since_u) and n in logs(since_u))
+# the response to an account without a passkey must not differ from the response to an unknown username
+def normal(page, name):
+    p = page.replace(name, "<NAME>")
+    p = re.sub(r"(session_code|execution|tab_id|client_data|key)=[A-Za-z0-9_\-.%]+", r"\1=X", p)
+    p = re.sub(r'(challenge\s*:\s*")[^"]*"', r'\1X"', p)
+    p = re.sub(r'checkAuthSession\(\s*"[^"]*"', 'checkAuthSession("X"', p)
+    p = re.sub(r'/resources/[a-z0-9]+/', "/resources/X/", p)
+    return p
+def answer(n):
+    b2 = E.Browser(CA); url, _ = fl.auth_url(); k, u2, p = b2.go(url, None, fl.a.redirect)
+    act, f = E.form(p, "kc-form-login"); f["username"] = n
+    req = urllib.request.Request(act, data=urllib.parse.urlencode(f).encode())
+    try:
+        r = b2.op.open(req, timeout=30); st, body = r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        st, body = e.code, e.read().decode("utf-8", "replace")
+    return st, E.page_id(body), E.error_text(body), normal(body, n)
+ghost = "ghost.%s" % uuid.uuid4().hex[:6]
+since_c = int(time.time())
+ans_unknown = answer(ghost)
+ans_nopk = answer(unclaimed["nothing pending"][1])
+ans_invited = answer(unclaimed["invited, not set up"][1])
+check("unknown username vs an account without a passkey: same status, page, message and body",
+      ans_unknown == ans_nopk == ans_invited, [x[:3] for x in (ans_unknown, ans_nopk, ans_invited)])
+time.sleep(1)
+evs = re.findall(r'type=\\?"LOGIN_ERROR\\?".*?error=\\?"([a-z_]+)', logs(since_c))
+check("... and the same event for both (user_not_found)", evs[:3] == ["user_not_found"] * 3, evs[:3])
+bfs = [kc.api("GET", RR + "/attack-detection/brute-force/users/%s" % v)["numFailures"] for v, _ in unclaimed.values()]
+check("... and none of those attempts counts against the account (nobody can lock an unclaimed account)", bfs == [0, 0, 0], bfs)
+
 vid, n = unclaimed["invited, not set up"]
 before = mails()
 kc.api("PUT", RR + "/users/%s/execute-actions-email?lifespan=3600" % vid, ["VERIFY_EMAIL", "TERMS_AND_CONDITIONS", "webauthn-register-passwordless"])
@@ -228,4 +258,30 @@ check("a restart re-applies the extra realm: policy, registration flow and the n
       (R["webAuthnPolicyPasswordlessSignatureAlgorithms"], R["registrationFlow"]))
 ok2, ev = K.stored_credential_findings(kc, REALM, ["ES256", "RS256"])
 check("the policy governs registration only: the stored Ed25519 credential is found and named", not ok2 and "legacy." in ev and "Ed25519" in ev, ev)
+# ---- the default sign-in (realm "public", sign_in=discoverable): no username is ever asked for
+pprof = os.path.join(A.dir, "public-profile.json")
+pv = K.Checker(kc, K.load_profile(pprof, "/nonexistent"), K.server_capabilities(kc), None)
+pv.R = kc.api("GET", "/realms/public"); pv.realm = "public"; pv.check_passkey()
+check("default realm: verify passes (passkey alone, no username step)", all(pv.results.get(k, {}).get("status") == "pass"
+      for k in ("flow.passkey_only", "flow.no_enrolment_at_sign_in", "webauthn.algorithms_fips")),
+      {k: v["status"] for k, v in pv.results.items()})
+smtp("public")
+RR_SAVE = RR; RR = "/realms/public"
+pn = "pub.%s" % uuid.uuid4().hex[:6]
+puid, plink = invite(pn)
+pa, ok, seen, err = set_up(plink)
+RR = RR_SAVE
+check("default realm: the invitation registers a passkey", ok, "%s %s" % (seen, err))
+pfl = E.Flow(argparse.Namespace(url=BASE, realm="public", client="account-console", redirect=BASE + "/realms/public/account/",
+                                admin_url=None, client_secret=None, cacert=CA))
+b3 = E.Browser(CA); url, _ = pfl.auth_url(); k, u3, first = b3.go(url, None, pfl.a.redirect)
+check("default realm: the sign-in page asks for no username (passkey only)", k == "page" and 'name="username"' not in first
+      and E.page_id(first) == "login-webauthn-authenticate", E.page_id(first) if k == "page" else k)
+code, pages, perr, _ = PF.sign_in(pfl, pa, "button", cacert=CA)
+check("default realm: 'Sign in with passkey' signs in", bool(code), "%s %s" % (pages, perr))
+stranger = S.Authenticator("ES256", workdir=A.dir); stranger.user_handle = os.urandom(16)
+_, pages, perr, _ = PF.sign_in(pfl, stranger, "button", cacert=CA)
+_, pages2, perr2, _ = PF.sign_in(pfl, S.Authenticator("ES256", workdir=A.dir), "button", cacert=CA)
+check("default realm: a passkey nobody here holds is refused the same way with or without a user handle",
+      pages == pages2 and perr == perr2 and "redirect" not in pages, (pages, perr, pages2, perr2))
 sys.exit(0 if all(RES) else 1)

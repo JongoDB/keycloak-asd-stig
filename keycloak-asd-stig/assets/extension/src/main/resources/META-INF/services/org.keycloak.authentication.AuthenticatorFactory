@@ -7,3 +7,4 @@ mil.stig.keycloak.StigUsernamePasswordFormFactory
 mil.stig.keycloak.AdminResetCredentialsGateAuthenticatorFactory
 mil.stig.keycloak.AdminAllowlistGateAuthenticatorFactory
 mil.stig.keycloak.StigPasskeyRequiredAuthenticatorFactory
+mil.stig.keycloak.StigPasskeyUsernameFormFactory

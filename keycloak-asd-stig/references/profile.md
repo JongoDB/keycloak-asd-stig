@@ -89,7 +89,7 @@ no weaker WebAuthn path exists.
 | `avoid_same_authenticator` | `true` | Refuse registering the same authenticator twice |
 | `passkeys` | `true` | Keycloak's passkeys switch: the username form offers "Sign in with passkey" and conditional (autofill) UI |
 | `rp_id` | `""` | Empty = the IdP's own host. Never a parent domain: a passkey would then be usable on every subdomain |
-| `sign_in` | `username` | `username`: the username form (with the passkey button and autofill), then - only if no passkey was used yet - a passkey step (`CONDITIONAL` sub-flow: `conditional-credential` webauthn-passwordless not used -> `webauthn-authenticator-passwordless`). A plain `REQUIRED` passkey step would ask a discoverable passkey for a second assertion, so the button and autofill could never finish. **Note:** Keycloak's username form answers an unknown username with "Invalid username" and a known one with the passkey step, which tells a prober whether an account exists. `discoverable`: no username step at all - the page offers only "Sign in with passkey" - so there is nothing to probe (no autofill) |
+| `sign_in` | `discoverable` | `discoverable` (default): no username step at all - the page offers only "Sign in with passkey" - so whether an account exists cannot be probed (no autofill). `username`: `stig-passkey-username-form` (Keycloak's username form with the passkey button and autofill; an account **without** a passkey is answered exactly as an unknown username - Keycloak's own invalid-user response and event, not counted against the account), then `stig-passkey-required` (refuses an account without a passkey again, should the form ever be swapped), then - only if no passkey was used yet - a passkey step (`CONDITIONAL`: `conditional-credential` webauthn-passwordless not used -> `webauthn-authenticator-passwordless`). A passkey is never set up at sign-in, only through the e-mailed link. `username` still tells an account that holds a passkey (it gets the passkey step) from an unknown one |
 
 Also in a passkey realm: `UPDATE_PASSWORD`, `CONFIGURE_TOTP` and two-factor `webauthn-register` are **disabled** (no
 action can ask for a password or OTP, not even one an administrator sets), `webauthn-register-passwordless` and
@@ -97,7 +97,7 @@ action can ask for a password or OTP, not even one an administrator sets), `weba
 just before it disables an account (`accounts.disabled_marker`), so a later reactivation can tell that disable from
 any other. `users[].temporary_password` is refused.
 
-**`verify` in a passkey realm** adds `flow.passkey_only` (only the passkey flow's authenticators, the conditional
+**`verify` in a passkey realm** adds `flow.no_enrolment_at_sign_in` (every username step is `stig-passkey-username-form` followed by `stig-passkey-required`), `flow.passkey_only` (only the passkey flow's authenticators, the conditional
 step's shape, the allowlist gate), `webauthn.algorithms_fips` (both policies: recognised, FIPS-approved, equal to the
 profile, UV and discoverable required), `realm.no_x509` and `realm.no_idp` (every bound flow and client override),
 and `credentials.passkey_only`: **every stored credential** is a `webauthn-passwordless` one whose COSE algorithm is in

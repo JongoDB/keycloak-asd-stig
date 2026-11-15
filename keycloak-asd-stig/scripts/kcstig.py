@@ -59,7 +59,7 @@ DEFAULTS = {
     # silently dropped by Keycloak, which leaves the realm unable to register anyone, so load_profile refuses it.
     "webauthn": {"algorithms": ["ES256", "RS256"], "attestation": "none", "attachment": "",
                  "user_verification": "required", "discoverable": "required", "avoid_same_authenticator": True,
-                 "passkeys": True, "rp_id": "", "sign_in": "username"},
+                 "passkeys": True, "rp_id": "", "sign_in": "discoverable"},
     # keep: Keycloak's registration flow stays bound (registration itself is off). deny: bind a flow that refuses
     # everyone, so no registration link (e.g. an organization invitation) can create an account. passkey: always deny.
     "registration_flow": "keep",
@@ -162,8 +162,8 @@ def check_webauthn(p):
     if w.get("discoverable") != "required":
         sys.exit("webauthn.discoverable must be required (a passkey is a discoverable credential)")
     if w.get("sign_in") not in ("username", "discoverable"):
-        sys.exit("webauthn.sign_in must be username (username form with passkeys, then a passkey step) | discoverable "
-                 "(the passkey alone: no username is ever asked, so none can be probed)")
+        sys.exit("webauthn.sign_in must be discoverable (the default: the passkey alone, no username is ever asked, so "
+                 "nothing can be probed) | username (username form with passkeys and autofill, then a passkey step)")
     rp = w.get("rp_id") or ""
     if rp and (not re.fullmatch(r"[a-z0-9.-]{1,253}", rp) or "." not in rp):
         sys.exit("webauthn.rp_id must be empty (the IdP's own host name) or a host name")
@@ -364,8 +364,10 @@ PASSKEY_CONDITION = "conditional-credential"
 PASSKEY_AUTH = "webauthn-authenticator-passwordless"
 # stig-extensions: right after the username form, an account with no passkey is REFUSED - never enrolled at sign-in
 PASSKEY_REQUIRED = "stig-passkey-required"
+# stig-extensions: Keycloak's username form, but an account without a passkey is answered exactly as an unknown username
+PASSKEY_USERNAME_FORM = "stig-passkey-username-form"
 # everything a passkey realm's browser flow may contain
-PASSKEY_FLOW_PROVIDERS = {"auth-cookie", "auth-username-form", PASSKEY_REQUIRED, PASSKEY_CONDITION, PASSKEY_AUTH, "user-session-limits"}
+PASSKEY_FLOW_PROVIDERS = {"auth-cookie", PASSKEY_USERNAME_FORM, PASSKEY_REQUIRED, PASSKEY_CONDITION, PASSKEY_AUTH, "user-session-limits"}
 
 def session_limits(prefix, s):
     return ("exec", "user-session-limits", "REQUIRED",
@@ -388,7 +390,9 @@ def passkey_browser_flow(p, extension=True):
     # The username path: an account with no passkey (an unclaimed invitation, a recovery in progress) is refused by
     # stig-passkey-required before the passkey step, so whoever knows its username cannot reach a set-up there. A
     # passkey is registered only through the e-mailed set-up or recovery link.
-    authn = authn or [("exec", "auth-username-form", "REQUIRED", None), ("exec", PASSKEY_REQUIRED, "REQUIRED", None),
+    # stig-passkey-username-form answers an account without a passkey exactly as an unknown username (no oracle);
+    # stig-passkey-required behind it refuses one again should the form ever be swapped for Keycloak's own.
+    authn = authn or [("exec", PASSKEY_USERNAME_FORM, "REQUIRED", None), ("exec", PASSKEY_REQUIRED, "REQUIRED", None),
              ("flow", prefix + " - Passkey", "CONDITIONAL", [
                  ("exec", PASSKEY_CONDITION, "REQUIRED",
                   {"alias": "stig-browser-passkey-not-yet-used",
@@ -1374,20 +1378,22 @@ class Checker:
             shape = all(pa - {ALLOWLIST_GATE, "user-session-limits"} == {PASSKEY_AUTH} for pa in primary)
             ok = bool(primary) and not extra and shape
         else:
-            ok = bool(primary) and not extra and shape and all(PASSKEY_AUTH in pa and "auth-username-form" in pa for pa in primary)
+            ok = bool(primary) and not extra and shape and all(PASSKEY_AUTH in pa and PASSKEY_USERNAME_FORM in pa for pa in primary)
         # No account without a passkey may get past the username form: stig-passkey-required REQUIRED, directly after
         # it at the same level. Otherwise such an account reaches the passkey step, and whether it is then refused or
         # sent to a passkey set-up depends on the Keycloak release - a takeover of every unclaimed account if it is the latter.
-        top = [e for e in ex if e.get("providerId") == "auth-username-form"]
+        top = [e for e in ex if e.get("providerId") in ("auth-username-form", PASSKEY_USERNAME_FORM, "auth-username-password-form",
+                                                         "stig-username-password-form")]
         guarded = []
         for e in top:
             i = ex.index(e)
             nxt = next((k for k in ex[i + 1:] if k["level"] <= e["level"]), None)
-            guarded.append(bool(nxt) and nxt["level"] == e["level"] and nxt.get("providerId") == PASSKEY_REQUIRED
-                           and nxt.get("requirement") == "REQUIRED")
+            guarded.append(e.get("providerId") == PASSKEY_USERNAME_FORM and bool(nxt) and nxt["level"] == e["level"]
+                           and nxt.get("providerId") == PASSKEY_REQUIRED and nxt.get("requirement") == "REQUIRED")
         self.res("flow.no_enrolment_at_sign_in", all(guarded) and (bool(top) or p["webauthn"].get("sign_in") == "discoverable"),
-                 "every username form is followed by %s REQUIRED (an account without a passkey is refused, never set up at "
-                 "sign-in): %s" % (PASSKEY_REQUIRED, guarded or "no username step (sign_in=discoverable)"))
+                 "every username step is %s (no passkey = unknown user) followed by %s REQUIRED: an account without a "
+                 "passkey is refused, never set up at sign-in: %s" % (PASSKEY_USERNAME_FORM, PASSKEY_REQUIRED,
+                 guarded or "no username step (sign_in=discoverable)"))
         how = ("sign-in by discoverable passkey alone (no username step): %s" % shape
                if p["webauthn"].get("sign_in") == "discoverable" else
                "username form, then a conditional passkey step (credential webauthn-passwordless not yet used -> %s): %s" % (PASSKEY_AUTH, shape))

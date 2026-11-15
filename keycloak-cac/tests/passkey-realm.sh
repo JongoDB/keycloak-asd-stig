@@ -20,7 +20,10 @@ cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; [ -n "${SINK:-}" ] && 
 trap cleanup EXIT
 mkdir -p "$T/extra" "$T/clients/partners" "$T/mail"
 cat > "$T/extra/50-partners.json" <<'EOF'
-{"realm": {"name": "partners", "display_name": "Partners"}, "auth_mode": "passkey"}
+{"realm": {"name": "partners", "display_name": "Partners"}, "auth_mode": "passkey", "webauthn": {"sign_in": "username"}}
+EOF
+cat > "$T/extra/60-public.json" <<'EOF'
+{"realm": {"name": "public", "display_name": "Public"}, "auth_mode": "passkey"}
 EOF
 cat > "$T/clients/partners/partner-app.json" <<'EOF'
 {"client_id": "partner-app", "type": "oidc-confidential", "auth": "client-secret", "redirect_uris": ["https://app.example/cb"],
@@ -48,5 +51,6 @@ wait_up() {
 wait_up
 docker exec "$NAME" cat /opt/keycloak/data/cac/lab/ca/root.crt > "$T/root.crt"
 docker exec "$NAME" cat /opt/keycloak/data/cac/extra/partners.json > "$T/partners-profile.json"
+docker exec "$NAME" cat /opt/keycloak/data/cac/extra/public.json > "$T/public-profile.json"
 LAB_BOOTSTRAP_PW="$PW" python3 "$ROOT/keycloak-cac/tests/lib/passkey_realm_test.py" --name "$NAME" --port "$PORT" \
   --smtp-host host.docker.internal --smtp-port "$SMTP" --dir "$T"
