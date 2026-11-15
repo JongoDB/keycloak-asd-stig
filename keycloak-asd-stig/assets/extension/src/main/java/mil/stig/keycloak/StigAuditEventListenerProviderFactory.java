@@ -31,6 +31,9 @@ import java.util.stream.Collectors;
  *    display stig_previous_login (exposed as a token claim by the realm generator).
  *  - V-222672 concurrent logons from different workstations: emits a WARN record tagged
  *    STIG-CONCURRENT-LOGON when a user logs in while holding a session from another IP.
+ *  - Passkey realms: a failed passkey assertion's LOGIN_ERROR names no user; a WARN record tagged STIG-PASSKEY-FAILURE
+ *    names the account the assertion targeted (from the posted user handle) and whether the posted credential is one
+ *    of its passkeys, so the audit trail shows who was targeted (AC-7 rationale: these failures are not counted).
  *  - V-222417..V-222422 SA/ISSO notification of account create/modify/disable/remove/enable:
  *    emits WARN records tagged STIG-ACCOUNT-EVENT for SIEM alerting, and optionally emails
  *    the addresses in --spi-events-listener--stig-audit--notify-emails=a@x.mil,b@x.mil using
@@ -72,6 +75,14 @@ public class StigAuditEventListenerProviderFactory implements EventListenerProvi
 
         @Override
         public void onEvent(Event event) {
+            if (event.getType() == EventType.LOGIN_ERROR && event.getUserId() == null) {
+                try {
+                    attributePasskeyFailure(event);
+                } catch (RuntimeException e) {
+                    LOG.errorf(e, "STIG-AUDIT passkey failure attribution failed");     // never break the request
+                }
+                return;
+            }
             if (event.getType() != EventType.LOGIN || event.getUserId() == null) return;
             final String realmId = event.getRealmId();
             final String userId = event.getUserId();
@@ -140,6 +151,45 @@ public class StigAuditEventListenerProviderFactory implements EventListenerProvi
                 }
                 @Override protected void rollbackImpl() { }
             });
+        }
+
+        /**
+         * Keycloak's LOGIN_ERROR for a failed passkey assertion names no user (userId null, no username): only
+         * web_authn_authentication_error. The request still holds what the browser posted - the userHandle (the user id
+         * a discoverable credential carries) and the credentialId - so name the account it targeted, and say whether the
+         * posted credential is really one of that account's passkeys or only claims to be. Read-only; a log record only.
+         * Without a user handle the record names no user: finding an account by credential id alone would mean
+         * scanning every account's credentials, a cost anyone on the network could trigger.
+         */
+        private void attributePasskeyFailure(Event event) {
+            java.util.Map<String, String> d = event.getDetails();
+            String err = d == null ? null : d.get("web_authn_authentication_error");
+            if (err == null) return;
+            jakarta.ws.rs.core.MultivaluedMap<String, String> form = session.getContext().getHttpRequest() == null ? null
+                    : session.getContext().getHttpRequest().getDecodedFormParameters();
+            String handle = form == null ? null : form.getFirst("userHandle");
+            String credId = form == null ? null : form.getFirst("credentialId");
+            RealmModel realm = session.realms().getRealm(event.getRealmId());
+            String uid = PasskeyAttribution.userIdFromHandle(handle);
+            UserModel user = realm == null || uid == null ? null : session.users().getUserById(realm, uid);
+            boolean owned = false;
+            if (user != null && credId != null) {
+                owned = user.credentialManager().getStoredCredentialsByTypeStream(org.keycloak.models.credential.WebAuthnCredentialModel.TYPE_PASSWORDLESS)
+                        .anyMatch(c -> {
+                            try {
+                                String stored = org.keycloak.util.JsonSerialization.readValue(c.getCredentialData(), java.util.Map.class)
+                                        .getOrDefault("credentialId", "").toString();
+                                return PasskeyAttribution.sameCredentialId(credId, stored);
+                            } catch (java.io.IOException e) {
+                                return false;
+                            }
+                        });
+            }
+            LOG.warnf("STIG-PASSKEY-FAILURE realm=%s user=%s userId=%s credential=%s error=%s ip=%s client=%s",
+                    realm == null ? event.getRealmId() : realm.getName(), user == null ? "-" : user.getUsername(),
+                    user == null ? "-" : user.getId(),
+                    user == null ? "unknown(" + PasskeyAttribution.safe(credId) + ")" : (owned ? "this-account" : "not-this-account"),
+                    PasskeyAttribution.safe(err, 64), event.getIpAddress(), event.getClientId());
         }
 
         @Override
