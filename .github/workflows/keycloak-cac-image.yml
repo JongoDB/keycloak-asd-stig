@@ -42,6 +42,8 @@ jobs:
         run: keycloak-cac/tests/public-path-policy.sh
       - name: Half or retired allowlist configuration stops the container
         run: keycloak-cac/tests/allowlist-config.sh
+      - name: Passkey profiles (WebAuthn names, deny registration flow) and extra-realm profiles
+        run: keycloak-cac/tests/passkey-profile.sh
 
   build:
     needs: guards
@@ -81,6 +83,9 @@ jobs:
       - name: A card is not locked out by password failures; a revoked card still is refused
         if: matrix.variant.name != 'edge'
         run: keycloak-cac/tests/card-lockout.sh "keycloak-cac:ci${{ matrix.variant.suffix }}"
+      - name: Passkey realm beside the main realm (software authenticator, registration and sign-in)
+        if: matrix.variant.name != 'edge'
+        run: keycloak-cac/tests/passkey-realm.sh "keycloak-cac:ci${{ matrix.variant.suffix }}"
       - name: Edge mode requires the proxy's client certificate (CA and pinned)
         if: matrix.variant.name == 'edge'
         run: keycloak-cac/tests/edge-mtls.sh keycloak-cac:ci-edge-test
