@@ -76,6 +76,8 @@ fd = json.dumps(K.render(pd)["browser_flow"])
 check("sign_in=discoverable: the passkey step alone, no username form", K.PASSKEY_AUTH in fd and "auth-username-form" not in fd
       and "conditional-credential" not in fd and K.ALLOWLIST_GATE in fd)
 wf = r["workflows"][0]
+check("the disabled marker is declared in the user profile, administrators only",
+      [x["permissions"] for x in r["user_profile_attributes"] if x["name"] == "stig_disabled_by"] == [{"view": ["admin"], "edit": ["admin"]}])
 check("inactivity workflow: set stig_disabled_by=inactivity after 35 d, then disable",
       wf["steps"] == [{"uses": "set-user-attribute", "after": "35d", "with": {"stig_disabled_by": "inactivity"}}, {"uses": "disable-user"}])
 
@@ -88,7 +90,8 @@ for mode in ("cac", "cac_or_mfa", "mfa"):
           and keys == {"webAuthnPolicyUserVerificationRequirement": "required", "webAuthnPolicyAuthenticatorAttachment": "cross-platform",
                        "webAuthnPolicySignatureAlgorithms": ["ES256", "RS256"], "webAuthnPolicyRpEntityName": "Application"}
           and rc["workflows"][0]["steps"] == [{"uses": "disable-user", "after": "35d"}]
-          and "conditional-credential" not in json.dumps(rc["browser_flow"]), sorted(keys))
+          and "conditional-credential" not in json.dumps(rc["browser_flow"])
+          and "stig_disabled_by" not in json.dumps(rc["user_profile_attributes"]), sorted(keys))
 pk, _ = load({"realm": {"name": "defconai"}, "auth_mode": "cac_or_mfa", "registration_flow": "deny"})
 check("registration_flow=deny can be chosen for any realm", K.render(pk)["registration_flow"][0] == "STIG Registration - Deny")
 

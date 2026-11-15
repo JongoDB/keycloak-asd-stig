@@ -470,6 +470,9 @@ def user_profile_attributes(p, *, admin_realm, extension=True):
       annotations={"inputType": "select"})
     a("stig_last_login", "Last successful logon (UTC)", ["admin", "user"], ["admin"])
     a("stig_previous_login", "Previous successful logon (UTC)", ["admin", "user"], ["admin"])
+    if not admin_realm and p["accounts"].get("disabled_marker"):
+        # declared, so it survives profile saves; administrators only (the inactivity workflow writes it)
+        a(DISABLED_MARKER, "Disabled by (inactivity marker)", ["admin"], ["admin"])
     return attrs
 
 DISABLED_MARKER = "stig_disabled_by"   # set by the inactivity workflow (disabled_marker), cleared at every sign-in
