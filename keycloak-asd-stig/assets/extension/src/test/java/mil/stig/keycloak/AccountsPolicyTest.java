@@ -44,6 +44,45 @@ public final class AccountsPolicyTest {
         t("lifespan 24 h ok", AccountsPolicy.lifespan(86400) == 86400, true);
         t("lifespan > 24 h refused", AccountsPolicy.lifespan(86401) == -1, true);
         t("lifespan < 5 min refused", AccountsPolicy.lifespan(60) == -1, true);
+        // U2: "*" any domain, the denylist, organization domains
+        t("'*' allows any domain", AccountsPolicy.emailDomainAllowed("j@acme.example", "*"), true);
+        t("default still refuses gmail", AccountsPolicy.emailDomainAllowed("j@gmail.com", ""), false);
+        t("deny .mil", AccountsPolicy.emailDomainDenied("j@army.mil", ".mil,defconai.com"), true);
+        t("deny defconai.com", AccountsPolicy.emailDomainDenied("j@defconai.com", ".mil,defconai.com"), true);
+        t("deny list does not hit acme", AccountsPolicy.emailDomainDenied("j@acme.example", ".mil,defconai.com"), false);
+        t("deny '*' is not honoured", AccountsPolicy.emailDomainDenied("j@acme.example", "*"), false);
+        t("no deny list", AccountsPolicy.emailDomainDenied("j@army.mil", null), false);
+        t("org domain exact", AccountsPolicy.emailInDomains("j@Acme.Example", java.util.List.of("acme.example")), true);
+        t("org domain: subdomain refused", AccountsPolicy.emailInDomains("j@x.acme.example", java.util.List.of("acme.example")), false);
+        t("org domain: ANY never matches", AccountsPolicy.emailInDomains("j@acme.example", java.util.List.of("ANY")), false);
+        t("org domain: wildcard never matches", AccountsPolicy.emailInDomains("j@acme.example", java.util.List.of("*.example", "*")), false);
+        t("org domain: none", AccountsPolicy.emailInDomains("j@acme.example", java.util.List.of()), false);
+        // U1: set-up actions
+        t("setup default", AccountsPolicy.parseSetupActions(null).equals(AccountsPolicy.DEFAULT_SETUP_ACTIONS), true);
+        t("setup passkey", java.util.List.of("VERIFY_EMAIL", "TERMS_AND_CONDITIONS", "webauthn-register-passwordless")
+                .equals(AccountsPolicy.parseSetupActions("VERIFY_EMAIL, TERMS_AND_CONDITIONS,webauthn-register-passwordless")), true);
+        t("setup unknown action refused", AccountsPolicy.parseSetupActions("VERIFY_EMAIL,delete_account") == null, true);
+        t("setup no credential action refused", AccountsPolicy.parseSetupActions("VERIFY_EMAIL,TERMS_AND_CONDITIONS") == null, true);
+        t("setup duplicate refused", AccountsPolicy.parseSetupActions("UPDATE_PASSWORD,UPDATE_PASSWORD") == null, true);
+        t("setup empty item refused", AccountsPolicy.parseSetupActions("UPDATE_PASSWORD,,CONFIGURE_TOTP") == null, true);
+        java.util.List<String> pk = AccountsPolicy.parseSetupActions("VERIFY_EMAIL,TERMS_AND_CONDITIONS,webauthn-register-passwordless");
+        t("still setting up: passkey pending", AccountsPolicy.stillSettingUp(false, java.util.List.of("webauthn-register-passwordless"), pk), true);
+        t("not setting up: has a credential", AccountsPolicy.stillSettingUp(true, java.util.List.of("webauthn-register-passwordless"), pk), false);
+        t("not setting up: passkey action done", AccountsPolicy.stillSettingUp(false, java.util.List.of("TERMS_AND_CONDITIONS"), pk), false);
+        t("default: both password and TOTP pending", AccountsPolicy.stillSettingUp(false, java.util.List.of("UPDATE_PASSWORD", "CONFIGURE_TOTP"), AccountsPolicy.DEFAULT_SETUP_ACTIONS), true);
+        t("default: TOTP done", AccountsPolicy.stillSettingUp(false, java.util.List.of("UPDATE_PASSWORD"), AccountsPolicy.DEFAULT_SETUP_ACTIONS), false);
+        // U5
+        t("onBehalfOf absent", AccountsPolicy.validOnBehalfOf(null), true);
+        t("onBehalfOf sub + username", AccountsPolicy.validOnBehalfOf("2b1f0c3e-1111-4a2b-9c3d-123456789abc jane.lead"), true);
+        t("onBehalfOf newline refused", AccountsPolicy.validOnBehalfOf("a\nb"), false);
+        t("onBehalfOf markup refused", AccountsPolicy.validOnBehalfOf("<x>"), false);
+        t("onBehalfOf double space refused", AccountsPolicy.validOnBehalfOf("a  b"), false);
+        t("onBehalfOf empty refused", AccountsPolicy.validOnBehalfOf(""), false);
+        t("onBehalfOf too long refused", AccountsPolicy.validOnBehalfOf("a".repeat(201)), false);
+        // U3 lifespan, U7 id list
+        t("recover lifespan default 1 h", AccountsPolicy.recoverLifespan(null) == 3600, true);
+        t("recover lifespan > 1 h refused", AccountsPolicy.recoverLifespan(3601) == -1, true);
+        t("id list", AccountsPolicy.idList(" a, b,,c ").equals(java.util.Set.of("a", "b", "c")), true);
         System.out.printf("%n%d/%d passed%n", run - failed, run);
         System.exit(failed == 0 ? 0 : 1);
     }

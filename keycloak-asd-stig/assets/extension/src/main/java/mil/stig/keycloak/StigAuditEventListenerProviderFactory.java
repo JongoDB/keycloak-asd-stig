@@ -88,6 +88,11 @@ public class StigAuditEventListenerProviderFactory implements EventListenerProvi
                         s.getContext().setRealm(realm); // required by the user cache / organization provider
                         UserModel user = s.users().getUserById(realm, userId);
                         if (user == null) return;
+                        // a sign-in proves the account is in use: it is no longer "disabled for inactivity", so a later
+                        // disable by anyone else can never be undone by stig-accounts' reactivate
+                        if (user.getFirstAttribute(StigAccountsResourceProviderFactory.DISABLED_MARKER) != null) {
+                            user.removeAttribute(StigAccountsResourceProviderFactory.DISABLED_MARKER);
+                        }
                         String last = user.getFirstAttribute(LAST);
                         if (last != null) user.setSingleAttribute(PREVIOUS, last);
                         user.setSingleAttribute(LAST, now);
