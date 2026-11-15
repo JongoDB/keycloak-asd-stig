@@ -83,7 +83,7 @@ try:
     results = json.load(open(os.path.join(A.dir, "reports", "%s-asd-stig-results.json" % REALM)))["checks"]
 except (OSError, ValueError):
     pass
-want = ["flow.passkey_only", "webauthn.algorithms_fips", "realm.no_x509", "realm.no_idp", "realm.registration_flow_denied",
+want = ["flow.passkey_only", "flow.no_enrolment_at_sign_in", "webauthn.algorithms_fips", "realm.no_x509", "realm.no_idp", "realm.registration_flow_denied",
         "realm.required_actions", "flow.admin_allowlist_gate", "credentials.passkey_only", "realm.direct_grant_denied",
         "workflow.inactive_35d", "flow.session_limits"]
 check("kcstig verify: every passkey-realm check passes", results and all(results.get(k, {}).get("status") == "pass" for k in want),
@@ -133,6 +133,42 @@ signin("a username alone: no code (it stays on the passkey step)", False, a, "us
 bf = kc.api("GET", RR + "/attack-detection/brute-force/users/%s" % uid)
 check("failed passkey assertions do not count towards the lockout (AC-7 rationale recorded)", bf.get("numFailures") == 0 and not bf.get("disabled"), bf)
 signin("... and the account still signs in", True, a, "button")
+# an account with NO passkey (an unclaimed invitation; one invited and half set up; one with nothing pending) is
+# refused at sign-in by its username alone - never sent to a passkey set-up - and the e-mailed link still sets it up
+def username_only(n):
+    b2 = E.Browser(CA); url, _ = fl.auth_url(); k, u2, p = b2.go(url, None, fl.a.redirect)
+    act, f = E.form(p, "kc-form-login"); f["username"] = n; k, u2, p = b2.go(act, f, fl.a.redirect)
+    hops = [k if k != "page" else E.page_id(p)]
+    for _ in range(3):                                     # follow anything it offers next, the way an attacker would
+        if k != "page":
+            break
+        act, f = E.form(p)
+        if not act:
+            break
+        k, u2, p = b2.go(act, f, fl.a.redirect); hops.append(k if k != "page" else E.page_id(p))
+    return hops, (k == "redirect" and "code=" in u2)
+unclaimed = {}
+for label, ra, verified in (("invited, not set up", ["VERIFY_EMAIL", "TERMS_AND_CONDITIONS", "webauthn-register-passwordless"], False),
+                            ("verified, passkey set-up pending", ["webauthn-register-passwordless"], True),
+                            ("nothing pending", [], True)):
+    n = "unclaimed.%s" % uuid.uuid4().hex[:6]
+    vid = kc.api("POST", RR + "/users", {"username": n, "email": n + "@acme.example", "firstName": "Un", "lastName": "Claimed",
+                                          "enabled": True, "emailVerified": verified, "requiredActions": ra})
+    unclaimed[label] = (vid, n)
+    since_u = int(time.time())
+    hops, code = username_only(n)
+    reg_pages = [h for h in hops if h in ("login-webauthn-register", "login-terms", "login-verify-email", "login-update-password", "login-config-totp")]
+    check("no passkey (%s): the username alone is refused - no code, no set-up page" % label, not code and not reg_pages
+          and not kc.api("GET", RR + "/users/%s/credentials" % vid), hops)
+    time.sleep(1)
+    check("... logged STIG-PASSKEY-NOT-ENROLLED", "STIG-PASSKEY-NOT-ENROLLED" in logs(since_u) and n in logs(since_u))
+vid, n = unclaimed["invited, not set up"]
+before = mails()
+kc.api("PUT", RR + "/users/%s/execute-actions-email?lifespan=3600" % vid, ["VERIFY_EMAIL", "TERMS_AND_CONDITIONS", "webauthn-register-passwordless"])
+a_un, ok, seen, err = set_up(next_link(before))
+check("... the e-mailed set-up link still registers its passkey", ok and kc.api("GET", RR + "/users/%s/credentials" % vid), "%s %s" % (seen, err))
+signin("... and the account then signs in with it", True, a_un, "username", n)
+
 b = E.Browser(CA)
 st = None
 try:
@@ -166,6 +202,15 @@ check("an organization invitation's registration link (with and without PKCE) sh
 kc.api("DELETE", RR + "/organizations/%s" % oid)
 kc.api("PUT", RR, {"organizationsEnabled": False})
 
+# ---- verify fails when an account without a passkey could get past the username form
+flows = kc.api("GET", RR + "/authentication/flows/%s/executions" % urllib.parse.quote(kc.api("GET", RR)["browserFlow"]))
+guard = [e for e in flows if e.get("providerId") == "stig-passkey-required"]
+kc.api("DELETE", RR + "/authentication/executions/%s" % guard[0]["id"])
+ch = K.Checker(kc, K.load_profile(prof, "/nonexistent"), K.server_capabilities(kc), None)
+ch.R = kc.api("GET", RR); ch.check_passkey()
+check("verify FAILS once stig-passkey-required is removed (flow.no_enrolment_at_sign_in)",
+      ch.results.get("flow.no_enrolment_at_sign_in", {}).get("status") == "fail", ch.results.get("flow.no_enrolment_at_sign_in"))
+
 # ---- 5. a stored credential outside the policy fails verify; drift is undone by a restart
 loose = kc.api("GET", RR)
 kc.api("PUT", RR, dict(loose, webAuthnPolicyPasswordlessSignatureAlgorithms=["ES256", "RS256", "Ed25519"], registrationFlow="registration"))
@@ -177,8 +222,9 @@ subprocess.run(["docker", "restart", A.name], capture_output=True)
 check("after a restart the container is healthy again", wait_healthy())
 kc = admin()
 R = kc.api("GET", RR)
-check("a restart re-applies the extra realm: policy back to ES256 + RS256, registration denied again",
-      R["webAuthnPolicyPasswordlessSignatureAlgorithms"] == ["ES256", "RS256"] and R["registrationFlow"] == "STIG Registration - Deny",
+check("a restart re-applies the extra realm: policy, registration flow and the no-passkey refusal back",
+      R["webAuthnPolicyPasswordlessSignatureAlgorithms"] == ["ES256", "RS256"] and R["registrationFlow"] == "STIG Registration - Deny"
+      and any(e.get("providerId") == "stig-passkey-required" for e in kc.api("GET", RR + "/authentication/flows/%s/executions" % urllib.parse.quote(R["browserFlow"]))),
       (R["webAuthnPolicyPasswordlessSignatureAlgorithms"], R["registrationFlow"]))
 ok2, ev = K.stored_credential_findings(kc, REALM, ["ES256", "RS256"])
 check("the policy governs registration only: the stored Ed25519 credential is found and named", not ok2 and "legacy." in ev and "Ed25519" in ev, ev)

@@ -68,6 +68,14 @@ flat = json.dumps(r["browser_flow"])
 check("browser flow: username form, CONDITIONAL [credential not used -> passkey], allowlist gate",
       '"auth-username-form"' in flat and '"CONDITIONAL"' in flat and '"conditional-credential"' in flat
       and '"webauthn-passwordless", "included": "false"' in flat and K.PASSKEY_AUTH in flat and K.ALLOWLIST_GATE in flat)
+auth = [x for x in r["browser_flow"][1][0][3][1][3][0][3]]   # Sign in > Forms > Authenticate
+check("browser flow: stig-passkey-required REQUIRED directly after the username form (no enrolment at sign-in)",
+      [(x[1], x[2]) for x in auth[:2]] == [("auth-username-form", "REQUIRED"), ("stig-passkey-required", "REQUIRED")], [(x[1], x[2]) for x in auth])
+try:
+    K.render(p, extension=False); ne = None
+except SystemExit as e:
+    ne = str(e)
+check("a passkey realm is refused on a server without stig-extensions", ne and "stig-extensions" in ne, ne)
 check("browser flow: no password, OTP, two-factor WebAuthn or certificate step",
       not any(x in flat for x in ('"stig-username-password-form"', '"auth-username-password-form"', '"auth-otp-form"',
                                   '"webauthn-authenticator"', "x509")))

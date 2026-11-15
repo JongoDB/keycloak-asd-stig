@@ -362,8 +362,10 @@ def reset_flow(extension):
 
 PASSKEY_CONDITION = "conditional-credential"
 PASSKEY_AUTH = "webauthn-authenticator-passwordless"
+# stig-extensions: right after the username form, an account with no passkey is REFUSED - never enrolled at sign-in
+PASSKEY_REQUIRED = "stig-passkey-required"
 # everything a passkey realm's browser flow may contain
-PASSKEY_FLOW_PROVIDERS = {"auth-cookie", "auth-username-form", PASSKEY_CONDITION, PASSKEY_AUTH, "user-session-limits"}
+PASSKEY_FLOW_PROVIDERS = {"auth-cookie", "auth-username-form", PASSKEY_REQUIRED, PASSKEY_CONDITION, PASSKEY_AUTH, "user-session-limits"}
 
 def session_limits(prefix, s):
     return ("exec", "user-session-limits", "REQUIRED",
@@ -383,7 +385,10 @@ def passkey_browser_flow(p, extension=True):
         authn = [("exec", PASSKEY_AUTH, "REQUIRED", None)]
     else:
         authn = None
-    authn = authn or [("exec", "auth-username-form", "REQUIRED", None),
+    # The username path: an account with no passkey (an unclaimed invitation, a recovery in progress) is refused by
+    # stig-passkey-required before the passkey step, so whoever knows its username cannot reach a set-up there. A
+    # passkey is registered only through the e-mailed set-up or recovery link.
+    authn = authn or [("exec", "auth-username-form", "REQUIRED", None), ("exec", PASSKEY_REQUIRED, "REQUIRED", None),
              ("flow", prefix + " - Passkey", "CONDITIONAL", [
                  ("exec", PASSKEY_CONDITION, "REQUIRED",
                   {"alias": "stig-browser-passkey-not-yet-used",
@@ -392,7 +397,7 @@ def passkey_browser_flow(p, extension=True):
     forms = ("flow", prefix + " - Forms", "ALTERNATIVE", [
         ("flow", prefix + " - Authenticate", "REQUIRED", authn), session_limits(prefix, s)])
     if not extension:
-        return (prefix, [("exec", "auth-cookie", "ALTERNATIVE", None), forms])
+        sys.exit("auth_mode=passkey needs stig-extensions on the server (stig-passkey-required, the allowlist gate)")
     return (prefix, [
         ("flow", prefix + " - Sign in", "REQUIRED", [("exec", "auth-cookie", "ALTERNATIVE", None), forms]),
         ("exec", ALLOWLIST_GATE, "REQUIRED", None),
@@ -1370,6 +1375,19 @@ class Checker:
             ok = bool(primary) and not extra and shape
         else:
             ok = bool(primary) and not extra and shape and all(PASSKEY_AUTH in pa and "auth-username-form" in pa for pa in primary)
+        # No account without a passkey may get past the username form: stig-passkey-required REQUIRED, directly after
+        # it at the same level. Otherwise such an account reaches the passkey step, and whether it is then refused or
+        # sent to a passkey set-up depends on the Keycloak release - a takeover of every unclaimed account if it is the latter.
+        top = [e for e in ex if e.get("providerId") == "auth-username-form"]
+        guarded = []
+        for e in top:
+            i = ex.index(e)
+            nxt = next((k for k in ex[i + 1:] if k["level"] <= e["level"]), None)
+            guarded.append(bool(nxt) and nxt["level"] == e["level"] and nxt.get("providerId") == PASSKEY_REQUIRED
+                           and nxt.get("requirement") == "REQUIRED")
+        self.res("flow.no_enrolment_at_sign_in", all(guarded) and (bool(top) or p["webauthn"].get("sign_in") == "discoverable"),
+                 "every username form is followed by %s REQUIRED (an account without a passkey is refused, never set up at "
+                 "sign-in): %s" % (PASSKEY_REQUIRED, guarded or "no username step (sign_in=discoverable)"))
         how = ("sign-in by discoverable passkey alone (no username step): %s" % shape
                if p["webauthn"].get("sign_in") == "discoverable" else
                "username form, then a conditional passkey step (credential webauthn-passwordless not yet used -> %s): %s" % (PASSKEY_AUTH, shape))
@@ -1719,7 +1737,7 @@ def load_rules_and_map():
 
 # auth_mode=passkey: extra checks per rule, and the certificate rules that have no subject in a passkey realm
 PASSKEY_RULE_CHECKS = {
-    "V-222522": ["flow.passkey_only", "credentials.passkey_only", "webauthn.algorithms_fips"],  # identify + authenticate
+    "V-222522": ["flow.passkey_only", "flow.no_enrolment_at_sign_in", "credentials.passkey_only", "webauthn.algorithms_fips"],  # identify + authenticate
     "V-222524": ["flow.passkey_only", "webauthn.algorithms_fips"],      # multifactor: a UV-required passkey
     "V-222526": ["flow.passkey_only", "credentials.passkey_only"],
     "V-222528": ["flow.passkey_only"],

@@ -6,3 +6,4 @@ mil.stig.keycloak.StigX509ClientCertificateAuthenticatorFactory
 mil.stig.keycloak.StigUsernamePasswordFormFactory
 mil.stig.keycloak.AdminResetCredentialsGateAuthenticatorFactory
 mil.stig.keycloak.AdminAllowlistGateAuthenticatorFactory
+mil.stig.keycloak.StigPasskeyRequiredAuthenticatorFactory
