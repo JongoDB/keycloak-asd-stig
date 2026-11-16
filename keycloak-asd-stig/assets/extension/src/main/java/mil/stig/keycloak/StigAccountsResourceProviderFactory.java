@@ -410,6 +410,13 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
         public Response reactivate(@PathParam("id") String id, @QueryParam("onBehalfOf") String onBehalfOf) {
             if (!enabledByOperator(REACTIVATE_ATTR)) { refused("reactivate", "reactivation is not enabled for this realm"); return err(Response.Status.FORBIDDEN, "not allowed"); }
             if (!AccountsPolicy.validOnBehalfOf(onBehalfOf)) return err(Response.Status.BAD_REQUEST, "invalid onBehalfOf");
+            // the marker is only trustworthy while stig-audit sees every administrative change (it withdraws the marker
+            // on any admin update): with admin events off or the listener gone, an administrator's change would leave a
+            // stale marker behind, so refuse rather than revive an account someone may have meant to keep off
+            if (!realm.isAdminEventsEnabled() || realm.getEventsListenersStream().noneMatch(StigAuditEventListenerProviderFactory.ID::equals)) {
+                refused("reactivate", "admin events or the stig-audit listener are off in this realm");
+                return err(Response.Status.CONFLICT, "reactivation needs admin events and the stig-audit listener in this realm");
+            }
             UserModel u = target(id, "reactivate");
             if (u == null) return err(Response.Status.FORBIDDEN, "not allowed");
             if (u.isEnabled()) return err(Response.Status.CONFLICT, "the account is not disabled");
