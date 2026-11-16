@@ -88,6 +88,11 @@ public class StigAuditEventListenerProviderFactory implements EventListenerProvi
                         s.getContext().setRealm(realm); // required by the user cache / organization provider
                         UserModel user = s.users().getUserById(realm, userId);
                         if (user == null) return;
+                        // a sign-in proves the account is in use: it is no longer "disabled for inactivity", so a later
+                        // disable by anyone else can never be undone by stig-accounts' reactivate
+                        if (user.getFirstAttribute(StigAccountsResourceProviderFactory.DISABLED_MARKER) != null) {
+                            user.removeAttribute(StigAccountsResourceProviderFactory.DISABLED_MARKER);
+                        }
                         String last = user.getFirstAttribute(LAST);
                         if (last != null) user.setSingleAttribute(PREVIOUS, last);
                         user.setSingleAttribute(LAST, now);
@@ -110,10 +115,38 @@ public class StigAuditEventListenerProviderFactory implements EventListenerProvi
             });
         }
 
+        /** Any administrative UPDATE of an account withdraws its inactivity marker: an administrator who touched it -
+         *  above all one who disabled it on purpose - must never see stig-accounts' reactivate undo that. */
+        private void clearInactivityMarker(AdminEvent event) {
+            String path = event.getResourcePath();
+            if (path == null || !path.startsWith("users/") || path.indexOf('/', 6) >= 0) return;
+            final String realmId = event.getRealmId(), userId = path.substring(6);
+            session.getTransactionManager().enlistAfterCompletion(new org.keycloak.models.AbstractKeycloakTransaction() {
+                @Override protected void commitImpl() {
+                    try {
+                        KeycloakModelUtils.runJobInTransaction(factory, s -> {
+                            RealmModel realm = s.realms().getRealm(realmId);
+                            if (realm == null) return;
+                            s.getContext().setRealm(realm);
+                            UserModel user = s.users().getUserById(realm, userId);
+                            if (user != null && user.getFirstAttribute(StigAccountsResourceProviderFactory.DISABLED_MARKER) != null) {
+                                user.removeAttribute(StigAccountsResourceProviderFactory.DISABLED_MARKER);
+                                LOG.infof("STIG-INACTIVITY-MARKER-CLEARED realm=%s user=%s: changed by an administrator", realm.getName(), user.getUsername());
+                            }
+                        });
+                    } catch (RuntimeException e) {
+                        LOG.errorf(e, "STIG-AUDIT inactivity marker clearing failed for user %s", userId);
+                    }
+                }
+                @Override protected void rollbackImpl() { }
+            });
+        }
+
         @Override
         public void onEvent(AdminEvent event, boolean includeRepresentation) {
             if (event.getResourceType() != ResourceType.USER) return;
             OperationType op = event.getOperationType();
+            if (op == OperationType.UPDATE) clearInactivityMarker(event);
             String rep = event.getRepresentation();
             String action;
             if (op == OperationType.CREATE) action = "CREATED";

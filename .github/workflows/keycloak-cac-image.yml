@@ -86,6 +86,9 @@ jobs:
       - name: Passkey realm beside the main realm (software authenticator, registration and sign-in)
         if: matrix.variant.name != 'edge'
         run: keycloak-cac/tests/passkey-realm.sh "keycloak-cac:ci${{ matrix.variant.suffix }}"
+      - name: stig-accounts in a passkey realm (U1-U5, U7)
+        if: matrix.variant.name != 'edge'
+        run: keycloak-cac/tests/accounts-public.sh "keycloak-cac:ci${{ matrix.variant.suffix }}"
       - name: Edge mode requires the proxy's client certificate (CA and pinned)
         if: matrix.variant.name == 'edge'
         run: keycloak-cac/tests/edge-mtls.sh keycloak-cac:ci-edge-test
