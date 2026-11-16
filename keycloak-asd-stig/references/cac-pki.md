@@ -101,7 +101,12 @@ Xeon (measured: 5.1 s signature checks + 0.4 s `isRevoked` scans), although only
 - **Once per file version:** (file key, size, mtime, ctime) and signer key; the check verifies on a throw-away parse,
   so the cached CRL stays lazily parsed and small. Only the CRLs a login needs are verified on the request path.
 - **Availability:** an unreadable or rejected CRL of **another** issuer logs `STIG-CRL-UNREADABLE` (at most once a
-  minute per file) and does not refuse anyone else's login.
+  minute per file, with the exception class and cause) and does not refuse anyone else's login. A listed CRL that is
+  not there yet logs `STIG-CRL-MISSING` (a warning): expected for the first minutes after every start in online mode,
+  when the data directory is fresh (tmpfs) and the realm already lists CRLs that `crl-fetch` is still downloading.
+  Cards of those CAs fail closed until the files arrive; the next login after that uses them (no restart, no cache
+  clear). If NIO cannot stat a file that java.io can read, file identity falls back to size and mtime
+  (`STIG-CRL-VERSION-DEGRADED`, logged once).
 - **Refresh without blocking:** a background job (every 30 s, `-Dstig.crl.prewarm.seconds`, and whenever a login sees
   a changed file) re-reads and verifies changed files and evicts files no realm lists any more. Locks are per file.
   A login that finds a file changed waits for its re-read; only if that takes longer than
