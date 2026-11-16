@@ -32,6 +32,11 @@ NAME2 = "2Cgol"[::-1]                   # the second
 PART_A, PART_B = "gol"[::-1], "2c"[::-1]   # two halves of the second name
 
 
+# PDF signatures, assembled so this file is not itself a PDF to the guard
+PDF_H = b"%" + b"PDF-"
+FLATE, ENDOBJ, TRAILER, STARTXREF = b"/Flate" + b"Decode", b"end" + b"obj", b"trail" + b"er", b"start" + b"xref"
+
+
 def zipped(name, data):
     b = io.BytesIO()
     with zipfile.ZipFile(b, "w", zipfile.ZIP_DEFLATED) as z:
@@ -83,11 +88,32 @@ BYPASSES = {
     "junk-then-zip.bin": b"#!/bin/sh\nexit 0\n" + zipped("payload/readme", NAME.encode()),
     "junk-then-gzip.bin": b"some header text\n" + gzip.compress(NAME.encode()),
     "junk-then-pdf.pdf": b"x" * 600 + b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n",
+    # PDFs: no version after the header; or object + cross-reference structure with no header at all
+    "pdf-noversion.bin": b"junk " + PDF_H + b"\n",
+    "pdf-structure.txt": b"1 0 obj << /Filter " + FLATE + b" >> stream\nx\nendstream\n" + ENDOBJ + b"\n" + TRAILER
+                         + b" << >>\n" + STARTXREF + b"\n0\n",
+    # broken containers: the readable part is scanned, and the break itself is a finding
+    "gzip-truncated.gz": gzip.compress(NAME.encode() + b" " + hashlib.sha512(b"t").digest() * 200)[:60],
+    "zip-broken-directory.zip": zipped("a.txt", NAME.encode())[:-30],
+    # decoded base64 that carries a full container signature, broken: still opened, and fails closed
+    "b64-of-truncated-gzip.txt": base64.b64encode(gzip.compress(NAME.encode() * 50)[:40]),
+    "b64-of-gzip.txt": base64.b64encode(gzip.compress(NAME.encode())),
+    "b64-of-junk-then-zip.txt": base64.b64encode(b"\x00\x01junk" + zipped("x.txt", NAME.encode())),
+    # decoded base64 that is mostly binary but carries the name: Latin-1 sees every byte
+    "b64-binary-around.txt": base64.b64encode(hashlib.sha512(b"a").digest() * 4 + NAME.encode() + hashlib.sha512(b"b").digest() * 4),
+    # line-wrapped base64 (as embedded payloads are): only meaningful once the lines are joined
+    "b64-wrapped.sh": b"PAYLOAD='\n" + b"\n".join(
+        base64.b64encode(gzip.compress(hashlib.sha512(b"w").digest() * 30 + NAME.encode()))[i:i + 64]
+        for i in range(0, 400, 64)) + b"\n'\n",
     # base64 glued to other base64-alphabet characters, at each misalignment
     "b64-off1.txt": b"Q" + base64.b64encode(NAME_AI.encode()),
     "b64-off2.txt": b"Qz" + base64.b64encode(NAME_AI.encode()),
     "b64-off3.txt": b"QzA" + base64.b64encode(NAME_AI.encode()),
     "b64-urlsafe-off2.txt": b"ab" + base64.urlsafe_b64encode(("??" + NAME + "??").encode()),
+}
+BROKEN_WITHOUT_NAME = {
+    "b64-of-broken-gzip.txt": base64.b64encode(b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\xff" * 40),
+    "broken.gz": b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\xff" * 40,
 }
 CLEAN = {
     "python.py": b"def configure(self):\n    return self.connect()\n\ndef control(): pass\n",
@@ -138,6 +164,16 @@ class Guard(unittest.TestCase):
         guard.loader.exec_module(g)
         printed = out.replace(self.dir, "")
         self.assertFalse(any(rx.search(printed) for rx in g.TERMS), "the guard printed what it caught")
+
+    def test_broken_containers_fail_closed(self):
+        for name, data in BROKEN_WITHOUT_NAME.items():
+            with self.subTest(fixture=name):
+                p = os.path.join(self.dir, name)
+                with open(p, "wb") as f:
+                    f.write(data)
+                rc, out = run("--no-tree", "--files", p)
+                self.assertEqual(rc, 1, out)
+                self.assertIn("unreadable", out)
 
     def test_a_file_name_is_checked(self):
         rc, out = run("--no-tree", "--files", self.named)

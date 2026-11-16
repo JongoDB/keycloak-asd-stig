@@ -7,14 +7,17 @@
 
 What is looked at:
 - every tracked file and its path; with --commits, every commit message in the range; --extra-archive files;
-- archives found by their signature, not their extension (zip - so jar, docx, xlsx, whl, skill; gzip; bzip2; xz;
-  tar inside them), also when they do not start at offset 0 (a zip end-of-central-directory record or a gzip
-  header anywhere: self-extracting files, prepended junk), recursively, under a total decompression budget
-  (--budget). Exceeding it is a failure, never a silent skip. PDFs (a %PDF- header in the first 1 KB) are refused
-  outright: their streams can hide anything;
-- text decoded as UTF-8, or UTF-16 by BOM or NUL pattern; NFKC-normalised (full-width letters become ASCII); with
-  invisible format characters (zero-width space/joiner, soft hyphen, BOM) removed; and again after HTML-entity,
-  percent and base64 decoding (every base64 run at all four alignments).
+- containers recognised by a full signature, never by extension: zip (a valid local header, or an
+  end-of-central-directory record anywhere - so jar, docx, xlsx, whl, skill, self-extracting files and prepended
+  junk), gzip, bzip2, xz, and tar inside them. They are opened recursively under a total decompression budget
+  (--budget); exceeding it fails the run. Decompression runs chunk by chunk, so a stream that breaks part-way still
+  has everything before the break scanned, and a container that cannot be read completely is itself a finding
+  (fail closed), also when it was found inside decoded base64;
+- PDFs are refused outright: a PDF header in the first 1 KB, or PDF object and cross-reference structure anywhere;
+- text: UTF-8, Latin-1 (every byte as a character, so nothing is skipped as "binary") and UTF-16 (BOM or NUL
+  pattern) decodings; NFKC-normalised (full-width letters become ASCII); invisible format characters (zero-width
+  space/joiner, soft hyphen, BOM) removed; and again after HTML-entity, percent and base64 decoding. Base64 is
+  decoded per run at all four alignments, and line-wrapped base64 blocks are joined and decoded as one.
 
 Rules (reported by number only, so the CI log of this public repository never repeats what it caught):
   1-4  the private names, with any run of separators between their parts (space, _, ., -, punctuation);
@@ -34,6 +37,7 @@ import html
 import io
 import lzma
 import re
+import struct
 import subprocess
 import sys
 import tarfile
@@ -43,9 +47,10 @@ import zlib
 from urllib.parse import unquote
 
 TERMS = [re.compile(p, re.I) for p in (
-    # No lookbehind: a name glued to other letters is still the name. The lookahead keeps ordinary code such as
-    # Python's "def configure(" or C's "#undef CONFIG" out.
-    r"def[\W_]*con(?:[\W_]*ai|(?![a-z]))",
+    # No lookbehind: a name glued to other letters is still the name. Written together, the first name matches
+    # whatever follows (bar the word "defconfig"); with a separator in between, the lookahead keeps ordinary code
+    # such as Python's "def configure(" or C's "#undef CONFIG" out.
+    r"d[e]f(?:c[o]n(?!f)|[\W_]+c[o]n(?:[\W_]*ai|(?![a-z])))",
     r"log[\W_]*c[\W_]*2(?![0-9])",
     r"cy[\W_]*roid",
     r"stock[\W_]*span",
@@ -56,12 +61,54 @@ KNOWN_PRIVATE_SHA256 = {
     "01e99522f9aacd25f2502640c0ef4e6543eba06bf8556f518a3e3c4223d8c200",
 }
 B64_RUN = re.compile(rb"[A-Za-z0-9+/_-]{8,}={0,2}")
-PDF_HEADER = re.compile(rb"%PDF-[0-9]\.[0-9]")
+# Line-wrapped base64: anchored at line starts, with possessive quantifiers (Python 3.11+) so a multi-megabyte
+# single-line file cannot make it backtrack.
+B64_BLOCK = re.compile(rb"(?m)(?:^[ \t]*+[A-Za-z0-9+/]{16,}+={0,2}+[ \t]*+\r?\n){2,}+[ \t]*+[A-Za-z0-9+/]*+={0,2}+")
+# Signatures, assembled so that this file contains none of them literally.
+PDF_HEAD = b"%" + b"PDF-"
+PDF_OBJECT = (b"end" + b"obj", b"/Flate" + b"Decode")
+PDF_XREF = (b"trail" + b"er", b"start" + b"xref")
+GZIP_MAGIC = b"\x1f\x8b\x08"
+XZ_MAGIC = b"\xfd7zXZ\x00"
+BZ2_MAGIC = re.compile(rb"BZh[1-9]")
+ZIP_LOCAL, ZIP_END = b"PK\x03\x04", b"PK\x05\x06"
+ZIP_METHODS = {0, 8, 9, 12, 14, 93, 95, 98}
+CHUNK = 1 << 20
 DEFAULT_BUDGET = 512 * 1024 * 1024
+MAX_EMBEDDED = 64
 
 
 class BudgetExceeded(Exception):
     pass
+
+
+def zip_local_header_ok(data, pos=0):
+    """A plausible zip local file header at pos (signature, version, method and name length all sane)."""
+    if data[pos:pos + 4] != ZIP_LOCAL or len(data) < pos + 30:
+        return False
+    version, _flags, method = struct.unpack_from("<HHH", data, pos + 4)
+    name_len = struct.unpack_from("<H", data, pos + 26)[0]
+    return version <= 63 and method in ZIP_METHODS and 0 < name_len <= 1024
+
+
+def container_kind(data):
+    if zip_local_header_ok(data) or (data[:4] == ZIP_END and len(data) >= 22):
+        return "zip"
+    if data.startswith(GZIP_MAGIC):
+        return "gzip"
+    if BZ2_MAGIC.match(data):
+        return "bzip2"
+    if data.startswith(XZ_MAGIC):
+        return "xz"
+    if len(data) > 262 and data[257:262] == b"ustar":
+        return "tar"
+    return None
+
+
+def is_pdf(data):
+    if PDF_HEAD in data[:1024]:
+        return True
+    return any(m in data for m in PDF_OBJECT) and any(m in data for m in PDF_XREF)
 
 
 class Scanner:
@@ -69,21 +116,40 @@ class Scanner:
         self.budget = budget
         self.hits = []
 
+    # ---- bookkeeping -------------------------------------------------------------------------------------
+    def hit(self, where, what):
+        h = "%s: %s" % (where, what)
+        if h not in self.hits:
+            self.hits.append(h)
+
+    def spend(self, n):
+        self.budget -= n
+        if self.budget < 0:
+            raise BudgetExceeded()
+
     # ---- text --------------------------------------------------------------------------------------------
     @staticmethod
-    def decode(data):
-        if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
-            return [data.decode("utf-16", "replace")]
+    def decodings(data):
         out = [data.decode("utf-8", "replace")]
-        sample = data[:4096]
-        if len(sample) >= 4 and sample.count(0) * 4 >= len(sample):      # NUL pattern: UTF-16 without a BOM
-            out += [data.decode("utf-16-le", "replace"), data.decode("utf-16-be", "replace")]
+        if not data.isascii():
+            out.append(data.decode("latin-1"))
+        if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            out.append(data.decode("utf-16", "replace"))
+        else:
+            sample = data[:4096]
+            if len(sample) >= 4 and sample.count(0) * 4 >= len(sample):      # NUL pattern: UTF-16 without BOM
+                out += [data.decode("utf-16-le", "replace"), data.decode("utf-16-be", "replace")]
         return out
 
-    @staticmethod
-    def normalise(text):
-        text = unicodedata.normalize("NFKC", text)
-        return "".join(c for c in text if unicodedata.category(c) != "Cf")
+    # Invisible format characters (category Cf: zero-width space/joiner, soft hyphen, BOM, bidi marks), deleted
+    # with str.translate rather than a per-character loop.
+    STRIP_CF = {cp: None for cp in range(sys.maxunicode + 1) if unicodedata.category(chr(cp)) == "Cf"}
+
+    @classmethod
+    def normalise(cls, text):
+        if text.isascii():          # NFKC and Cf removal cannot change pure ASCII
+            return text
+        return unicodedata.normalize("NFKC", text).translate(cls.STRIP_CF)
 
     def text_variants(self, text):
         seen = set()
@@ -108,152 +174,191 @@ class Scanner:
                 elif len(set(g.replace("-", ""))) >= 8 and TENANT_WORD.search(t[max(0, m.start() - 100):m.end() + 100]):
                     self.hit(where, "rule 6 (a real-looking GUID next to a tenant/directory keyword - use a placeholder)")
 
-    def hit(self, where, what):
-        h = "%s: %s" % (where, what)
-        if h not in self.hits:
-            self.hits.append(h)
+    # ---- decompression, chunk by chunk: returns (output so far, complete?) ---------------------------------
+    def _zlib(self, data, wbits):
+        d = zlib.decompressobj(wbits)
+        out = bytearray()
+        buf = data
+        try:
+            while True:
+                piece = d.decompress(buf, CHUNK)
+                out += piece
+                self.spend(len(piece))
+                buf = d.unconsumed_tail
+                if buf:
+                    continue
+                if d.eof and wbits > 15 and d.unused_data.startswith(GZIP_MAGIC):    # concatenated gzip members
+                    buf = d.unused_data
+                    d = zlib.decompressobj(wbits)
+                    continue
+                break
+            return bytes(out), d.eof
+        except zlib.error:
+            return bytes(out), False
+
+    def _stream(self, make, data):
+        d = make()
+        out = bytearray()
+        try:
+            piece = d.decompress(data, CHUNK)
+            while True:
+                out += piece
+                self.spend(len(piece))
+                if d.eof or d.needs_input:
+                    break
+                piece = d.decompress(b"", CHUNK)
+            return bytes(out), d.eof
+        except (OSError, EOFError, lzma.LZMAError, ValueError):
+            return bytes(out), False
+
+    def decompress(self, kind, data):
+        if kind == "gzip":
+            return self._zlib(data, 16 + zlib.MAX_WBITS)
+        if kind == "bzip2":
+            return self._stream(bz2.BZ2Decompressor, data)
+        return self._stream(lzma.LZMADecompressor, data)
 
     # ---- containers ---------------------------------------------------------------------------------------
-    def spend(self, n):
-        self.budget -= n
-        if self.budget < 0:
-            raise BudgetExceeded()
-
-    def inflate(self, fn, data):
-        """Decompress with the remaining budget as a hard cap."""
-        out = fn(data, self.budget + 1)
-        self.spend(len(out))
-        return out
-
-    @staticmethod
-    def _gunzip(data, cap):
-        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
-        out = d.decompress(data, cap)
-        while not d.unconsumed_tail and d.unused_data[:2] == b"\x1f\x8b" and len(out) < cap:   # concatenated members
-            rest = d.unused_data
-            d = zlib.decompressobj(16 + zlib.MAX_WBITS)
-            out += d.decompress(rest, cap - len(out))
-        return out
-
-    @staticmethod
-    def _stream(decomp_cls):
-        def run(data, cap):
-            return decomp_cls().decompress(data, max_length=cap)
-        return run
-
-    def scan_zip(self, where, z, depth):
+    def scan_zip(self, where, data, depth):
+        """Open with zipfile; if the archive or a member is damaged, recover what the local headers allow."""
+        try:
+            z = zipfile.ZipFile(io.BytesIO(data))
+        except zipfile.BadZipFile:
+            z = None
+            first = data.find(ZIP_LOCAL)
+            if first > 0:
+                try:
+                    z = zipfile.ZipFile(io.BytesIO(data[first:]))
+                except zipfile.BadZipFile:
+                    z = None
+        if z is None:
+            self.hit(where, "an unreadable zip archive - refused rather than skipped")
+            self.scan_zip_local_headers(where, data, depth)
+            return
         for info in z.infolist():
-            self.check_text("%s!%s" % (where, info.filename), info.filename)
+            name = "%s!%s" % (where, info.filename)
+            self.check_text(name, info.filename)
             if info.file_size > self.budget:
                 raise BudgetExceeded()
-            with z.open(info) as fh:
-                member = fh.read(self.budget + 1)
-            self.spend(len(member))
-            self.scan("%s!%s" % (where, info.filename), member, depth + 1)
-
-    def scan(self, where, data, depth=0, derived=False):
-        """derived: the bytes came from decoding base64 found in text. Real file content that looks like a container
-        but cannot be opened is a finding (fail closed); decoded noise that merely starts like one is not."""
-        if PDF_HEADER.search(data[:1024]):  # also behind up to 1 KB of junk, which PDF readers tolerate
-            self.hit(where, "a PDF - PDFs are refused (their compressed streams cannot be checked reliably)")
-            return
-        if data[:4] in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"):
+            member = bytearray()
             try:
-                z = zipfile.ZipFile(io.BytesIO(data))
-            except zipfile.BadZipFile:
-                if not derived:
-                    self.hit(where, "an unreadable zip archive")
-                return
-            self.scan_zip(where, z, depth)
-            return
-        for magic, fn, label in ((b"\x1f\x8b", self._gunzip, "gzip"), (b"BZh", self._stream(bz2.BZ2Decompressor), "bzip2"),
-                                 (b"\xfd7zXZ\x00", self._stream(lzma.LZMADecompressor), "xz")):
-            if data.startswith(magic):
-                try:
-                    inner = self.inflate(fn, data)
-                except (OSError, EOFError, zlib.error, lzma.LZMAError, ValueError):
-                    if not derived:
-                        self.hit(where, "an unreadable %s stream" % label)
-                    return
-                self.scan("%s!(%s)" % (where, label), inner, depth + 1)
-                return
-        if len(data) > 262 and data[257:262] == b"ustar":
+                with z.open(info) as fh:
+                    while True:
+                        piece = fh.read(CHUNK)
+                        if not piece:
+                            break
+                        member += piece
+                        self.spend(len(piece))
+            except (zipfile.BadZipFile, zlib.error, EOFError, OSError, NotImplementedError, RuntimeError):
+                self.hit(name, "an unreadable zip member - refused; its readable part was scanned")
+            self.scan(name, bytes(member), depth + 1)
+
+    def scan_zip_local_headers(self, where, data, depth):
+        pos, n = data.find(ZIP_LOCAL), 0
+        while pos >= 0 and n < MAX_EMBEDDED:
+            n += 1
+            if zip_local_header_ok(data, pos):
+                method = struct.unpack_from("<H", data, pos + 8)[0]
+                csize = struct.unpack_from("<I", data, pos + 18)[0]
+                name_len, extra_len = struct.unpack_from("<HH", data, pos + 26)
+                name = data[pos + 30:pos + 30 + name_len]
+                body = data[pos + 30 + name_len + extra_len:]
+                label = "%s!(local entry %s)" % (where, name.decode("latin-1"))
+                self.check_text(label, name.decode("latin-1"))
+                if method == 0:
+                    self.scan(label, body[:csize] if csize else body, depth + 1)
+                elif method == 8:
+                    self.scan(label, self._zlib(body, -15)[0], depth + 1)
+            pos = data.find(ZIP_LOCAL, pos + 4)
+
+    def scan_container(self, where, kind, data, depth):
+        if kind == "zip":
+            self.scan_zip(where, data, depth)
+        elif kind == "tar":
             try:
                 with tarfile.open(fileobj=io.BytesIO(data)) as t:
                     for m in t.getmembers():
                         self.check_text("%s!%s" % (where, m.name), m.name)
                         if m.isfile():
                             self.scan("%s!%s" % (where, m.name), t.extractfile(m).read(), depth + 1)
-            except tarfile.TarError:
-                if not derived:
-                    self.hit(where, "an unreadable tar archive")
-            return
-        for text in self.decode(data):
-            self.check_text(where, text)
-        self.scan_embedded(where, data, depth, derived)
-        # base64 runs, at all four alignments (a run can start mid-group when it is glued to other text)
-        if depth < 8:
-            for m in B64_RUN.finditer(data):
-                run = m.group(0).rstrip(b"=")
-                for off in range(4):
-                    seg = run[off:]
-                    if len(seg) < 8:
-                        break
-                    rem = len(seg) % 4
-                    seg = seg[:-1] if rem == 1 else seg + b"=" * ((4 - rem) % 4)
-                    for dec in (base64.b64decode, base64.urlsafe_b64decode):
-                        try:
-                            raw = dec(seg)
-                        except (binascii.Error, ValueError):
-                            continue
-                        if raw and self.worth_decoding(raw):
-                            self.spend(len(raw))
-                            self.scan("%s(base64@%d+%d)" % (where, m.start(), off), raw, depth + 1, derived=True)
+            except (tarfile.TarError, EOFError, OSError):
+                self.hit(where, "an unreadable tar archive - refused")
+                for text in self.decodings(data):
+                    self.check_text(where, text)
+        else:
+            inner, complete = self.decompress(kind, data)
+            if not complete:
+                self.hit(where, "an unreadable or truncated %s stream - refused; its readable part was scanned" % kind)
+            self.scan("%s!(%s)" % (where, kind), inner, depth + 1)
 
-    MAX_EMBEDDED = 64
+    def scan_embedded(self, where, data, depth):
+        """Containers that do not start at offset 0: self-extracting files and prepended junk."""
+        if ZIP_END in data:                                      # end-of-central-directory anywhere: open it
+            self.scan_zip("%s!(embedded zip)" % where, data, depth)
+        else:
+            pos = data.find(ZIP_LOCAL, 1)
+            if pos > 0 and zip_local_header_ok(data, pos):          # entries without a directory: recover them
+                self.scan_zip_local_headers("%s!(embedded zip)" % where, data, depth)
+        for magic, kind in ((GZIP_MAGIC, "gzip"), (XZ_MAGIC, "xz")):
+            pos, n = data.find(magic, 1), 0
+            while pos > 0 and n < MAX_EMBEDDED:
+                n += 1
+                inner, _ = self.decompress(kind, data[pos:])      # random bytes that look like a header: skip
+                if inner:
+                    self.scan("%s!(embedded %s@%d)" % (where, kind, pos), inner, depth + 1)
+                pos = data.find(magic, pos + 1)
 
-    def scan_embedded(self, where, data, depth, derived=False):
-        """Containers that do not start at offset 0: self-extracting archives and files with junk prepended."""
-        if b"PK\x05\x06" in data:                       # a zip end-of-central-directory record anywhere
-            z = None
-            starts = [0] + ([data.find(b"PK\x03\x04")] if b"PK\x03\x04" in data else [])
-            for start in starts:
-                try:
-                    z = zipfile.ZipFile(io.BytesIO(data[start:]))
+    # ---- base64 -------------------------------------------------------------------------------------------
+    def base64_candidates(self, data):
+        spans = []
+        for m in B64_BLOCK.finditer(data):                       # line-wrapped blocks, joined
+            spans.append((m.start(), m.end()))
+            yield m.start(), re.sub(rb"\s+", b"", m.group(0))
+        for m in B64_RUN.finditer(data):                         # single runs; the lines of a block are only its
+            if not any(a <= m.start() < b for a, b in spans):    # fragments (a gzip payload's first line is a
+                yield m.start(), m.group(0)                      # truncated stream on its own)
+
+    def scan_base64(self, where, data, depth):
+        for start, run in self.base64_candidates(data):
+            run = run.rstrip(b"=")
+            urlsafe = b"-" in run or b"_" in run
+            for off in range(4):
+                seg = run[off:]
+                if len(seg) < 8:
                     break
-                except zipfile.BadZipFile:
+                rem = len(seg) % 4
+                seg = seg[:-1] if rem == 1 else seg + b"=" * ((4 - rem) % 4)
+                try:
+                    raw = base64.urlsafe_b64decode(seg) if urlsafe else base64.b64decode(seg, validate=True)
+                except (binascii.Error, ValueError):
                     continue
-            if z is None:
-                if not derived:
-                    self.hit(where, "a zip signature inside that cannot be opened - refused rather than skipped")
-            else:
-                self.scan_zip("%s!(embedded zip)" % where, z, depth)
-        pos, tried = data.find(b"\x1f\x8b\x08"), 0
-        while pos > 0 and tried < self.MAX_EMBEDDED:      # gzip members after other bytes
-            tried += 1
-            try:
-                inner = self.inflate(self._gunzip, data[pos:])
-            except (OSError, EOFError, zlib.error, ValueError):
-                inner = b""
-            if inner:
-                self.scan("%s!(embedded gzip@%d)" % (where, pos), inner, depth + 1)
-            pos = data.find(b"\x1f\x8b\x08", pos + 1)
+                if raw:
+                    self.spend(len(raw))
+                    self.scan("%s(base64@%d+%d)" % (where, start, off), raw, depth + 1, derived=True)
 
-    MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"\x1f\x8b", b"BZh", b"\xfd7zXZ\x00", b"%PDF-", b"\xff\xfe", b"\xfe\xff")
+    # ---- one blob -----------------------------------------------------------------------------------------
+    def scan(self, where, data, depth=0, derived=False):
+        """derived: the bytes came from decoding base64. Every decoding of them is still checked as text, and a
+        full container signature is still opened and fails closed; only nested base64 inside binary noise is
+        not followed further (cost)."""
+        if is_pdf(data):
+            self.hit(where, "a PDF - PDFs are refused (their compressed streams cannot be checked reliably)")
+            return
+        kind = container_kind(data)
+        if kind:
+            self.scan_container(where, kind, data, depth)
+            return
+        for text in self.decodings(data):
+            self.check_text(where, text)
+        self.scan_embedded(where, data, depth)
+        if depth < 8 and (not derived or self.mostly_text(data)):
+            self.scan_base64(where, data, depth)
+
     PRINTABLE = bytes(range(0x20, 0x7f)) + b"\t\n\r"
 
     @classmethod
-    def worth_decoding(cls, raw):
-        """Base64 that decodes to text or to a container; random identifiers decode to binary noise."""
-        if raw.startswith(cls.MAGICS) or b"PK\x05\x06" in raw or b"\x1f\x8b\x08" in raw or PDF_HEADER.search(raw[:1024]):
-            return True
-        if len(raw.translate(None, cls.PRINTABLE)) <= 0.15 * len(raw):
-            return True
-        try:
-            text = raw.decode("utf-8")                  # non-ASCII text (full-width letters and the like)
-        except UnicodeDecodeError:
-            return False
-        return sum(1 for c in text if c.isprintable() or c in "\n\r\t") >= 0.85 * len(text)
+    def mostly_text(cls, raw):
+        return len(raw.translate(None, cls.PRINTABLE)) <= 0.15 * len(raw)
 
 
 def main():
