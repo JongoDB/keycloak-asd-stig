@@ -83,6 +83,9 @@ public final class AccountsPolicyTest {
         t("recover lifespan default 1 h", AccountsPolicy.recoverLifespan(null) == 3600, true);
         t("recover lifespan > 1 h refused", AccountsPolicy.recoverLifespan(3601) == -1, true);
         t("id list", AccountsPolicy.idList(" a, b,,c ").equals(java.util.Set.of("a", "b", "c")), true);
+        t("log-safe: control characters replaced", AccountsPolicy.logSafe("a\nb\u0007c").equals("a?b?c"), true);
+        t("log-safe: long value cut", AccountsPolicy.logSafe("x".repeat(300)).length() == 123, true);
+        t("log-safe: null", AccountsPolicy.logSafe(null).equals("-"), true);
         System.out.printf("%n%d/%d passed%n", run - failed, run);
         System.exit(failed == 0 ? 0 : 1);
     }

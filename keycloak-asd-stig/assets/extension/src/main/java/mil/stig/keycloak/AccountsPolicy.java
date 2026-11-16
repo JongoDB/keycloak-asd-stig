@@ -113,4 +113,15 @@ final class AccountsPolicy {
         if (requested == null) return DEFAULT_LIFESPAN;
         return requested >= 300 && requested <= MAX_LIFESPAN ? requested : -1;
     }
+
+    /** A caller-supplied value for a log line: printable ASCII only, at most 120 characters. */
+    static String logSafe(String v) {
+        if (v == null) return "-";
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < v.length() && b.length() < 120; i++) {
+            char c = v.charAt(i);
+            b.append(c < 0x20 || c >= 0x7f ? '?' : c);
+        }
+        return v.length() > 120 ? b + "..." : b.toString();
+    }
 }

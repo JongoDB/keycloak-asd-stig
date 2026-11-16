@@ -69,8 +69,8 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
  * asked. It is recorded in the admin event and in stig_created_by, marked as asserted by the caller - never trusted.
  *
  * Per-realm switches live in MASTER-realm attributes (the operator's tooling writes them; a realm's own administrators
- * cannot): stig.accounts.setup-actions.<realm> (U1), stig.accounts.recover.<realm>=true (U3),
- * stig.accounts.reactivate.<realm>=true (U4). E-mail domains: the caller client's stig.accounts.email-domains, else the
+ * cannot), keyed by the realm's ID: stig.accounts.setup-actions.<realm id> (U1), stig.accounts.recover.<realm id>=true
+ * (U3), stig.accounts.reactivate.<realm id>=true (U4). E-mail domains: the caller client's stig.accounts.email-domains, else the
  * realm's, else .mil and defconai.com ("*" = any), minus the realm's stig.accounts.email-domains-deny (U2); with an
  * organization, the address must be in THAT organization's domains, and the organization must be listed in the caller
  * client's stig.accounts.organizations (U7).
@@ -185,10 +185,11 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             return link == null ? null : realm.getClientById(link);
         }
 
-        /** A master-realm attribute keyed by this realm: only the operator's tooling can write it. */
+        /** A master-realm attribute keyed by this realm's ID (not its name: a realm renamed or re-created under the
+         *  same name must not inherit a switch): only the operator's tooling can write it. */
         private String masterAttr(String prefix) {
             RealmModel master = session.realms().getRealmByName(Config.getAdminRealm());
-            return master == null ? null : master.getAttribute(prefix + realm.getName());
+            return master == null ? null : master.getAttribute(prefix + realm.getId());
         }
         private boolean enabledByOperator(String prefix) { return "true".equals(masterAttr(prefix)); }
 
@@ -279,7 +280,7 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                 org.keycloak.organization.OrganizationProvider orgs = organizations();
                 vendorOrg = orgs == null || !orgs.isEnabled() ? null : orgs.getById(orgId);
                 if (cc == null || vendorOrg == null || !vendorOrg.isEnabled() || !AccountsPolicy.idList(cc.getAttribute(ORGANIZATIONS)).contains(orgId)) {
-                    refused("create", "organization " + orgId + " is not one this caller may add members to");
+                    refused("create", "organization " + AccountsPolicy.logSafe(orgId) + " is not one this caller may add members to");
                     return err(Response.Status.FORBIDDEN, "not allowed");
                 }
                 List<String> od = vendorOrg.getDomains().map(org.keycloak.models.OrganizationDomainModel::getName).collect(Collectors.toList());
@@ -306,7 +307,7 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (lifespan < 0) return err(Response.Status.BAD_REQUEST, "lifespan must be 300..86400 seconds");
             GroupModel g = groupPath == null ? null : KeycloakModelUtils.findGroupByPath(session, realm, groupPath);
             if (g == null || StigAdministrators.groupCarriesAdmin(realm, g) || !auth.groups().canManageMembership(g)) {
-                refused("create", "group " + groupPath + " is not one whose membership the caller manages");
+                refused("create", "group " + AccountsPolicy.logSafe(groupPath) + " is not one whose membership the caller manages");
                 return err(Response.Status.FORBIDDEN, "not allowed");
             }
             if (session.users().getUserByUsername(realm, username) != null || session.users().getUserByEmail(realm, email) != null) {
@@ -326,7 +327,7 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (onBehalfOf != null) rep.put("onBehalfOf", asserted(onBehalfOf));
             adminEvent.operation(OperationType.CREATE).resource(ResourceType.USER).resourcePath("users", u.getId()).representation(rep).success();
             LOG.infof("STIG-ACCOUNTS created realm=%s caller=%s user=%s group=%s organization=%s onBehalfOf=%s", realm.getName(), caller(),
-                    username, groupPath, vendorOrg == null ? "-" : vendorOrg.getAlias(), onBehalfOf == null ? "-" : asserted(onBehalfOf));
+                    username, AccountsPolicy.logSafe(groupPath), vendorOrg == null ? "-" : vendorOrg.getAlias(), onBehalfOf == null ? "-" : asserted(onBehalfOf));
             boolean sent = sendSetup(u, lifespan, actions);
             Map<String, Object> out = new LinkedHashMap<>(rep); out.put("setupEmail", sent ? "sent" : "failed");
             return Response.status(Response.Status.CREATED).entity(out).type(MediaType.APPLICATION_JSON).build();
@@ -374,9 +375,14 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (!u.isEnabled()) return err(Response.Status.CONFLICT, "the account is disabled");
             if (u.getEmail() == null || u.getEmail().isBlank()) return err(Response.Status.BAD_REQUEST, "the account has no e-mail address");
             List<org.keycloak.credential.CredentialModel> creds = u.credentialManager().getStoredCredentialsStream().collect(Collectors.toList());
-            if (creds.stream().anyMatch(c -> !org.keycloak.models.credential.WebAuthnCredentialModel.TYPE_PASSWORDLESS.equals(c.getType())
-                    && !org.keycloak.models.credential.WebAuthnCredentialModel.TYPE_TWOFACTOR.equals(c.getType()))) {
-                refused("recover", "account " + u.getUsername() + " holds a credential that is not a passkey");
+            // a passkey account: at least one passwordless passkey and nothing that is not a passkey. An account with no
+            // credential at all is not one (it is still being set up - re-send instead), and neither is a CAC, password or
+            // OTP account, whatever the realm: recovery must never strip another kind of credential or downgrade one
+            boolean hasPasskey = creds.stream().anyMatch(c -> org.keycloak.models.credential.WebAuthnCredentialModel.TYPE_PASSWORDLESS.equals(c.getType()));
+            boolean other = creds.stream().anyMatch(c -> !org.keycloak.models.credential.WebAuthnCredentialModel.TYPE_PASSWORDLESS.equals(c.getType())
+                    && !org.keycloak.models.credential.WebAuthnCredentialModel.TYPE_TWOFACTOR.equals(c.getType()));
+            if (!hasPasskey || other) {
+                refused("recover", "account " + u.getUsername() + (hasPasskey ? " holds a credential that is not a passkey" : " holds no passkey"));
                 return err(Response.Status.CONFLICT, "only a passkey account can be recovered here");
             }
             if (!session.singleUseObjects().putIfAbsent("stig-accounts-recover:" + u.getId(), AccountsPolicy.RECOVER_INTERVAL)) {

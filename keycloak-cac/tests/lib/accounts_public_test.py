@@ -61,10 +61,11 @@ up = kc.api("GET", RR + "/users/profile")
 up["attributes"].append({"name": "stig_created_by", "displayName": "Created by a delegate", "permissions": {"view": ["admin"], "edit": ["admin"]},
                          "multivalued": False, "validations": {"length": {"max": "512"}}, "annotations": {}})
 kc.api("PUT", RR + "/users/profile", up)
+RID = kc.api("GET", RR)["id"]          # the operator's switches are keyed by realm ID
 PASSKEY_SETUP = "VERIFY_EMAIL,TERMS_AND_CONDITIONS,webauthn-register-passwordless"
-master_attr("stig.accounts.setup-actions.%s" % REALM, PASSKEY_SETUP)
-master_attr("stig.accounts.recover.%s" % REALM, "true")
-master_attr("stig.accounts.reactivate.%s" % REALM, "true")
+master_attr("stig.accounts.setup-actions.%s" % RID, PASSKEY_SETUP)
+master_attr("stig.accounts.recover.%s" % RID, "true")
+master_attr("stig.accounts.reactivate.%s" % RID, "true")
 orgs = {}
 for alias in ("acme", "other"):
     orgs[alias] = kc.api("POST", RR + "/organizations", {"name": alias, "alias": alias, "enabled": True, "domains": [{"name": alias + ".example"}]})
@@ -91,7 +92,7 @@ def dtoken():
 TOK = dtoken()
 def call(method, path, body=None, q=None, realm=REALM, token=None):
     url = BASE + "/admin/realms/%s/stig-accounts/%s" % (realm, path) + ("?" + urllib.parse.urlencode(q) if q else "")
-    h = {"Authorization": "Bearer " + (token or TOK), "Content-Type": "application/json"}
+    h = {"Authorization": "Bearer " + (token or dtoken()), "Content-Type": "application/json"}   # tokens live 5 min
     req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else (b"" if method == "POST" else None), method=method, headers=h)
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
@@ -160,10 +161,10 @@ for label, body in (("an address outside the organization's domains", person("ve
     check("U7: %s is refused (403), nothing created" % label, st == 403 and not made, (st, out))
 
 # ---- U1: the operator's set-up value fails closed
-master_attr("stig.accounts.setup-actions.%s" % REALM, "TERMS_AND_CONDITIONS")       # no credential action
+master_attr("stig.accounts.setup-actions.%s" % RID, "TERMS_AND_CONDITIONS")       # no credential action
 st, out = call("POST", "users", person("closed", "readers.example"))
 check("U1: an unreadable set-up value refuses creation (503, fail closed)", st == 503, (st, out))
-master_attr("stig.accounts.setup-actions.%s" % REALM, PASSKEY_SETUP)
+master_attr("stig.accounts.setup-actions.%s" % RID, PASSKEY_SETUP)
 
 # ---- resend
 st1, _ = call("POST", "users/%s/setup-email" % vid)
@@ -188,42 +189,91 @@ st, _ = call("POST", "users/%s/recover" % rid)
 check("U3: a second recovery within 24 h is refused (429)", st == 429, st)
 time.sleep(1)
 check("U3: logged, with onBehalfOf as asserted", "STIG-ACCOUNTS recovered" in logs(since) and "jane.lead (asserted by caller)" in logs(since))
-master_attr("stig.accounts.recover.%s" % REALM, None)
+pw = person("pwd", "readers.example")
+st_pw, out_pw = call("POST", "users", pw)
+pw_id = (out_pw or {}).get("id")
+st_none, _ = call("POST", "users/%s/recover" % pw_id)
+kc.api("PUT", RR + "/users/%s/reset-password" % pw_id, {"type": "password", "value": "Aa1!" + uuid.uuid4().hex + "Zz9#", "temporary": False})
+st_pwd, _ = call("POST", "users/%s/recover" % pw_id)
+check("U3: recover refuses an account with no passkey (409) and one holding a password (409); nothing removed",
+      (st_none, st_pwd) == (409, 409) and [c["type"] for c in kc.api("GET", RR + "/users/%s/credentials" % pw_id)] == ["password"], (st_none, st_pwd))
+master_attr("stig.accounts.recover.%s" % RID, None)
 st, _ = call("POST", "users/%s/recover" % vid)
 check("U3: with the operator's switch off, recover is refused (403)", st == 403, st)
-master_attr("stig.accounts.recover.%s" % REALM, "true")
+master_attr("stig.accounts.recover.%s" % RID, "true")
 
-# ---- U4: reactivation
-def disable_for_inactivity(uid):
-    """What the inactivity workflow does (set-user-attribute, then disable-user) - 35 days cannot pass in a test."""
-    cur = kc.api("GET", RR + "/users/%s" % uid)
-    kc.api("PUT", RR + "/users/%s" % uid, dict(cur, enabled=False, attributes=dict(cur.get("attributes") or {}, stig_disabled_by=["inactivity"])))
-disable_for_inactivity(rid)
+# ---- U4: reactivation, driven by the REAL workflow steps (set-user-attribute, then disable-user). The container runs
+# the workflow runner every 3 seconds (stepRunnerTaskInterval, in seconds); a test workflow with the realm's inactivity steps
+# and a 20-second delay stands in for 35 days, activated for one account at a time.
+def wf(name, steps):
+    for w in kc.api("GET", RR + "/workflows") or []:
+        if w["name"] == name:
+            kc.api("DELETE", RR + "/workflows/%s" % w["id"])
+    kc.api("POST", RR + "/workflows", {"name": name, "steps": steps})
+    return [w for w in kc.api("GET", RR + "/workflows") if w["name"] == name][0]["id"]
+INACT = wf("stig-disable-inactive-test", [{"uses": "set-user-attribute", "after": "20s", "with": {"stig_disabled_by": "inactivity"}},
+                                          {"uses": "disable-user"}])
+MARK = wf("stig-mark-only-test", [{"uses": "set-user-attribute", "after": "5s", "with": {"stig_disabled_by": "inactivity"}}])
+def activate(wid, uid):
+    for t in ("users", "USERS"):
+        try:
+            kc.api("POST", RR + "/workflows/%s/activate/%s/%s" % (wid, t, uid)); return True
+        except K.KCError:
+            pass
+    return False
+def wait_for(pred, secs=150):
+    end = time.time() + secs
+    while time.time() < end:
+        if pred(): return True
+        time.sleep(3)
+    return False
+def user(uid): return kc.api("GET", RR + "/users/%s" % uid)
+def marker(uid): return ((user(uid).get("attributes") or {}).get("stig_disabled_by") or [None])[0]
+
+check("U4 (set-up): the test inactivity workflow is activated for the reader", activate(INACT, rid))
+ok_wf = wait_for(lambda: not user(rid)["enabled"])
+check("U4: the workflow's own steps disable the account and leave stig_disabled_by=inactivity", ok_wf and marker(rid) == "inactivity",
+      (user(rid)["enabled"], marker(rid)))
 st, out = call("POST", "users/%s/reactivate" % rid, q={"onBehalfOf": ob})
-u = kc.api("GET", RR + "/users/%s" % rid)
-sched = kc.api("GET", RR + "/workflows/scheduled/%s" % rid) or []
+u = user(rid)
+sched = [w.get("name") for w in kc.api("GET", RR + "/workflows/scheduled/%s" % rid) or []]
 check("U4: an account the inactivity workflow disabled is reactivated (204), the marker cleared", st == 204 and u.get("enabled") is True
       and "stig_disabled_by" not in (u.get("attributes") or {}), (st, out))
-check("U4: ... and the inactivity workflow is scheduled for it again (V-222411)", any((w.get("name") or "").startswith("stig-disable-inactive-") for w in sched),
-      [w.get("name") for w in sched])
+check("U4: ... and the inactivity workflows are scheduled for it again (V-222411)", "stig-disable-inactive-test" in sched
+      and "stig-disable-inactive-35d" in sched, sched)
 check("U4: ... and it signs in", signs_in(a_r2)[0])
 st, _ = call("POST", "users/%s/reactivate" % rid)
 check("U4: an enabled account is not 'reactivated' (409)", st == 409, st)
+check("U4: the restarted workflow disables the unused account again, with the marker", wait_for(lambda: not user(rid)["enabled"])
+      and marker(rid) == "inactivity")
+# the review's case: disabled for inactivity, then an administrator changes the account -> reactivate refuses
+cur = user(rid)
+kc.api("PUT", RR + "/users/%s" % rid, dict(cur, firstName="Kept", enabled=False))
+time.sleep(2)
+st, _ = call("POST", "users/%s/reactivate" % rid)
+check("U4: disabled for inactivity, then changed by an administrator (PUT): the marker is withdrawn and reactivate refuses (409)",
+      st == 409 and marker(rid) is None and not user(rid)["enabled"], (st, marker(rid)))
 st, _ = call("POST", "users/%s/disable" % vid)
 st2, _ = call("POST", "users/%s/reactivate" % vid)
 check("U4: an account disabled through stig-accounts cannot be reactivated (409)", st == 204 and st2 == 409, (st, st2))
-disable_for_inactivity(vid)
+cur = user(vid); kc.api("PUT", RR + "/users/%s" % vid, dict(cur, enabled=True))
+activate(INACT, vid)
+wait_for(lambda: marker(vid) == "inactivity")
 call("POST", "users/%s/disable" % vid)
 st, _ = call("POST", "users/%s/reactivate" % vid)
-check("U4: disable clears a stale inactivity marker, so reactivate refuses (409)", st == 409 and "stig_disabled_by" not in (kc.api("GET", RR + "/users/%s" % vid).get("attributes") or {}), st)
-cur = kc.api("GET", RR + "/users/%s" % rid)
-kc.api("PUT", RR + "/users/%s" % rid, dict(cur, attributes=dict(cur.get("attributes") or {}, stig_disabled_by=["inactivity"])))
-signs_in(a_r2); time.sleep(2)
-check("U4: a sign-in clears the inactivity marker (stig-audit)", "stig_disabled_by" not in (kc.api("GET", RR + "/users/%s" % rid).get("attributes") or {}))
-master_attr("stig.accounts.reactivate.%s" % REALM, None)
-disable_for_inactivity(rid)
+check("U4: disable through stig-accounts withdraws an inactivity marker, so reactivate refuses (409)", st == 409 and marker(vid) is None, st)
+mk = person("marked", "readers.example")
+before = mails(); _, mk_out = call("POST", "users", mk); mk_id = mk_out["id"]
+a_mk, ok_mk, _, _ = set_up(next_mail(before)[1])
+activate(MARK, mk_id)
+got = wait_for(lambda: marker(mk_id) == "inactivity")
+signs_in(a_mk); time.sleep(2)
+check("U4: a sign-in clears the inactivity marker (stig-audit)", ok_mk and got and marker(mk_id) is None, (ok_mk, got, marker(mk_id)))
+master_attr("stig.accounts.reactivate.%s" % RID, None)
 st, _ = call("POST", "users/%s/reactivate" % rid)
 check("U4: with the operator's switch off, reactivate is refused (403)", st == 403, st)
+for w in (INACT, MARK):
+    kc.api("DELETE", RR + "/workflows/%s" % w)
 
 # ---- the main realm is left as it was: no switch set, no organization, password defaults
 mid = kc.api("POST", "/realms/dod-cac/clients", {"clientId": "main-delegate", "protocol": "openid-connect", "publicClient": False,

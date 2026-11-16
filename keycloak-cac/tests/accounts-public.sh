@@ -21,6 +21,7 @@ docker run -d --name "$NAME" -p "127.0.0.1:$PORT:8443" --add-host host.docker.in
   -e CAC_LAB_MODE=true -e KC_DB=dev-file -e CAC_AUTH_MODE=cac_or_mfa -e CAC_LOCKOUT=temporary \
   -e CAC_PUBLIC_URL="https://localhost:$PORT" -e KC_BOOTSTRAP_ADMIN_USERNAME=bootstrap -e KC_BOOTSTRAP_ADMIN_PASSWORD="$PW" \
   -e CAC_EXTRA_REALM_PROFILES=/extra -e CAC_CLIENTS_DIR=/clients \
+  -e KC_SPI_EVENTS_LISTENER__WORKFLOW_EVENT_LISTENER__STEP_RUNNER_TASK_INTERVAL=3 \
   -v "$T/extra:/extra:ro" -v "$T/clients:/clients:ro" "$IMG" >/dev/null
 wait_up() {
   for i in $(seq 1 120); do
