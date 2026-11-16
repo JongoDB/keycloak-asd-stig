@@ -1,9 +1,8 @@
 package mil.stig.keycloak;
 
-import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -13,19 +12,23 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.security.GeneralSecurityException;
 import java.security.InvalidKeyException;
+import java.security.PublicKey;
 import java.security.SignatureException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509CRL;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Collection;
 import java.util.Date;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import javax.security.auth.x500.X500Principal;
 
 import org.jboss.logging.Logger;
@@ -33,56 +36,97 @@ import org.keycloak.authentication.authenticators.x509.X509AuthenticatorConfigMo
 import org.keycloak.common.util.Time;
 import org.keycloak.models.Constants;
 import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.KeycloakSessionFactory;
+import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.truststore.TruststoreProvider;
 
 /**
- * The local-CRL revocation check of the card login (ASD STIG V-222551 path validation with status information,
- * V-222553 local cache of revocation data), scoped to the certificate's issuing CA.
+ * The local-CRL revocation check of the card login (ASD STIG V-222550 path validation with status information,
+ * V-222553 local cache of revocation data), scoped to the certificates that matter.
  *
- * <p>Why it exists: Keycloak 26.8.2 caches the parsed CRLs (CrlStorageProvider), but
- * {@code CertificateValidator.checkRevocationStatusUsingCRL} then calls {@code CRLUtils.check} for EVERY configured CRL
- * on EVERY sign-in, and {@code CRLUtils.check} re-verifies each CRL's signature. Under BC-FIPS that means re-encoding
- * and hashing the whole CRL: with the 17 DoD ID/DERILITY CRLs (~140 MB) about 5.5 s per sign-in on a 2.6 GHz Xeon,
- * although only the issuing CA's CRL can ever list the certificate.
+ * <p>Why it exists: Keycloak 26.8.2 caches the parsed CRLs, but {@code CertificateValidator.checkRevocationStatusUsingCRL}
+ * runs {@code CRLUtils.check} for EVERY configured CRL on EVERY sign-in, and {@code CRLUtils.check} re-verifies each CRL's
+ * signature. Under BC-FIPS that re-encodes and hashes the whole CRL: about 5.5 s per sign-in with the 17 DoD ID/DERILITY
+ * CRLs (~140 MB) on a 2.6 GHz Xeon, although only the issuing CA's CRL can list the card.
  *
- * <p>What it keeps from Keycloak, unchanged: the same {@code crl-relative-path} files under the configuration
- * directory; the CRL signer is the certificate in the presented chain named as the CRL issuer, else the truststore's
- * (the {@code CRLUtils.check} order); {@code crl-abort-if-non-updated}; {@code X509CRL.isRevoked}; any unreadable
- * configured CRL refuses the sign-in.
+ * <p>What it checks, on every sign-in:
+ * <ol>
+ *   <li>the card against the CRL(s) of its issuing CA;</li>
+ *   <li>the issuing CA's certificate (the truststore certificate whose key verifies the card) against the CRL(s) of
+ *       ITS issuer, the root, unless the issuing CA is itself self-signed. Keycloak checks neither intermediate.</li>
+ * </ol>
+ * A certificate whose issuer has no usable CRL is refused. CRL signatures are verified only against truststore
+ * certificates, never against the client-supplied chain, and once per file version (file key, size, mtime, ctime)
+ * and signer key. Verification happens on a throw-away parse, so the cached CRL stays lazily parsed (BC-FIPS expands a
+ * CRL completely to verify it). CRLs that cannot be relied on are rejected: delta CRLs, a partitioned or indirect
+ * issuingDistributionPoint, unsupported critical extensions, a thisUpdate in the future.
  *
- * <p>What it changes: only CRLs whose issuer is the certificate's issuer are consulted; a CRL's signature is verified
- * once per file version (file key, size, modification time) and signer key instead of once per sign-in, so a CRL
- * refreshed on disk is re-read and re-verified on the next sign-in; and a certificate whose issuer has NO CRL in the
- * list is refused (Keycloak lets it through with no CRL evidence at all).
+ * <p>Availability: an unreadable or rejected CRL of ANOTHER issuer raises {@code STIG-CRL-UNREADABLE} and does not refuse
+ * the sign-in; one of the card's own issuer (or of the issuing CA's root) refuses it. A background job
+ * ({@link #startPrewarm}) re-reads and verifies changed files off the request path and evicts files no realm lists any
+ * more; while a file is being reloaded, sign-ins keep using its previous verified version (locks are per file).
  */
 final class IssuerCrlCheck {
     private static final Logger log = Logger.getLogger(IssuerCrlCheck.class);
 
-    /** CRL signature verifications performed (tests use it to prove the cache works). */
+    /** CRL signature verifications performed, and checks run (tests use them to prove the cache and the wiring). */
     static final AtomicLong VERIFICATIONS = new AtomicLong();
+    static final AtomicLong CHECKS = new AtomicLong();
+
+    static final String IDP_OID = "2.5.29.28", DELTA_OID = "2.5.29.27";
+    static final long CLOCK_SKEW_MS = 5 * 60_000L;
 
     private static final Map<Path, Loaded> CACHE = new ConcurrentHashMap<>();
+    private static final Map<Path, ReentrantLock> LOCKS = new ConcurrentHashMap<>();
+    private static final Map<Path, Long> ALARMED = new ConcurrentHashMap<>();
 
     private IssuerCrlCheck() {}
 
-    /** Where a CRL's signer is looked up when the presented chain does not carry it. */
+    /** Where CRL signers and issuing-CA certificates come from: the truststore, by subject. */
     interface Signers {
         List<X509Certificate> named(X500Principal subject) throws GeneralSecurityException;
     }
 
-    /** One CRL file as last read: its version on disk, the parsed CRL, and the signer keys it has verified against. */
-    private static final class Loaded {
-        final Object fileKey; final long size; final FileTime mtime;
-        final X509CRL crl; final X500Principal issuer;
-        final Set<ByteBuffer> verifiedKeys = ConcurrentHashMap.newKeySet();
-        Loaded(BasicFileAttributes a, X509CRL crl) {
-            this.fileKey = a.fileKey(); this.size = a.size(); this.mtime = a.lastModifiedTime();
-            this.crl = crl; this.issuer = crl.getIssuerX500Principal();
-        }
-        boolean same(BasicFileAttributes a) {
-            return Objects.equals(fileKey, a.fileKey()) && size == a.size() && mtime.equals(a.lastModifiedTime());
+    /** A file's identity on disk: replaced, rewritten or touched files all differ. */
+    private record Version(Object fileKey, long size, FileTime mtime, Object ctime) {
+        static Version of(Path f) throws IOException {
+            BasicFileAttributes a = Files.readAttributes(f, BasicFileAttributes.class);
+            if (!a.isRegularFile()) throw new IOException("not a regular file");
+            Object ctime = null;
+            try {
+                ctime = Files.getAttribute(f, "unix:ctime");
+            } catch (UnsupportedOperationException | IllegalArgumentException e) {
+                // no unix view (not Linux/macOS): fileKey, size and mtime still identify the version
+            }
+            return new Version(a.fileKey(), a.size(), a.lastModifiedTime(), ctime);
         }
     }
+
+    /**
+     * One CRL file as last read. {@code crl} is a lazy parse that is never verified (BC-FIPS expands a CRL completely to
+     * verify it); the signature is checked on a separate parse of {@code der}, once, the first time the CRL is needed
+     * (a sign-in of that issuer, or the pre-warm), after which {@code der} is dropped.
+     */
+    private static final class Loaded {
+        final Version version; final X509CRL crl; final X500Principal issuer;
+        final boolean onlyUserCerts, onlyCaCerts;
+        final Set<ByteBuffer> verifiedKeys = ConcurrentHashMap.newKeySet();
+        volatile byte[] der;
+        Loaded(Version v, X509CRL crl, boolean onlyUser, boolean onlyCa, byte[] der) {
+            this.version = v; this.crl = crl; this.issuer = crl.getIssuerX500Principal();
+            this.onlyUserCerts = onlyUser; this.onlyCaCerts = onlyCa; this.der = der;
+        }
+        boolean verified() { return !verifiedKeys.isEmpty(); }
+        boolean verifiedBy(Signers s) throws GeneralSecurityException {
+            for (X509Certificate c : s.named(issuer)) if (verifiedKeys.contains(key(c.getPublicKey()))) return true;
+            return false;
+        }
+    }
+
+    /** A configured file that could not be used, and the issuer it belongs to when known. */
+    private record Failure(Path path, X500Principal issuer, String reason) {}
+
+    // ------------------------------------------------------------------ configuration and entry points
 
     /**
      * True when this check replaces Keycloak's local-CRL step: CRL checking on, CRL distribution points off, and every
@@ -90,69 +134,138 @@ final class IssuerCrlCheck {
      */
     static boolean handles(X509AuthenticatorConfigModel config) {
         if (!config.getCRLEnabled() || config.getCRLDistributionPointEnabled()) return false;
-        String paths = config.getCRLRelativePath();
-        if (paths == null || paths.isBlank()) return false;
-        for (String p : Constants.CFG_DELIMITER_PATTERN.split(paths.trim())) {
-            if (p.startsWith("http") || p.startsWith("ldap")) return false;
-        }
-        return true;
+        return localPaths(config.getCRLRelativePath()) != null;
     }
 
-    /** The authenticator's entry point: resolves the configured files the way Keycloak's CRLFileLoader does. */
-    static void check(KeycloakSession session, X509Certificate[] certs, String crlRelativePaths, boolean abortIfNonUpdated)
-            throws GeneralSecurityException {
+    private static List<String> localPaths(String paths) {
+        if (paths == null || paths.isBlank()) return null;
+        List<String> out = new ArrayList<>();
+        for (String p : Constants.CFG_DELIMITER_PATTERN.split(paths.trim())) {
+            if (p.startsWith("http") || p.startsWith("ldap")) return null;
+            if (!p.isBlank()) out.add(p);
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    /** Resolves configured relative paths the way Keycloak's CRLFileLoader does; a path outside conf is dropped (alarm). */
+    static List<Path> resolve(Collection<String> rels) {
         String configDir = System.getProperty("jboss.server.config.dir");
-        if (configDir == null) throw new GeneralSecurityException("Unable to load CRL");
+        if (configDir == null) return List.of();
         Path configPath = Paths.get(configDir).toAbsolutePath().normalize();
         List<Path> files = new ArrayList<>();
-        for (String rel : Constants.CFG_DELIMITER_PATTERN.split(crlRelativePaths.trim())) {
-            Path p;
+        for (String rel : rels) {
             try {
-                p = Paths.get(configDir + File.separator + rel).toAbsolutePath().normalize();
+                Path p = Paths.get(configDir + File.separator + rel).toAbsolutePath().normalize();
+                if (p.startsWith(configPath)) {
+                    files.add(p);
+                    continue;
+                }
+                log.errorf("STIG-CRL-UNREADABLE \"%s\" resolves outside of the configuration directory \"%s\": ignored", rel, configPath);
             } catch (InvalidPathException e) {
-                log.warnf("Cannot load CRL from \"%s\": %s", rel, e.getMessage());
-                throw new GeneralSecurityException("Unable to load CRL");
+                log.errorf("STIG-CRL-UNREADABLE \"%s\": %s", rel, e.getMessage());
             }
-            if (!p.startsWith(configPath)) {
-                log.warnf("Cannot load CRL from \"%s\" because it resolves outside of the configuration directory \"%s\"", rel, configPath);
-                throw new GeneralSecurityException("Unable to load CRL");
-            }
-            files.add(p);
         }
+        return files;
+    }
+
+    /** The authenticator's entry point. */
+    static void check(KeycloakSession session, X509Certificate[] certs, String crlRelativePaths, boolean abortIfNonUpdated)
+            throws GeneralSecurityException {
+        List<String> rels = localPaths(crlRelativePaths);
+        List<Path> files = rels == null ? List.of() : resolve(rels);
         check(certs, files, truststore(session), abortIfNonUpdated, Time.currentTimeMillis());
     }
 
-    private static Signers truststore(KeycloakSession session) {
+    static Signers truststore(KeycloakSession session) {
         return subject -> {
             TruststoreProvider tp = session.getProvider(TruststoreProvider.class);
             if (tp == null || tp.getTruststore() == null) throw new GeneralSecurityException("Truststore not available");
-            List<X509Certificate> found = tp.getIntermediateCertificates().get(subject);
-            if (found == null) found = tp.getRootCertificates().get(subject);
-            return found == null ? Collections.emptyList() : found;
+            List<X509Certificate> found = new ArrayList<>();
+            List<X509Certificate> i = tp.getIntermediateCertificates().get(subject);
+            List<X509Certificate> r = tp.getRootCertificates().get(subject);
+            if (i != null) found.addAll(i);
+            if (r != null) found.addAll(r);
+            return found;
         };
     }
+
+    // ------------------------------------------------------------------ the check
 
     /** The check itself, free of Keycloak so it can be unit-tested. Throws to refuse the sign-in. */
     static void check(X509Certificate[] certs, List<Path> files, Signers truststore, boolean abortIfNonUpdated, long nowMillis)
             throws GeneralSecurityException {
+        CHECKS.incrementAndGet();
         if (certs == null || certs.length < 1) throw new GeneralSecurityException("No certificate chain to check against the CRL");
-        X509Certificate cert = certs[0];
-        X500Principal issuer = cert.getIssuerX500Principal();
-        List<Loaded> issuers = new ArrayList<>(1);
+        List<Loaded> loaded = new ArrayList<>(files.size());
+        List<Failure> failed = new ArrayList<>();
         for (Path f : files) {
-            Loaded l = load(f);                       // every configured file must be readable, as in Keycloak
-            if (l.issuer.equals(issuer)) issuers.add(l);
+            try {
+                loaded.add(load(f, false));
+            } catch (GeneralSecurityException | IOException e) {
+                Loaded previous = CACHE.get(f);
+                X500Principal iss = e instanceof RejectedCrl rc ? rc.issuer : previous == null ? null : previous.issuer;
+                failed.add(new Failure(f, iss, e.getMessage()));
+                alarm(f, iss, e.getMessage());
+            }
         }
-        if (issuers.isEmpty()) {
-            log.errorf("STIG-CRL-NO-ISSUER-CRL no configured CRL is issued by \"%s\": certificate \"%s\" refused (add that CA's CRL)",
-                    issuer.getName(), cert.getSubjectX500Principal().getName());
+        X509Certificate leaf = certs[0];
+        evaluate(leaf, false, loaded, failed, truststore, abortIfNonUpdated, nowMillis);
+
+        // the issuing CA's own revocation status, against its issuer's (the root's) CRL
+        X509Certificate ica = issuingCa(leaf, truststore);
+        if (!ica.getSubjectX500Principal().equals(ica.getIssuerX500Principal())) {
+            evaluate(ica, true, loaded, failed, truststore, abortIfNonUpdated, nowMillis);
+        }
+    }
+
+    /** The truststore certificate that issued {@code cert} (name match AND its key verifies the signature). */
+    private static X509Certificate issuingCa(X509Certificate cert, Signers truststore) throws GeneralSecurityException {
+        for (X509Certificate c : truststore.named(cert.getIssuerX500Principal())) {
+            try {
+                cert.verify(c.getPublicKey());
+                return c;
+            } catch (InvalidKeyException | SignatureException e) {
+                // another CA certificate of that name (re-keyed CA)
+            }
+        }
+        throw new GeneralSecurityException("Issuing CA certificate of '" + cert.getIssuerX500Principal() + "' not in the truststore");
+    }
+
+    private static void evaluate(X509Certificate cert, boolean isCa, List<Loaded> loaded, List<Failure> failed, Signers truststore,
+                                 boolean abortIfNonUpdated, long now) throws GeneralSecurityException {
+        X500Principal issuer = cert.getIssuerX500Principal();
+        String what = isCa ? "issuing CA certificate" : "certificate";
+        for (Failure f : failed) {
+            if (issuer.equals(f.issuer)) {
+                log.errorf("STIG-CRL-UNREADABLE the CRL of \"%s\" (%s) cannot be used: %s refused", issuer.getName(), f.path, what);
+                throw new GeneralSecurityException("CRL of the certificate's issuer is not usable");
+            }
+        }
+        List<Loaded> mine = new ArrayList<>(1);
+        for (Loaded l : loaded) if (l.issuer.equals(issuer)) mine.add(l);
+        if (mine.isEmpty()) {
+            log.errorf("STIG-CRL-NO-ISSUER-CRL no usable CRL is issued by \"%s\": %s \"%s\" refused (add that CA's CRL)",
+                    issuer.getName(), what, cert.getSubjectX500Principal().getName());
             throw new GeneralSecurityException("No CRL available for the certificate's issuer");
         }
-        for (Loaded l : issuers) {
-            verifySignature(certs, l, truststore);
+        for (Loaded l : mine) {
+            try {
+                ensureVerified(l, truststore);
+            } catch (GeneralSecurityException e) {
+                alarm(findPath(l), issuer, e.getMessage());
+                throw new GeneralSecurityException("CRL of the certificate's issuer is not usable");
+            }
+            if (l.crl.getThisUpdate() != null && l.crl.getThisUpdate().getTime() > now + CLOCK_SKEW_MS) {
+                log.errorf("STIG-CRL-REJECTED CRL of \"%s\" has thisUpdate %s in the future", issuer.getName(), l.crl.getThisUpdate());
+                throw new GeneralSecurityException("CRL is not yet valid");
+            }
+            if ((isCa && l.onlyUserCerts) || (!isCa && l.onlyCaCerts)) {
+                log.errorf("STIG-CRL-REJECTED CRL of \"%s\" does not cover %s certificates (issuingDistributionPoint)", issuer.getName(), isCa ? "CA" : "end-entity");
+                throw new GeneralSecurityException("CRL scope does not cover the certificate");
+            }
             Date next = l.crl.getNextUpdate();
-            if (next != null && next.compareTo(new Date(nowMillis)) < 0) {
-                log.warnf("CRL of \"%s\" is not refreshed. Next update is %s.", l.issuer.getName(), next);
+            if (next != null && next.getTime() < now) {
+                log.warnf("CRL of \"%s\" is not refreshed. Next update is %s.", issuer.getName(), next);
                 if (abortIfNonUpdated) throw new GeneralSecurityException("CRL is not refreshed");
             }
             if (l.crl.isRevoked(cert)) {
@@ -162,74 +275,239 @@ final class IssuerCrlCheck {
         }
     }
 
-    private static Loaded load(Path f) throws GeneralSecurityException {
-        BasicFileAttributes a;
-        try {
-            a = Files.readAttributes(f, BasicFileAttributes.class);
-        } catch (IOException e) {
-            log.errorf("Unable to load CRL from \"%s\": %s", f, e.getMessage());
-            throw new GeneralSecurityException("Unable to load CRL");
-        }
-        if (!a.isRegularFile()) {
-            log.errorf("Unable to load CRL from \"%s\": not a file", f);
-            throw new GeneralSecurityException("Unable to load CRL");
-        }
+    private static void alarm(Path f, X500Principal issuer, String reason) {
+        long now = System.currentTimeMillis();
+        Long last = ALARMED.get(f);
+        if (last != null && now - last < 60_000L) return;             // once a minute per file, not once per sign-in
+        ALARMED.put(f, now);
+        log.errorf("STIG-CRL-UNREADABLE \"%s\"%s: %s. Cards of that CA are refused until it is fixed; other cards are not affected.",
+                f, issuer == null ? "" : " (issuer \"" + issuer.getName() + "\")", reason);
+    }
+
+    // ------------------------------------------------------------------ loading
+
+    /** A CRL that parsed but must not be used; its issuer is known. */
+    static final class RejectedCrl extends GeneralSecurityException {
+        final X500Principal issuer;
+        RejectedCrl(X500Principal issuer, String msg) { super(msg); this.issuer = issuer; }
+    }
+
+    /**
+     * The CRL of file {@code f} as currently on disk (parsed, not necessarily verified yet). {@code wait=false} (a
+     * sign-in): when another thread is re-reading the file and a previous verified version exists, that version is
+     * returned instead of waiting, and the pre-warm is woken to finish the refresh.
+     */
+    private static Loaded load(Path f, boolean wait) throws GeneralSecurityException, IOException {
+        Version v = Version.of(f);
         Loaded cur = CACHE.get(f);
-        if (cur != null && cur.same(a)) return cur;
-        synchronized (IssuerCrlCheck.class) {     // one reader per refresh, not one per concurrent sign-in
+        if (cur != null && cur.version.equals(v)) return cur;
+        ReentrantLock lock = LOCKS.computeIfAbsent(f, k -> new ReentrantLock());
+        if (!lock.tryLock()) {
+            if (!wait && cur != null && cur.verified()) { wake(); return cur; }   // re-read in progress elsewhere
+            lock.lock();
+        }
+        try {
             cur = CACHE.get(f);
-            if (cur != null && cur.same(a)) return cur;
-            X509CRL crl;
-            try (InputStream in = new BufferedInputStream(Files.newInputStream(f))) {
-                crl = (X509CRL) CertificateFactory.getInstance("X.509").generateCRL(in);
-            } catch (IOException | GeneralSecurityException | RuntimeException e) {
-                log.errorf("Unable to load CRL from \"%s\": %s", f, e.getMessage());
-                throw new GeneralSecurityException("Unable to load CRL");
-            }
-            if (crl == null) {
-                log.errorf("Unable to load CRL from \"%s\"", f);
-                throw new GeneralSecurityException("Unable to load CRL");
-            }
-            Loaded l = new Loaded(a, crl);   // a file swapped between stat and read is re-read on the next sign-in
+            if (cur != null && cur.version.equals(v)) return cur;
+            Loaded l = read(f, v);
             CACHE.put(f, l);
-            log.debugf("CRL \"%s\" loaded: issuer \"%s\", next update %s", f, l.issuer.getName(), crl.getNextUpdate());
+            ALARMED.remove(f);
+            if (!wait) wake();                                   // let the pre-warm verify the rest off the request path
             return l;
+        } finally {
+            lock.unlock();
         }
     }
 
-    /** CRLUtils.check's signer rule: the chain certificate named as the CRL issuer, else the truststore's certificates. */
-    private static void verifySignature(X509Certificate[] certs, Loaded l, Signers truststore) throws GeneralSecurityException {
-        for (X509Certificate c : certs) {
-            if (l.issuer.equals(c.getSubjectX500Principal())) {
-                verifyOnce(l, c);                     // as in Keycloak, a failure here refuses the sign-in
-                return;
+    private static Loaded read(Path f, Version v) throws GeneralSecurityException, IOException {
+        byte[] der = Files.readAllBytes(f);
+        X509CRL crl;
+        try {
+            crl = (X509CRL) CertificateFactory.getInstance("X.509").generateCRL(new ByteArrayInputStream(der));
+        } catch (RuntimeException e) {
+            throw new GeneralSecurityException("not a CRL: " + e.getMessage());
+        }
+        if (crl == null) throw new GeneralSecurityException("not a CRL");
+        X500Principal issuer = crl.getIssuerX500Principal();
+        boolean[] scope = structure(crl, issuer);
+        log.debugf("CRL \"%s\" read: issuer \"%s\", next update %s", f, issuer.getName(), crl.getNextUpdate());
+        return new Loaded(v, crl, scope[0], scope[1], der);
+    }
+
+    /** Verifies the CRL's signature against the truststore certificates of its issuer (never the client's chain), once. */
+    private static void ensureVerified(Loaded l, Signers signers) throws GeneralSecurityException {
+        if (l.verifiedBy(signers)) return;
+        synchronized (l) {                                     // one verification per CRL version, concurrent sign-ins wait
+            if (l.verifiedBy(signers)) return;
+            byte[] der = l.der;
+            if (der == null) {                                 // verified before, but the truststore changed since
+                CACHE.values().remove(l);
+                throw new GeneralSecurityException("CRL signer changed; the CRL is re-read on the next sign-in");
+            }
+            X509CRL probe = (X509CRL) CertificateFactory.getInstance("X.509").generateCRL(new ByteArrayInputStream(der));
+            List<X509Certificate> candidates = signers.named(l.issuer);
+            for (X509Certificate c : candidates) {
+                try {
+                    VERIFICATIONS.incrementAndGet();
+                    probe.verify(c.getPublicKey());
+                    l.verifiedKeys.add(key(c.getPublicKey()));
+                    l.der = null;                              // the probe (fully expanded) and the bytes go to GC
+                    return;
+                } catch (InvalidKeyException | SignatureException e) {
+                    // another certificate of that name (re-keyed CA) may have signed it
+                }
+            }
+            throw new RejectedCrl(l.issuer, candidates.isEmpty()
+                    ? "no truststore certificate for CRL issuer '" + l.issuer + "'"
+                    : "CRL signature does not verify against the truststore certificate(s) of '" + l.issuer + "'");
+        }
+    }
+
+    private static Path findPath(Loaded l) {
+        for (Map.Entry<Path, Loaded> e : CACHE.entrySet()) if (e.getValue() == l) return e.getKey();
+        return Paths.get("?");
+    }
+
+    /**
+     * Refuses CRLs this check cannot interpret correctly. Returns {onlyContainsUserCerts, onlyContainsCACerts}.
+     * Entry-level certificateIssuer only occurs in indirect CRLs, which are refused here.
+     */
+    static boolean[] structure(X509CRL crl, X500Principal issuer) throws RejectedCrl {
+        if (crl.getExtensionValue(DELTA_OID) != null) throw new RejectedCrl(issuer, "delta CRL (deltaCRLIndicator) is not supported");
+        Set<String> critical = crl.getCriticalExtensionOIDs();
+        if (critical != null) {
+            for (String oid : critical) {
+                if (!IDP_OID.equals(oid)) throw new RejectedCrl(issuer, "unsupported critical CRL extension " + oid);
             }
         }
-        List<X509Certificate> candidates = truststore.named(l.issuer);
-        for (X509Certificate c : candidates) {
+        byte[] idp = crl.getExtensionValue(IDP_OID);
+        if (idp == null) return new boolean[] {false, false};
+        boolean onlyUser = false, onlyCa = false;
+        try {
+            Der outer = Der.read(idp, 0);                         // OCTET STRING
+            if (outer.tag != 0x04) throw new RejectedCrl(issuer, "malformed issuingDistributionPoint");
+            Der seq = Der.read(idp, outer.start);                 // IssuingDistributionPoint ::= SEQUENCE
+            if (seq.tag != 0x30) throw new RejectedCrl(issuer, "malformed issuingDistributionPoint");
+            for (int i = seq.start; i < seq.end; ) {
+                Der e = Der.read(idp, i);
+                boolean flag = e.end > e.start && idp[e.end - 1] != 0;
+                switch (e.tag & 0xff) {
+                    case 0xA0 -> throw new RejectedCrl(issuer, "partitioned CRL (issuingDistributionPoint distributionPoint)");
+                    case 0x81 -> onlyUser = flag;
+                    case 0x82 -> onlyCa = flag;
+                    case 0x83 -> throw new RejectedCrl(issuer, "partitioned CRL (onlySomeReasons)");
+                    case 0x84 -> { if (flag) throw new RejectedCrl(issuer, "indirect CRL is not supported"); }
+                    case 0x85 -> { if (flag) throw new RejectedCrl(issuer, "attribute-certificate CRL"); }
+                    default -> throw new RejectedCrl(issuer, "unknown issuingDistributionPoint field");
+                }
+                i = e.end;
+            }
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throw new RejectedCrl(issuer, "malformed issuingDistributionPoint");
+        }
+        return new boolean[] {onlyUser, onlyCa};
+    }
+
+    /** Minimal DER TLV reader (definite lengths only). */
+    private record Der(int tag, int start, int end) {
+        static Der read(byte[] b, int off) {
+            int tag = b[off] & 0xff, i = off + 1, len = b[i++] & 0xff;
+            if (len > 0x80) {
+                int n = len & 0x7f;
+                if (n > 4) throw new ArrayIndexOutOfBoundsException();
+                len = 0;
+                for (int k = 0; k < n; k++) len = (len << 8) | (b[i++] & 0xff);
+            } else if (len == 0x80) {
+                throw new ArrayIndexOutOfBoundsException();   // indefinite length is not DER
+            }
+            if (len < 0 || i + len > b.length) throw new ArrayIndexOutOfBoundsException();
+            return new Der(tag, i, i + len);
+        }
+    }
+
+    private static ByteBuffer key(PublicKey k) {
+        return ByteBuffer.wrap(k.getEncoded());
+    }
+
+    // ------------------------------------------------------------------ off the request path
+
+    /**
+     * Re-reads and verifies every changed CRL file that a realm's X.509 authenticator lists, and evicts cached files
+     * that none lists any more. Runs on the factory's background thread, never on a sign-in.
+     */
+    static void prewarm(Collection<String> configuredRelPaths, Signers signers) {
+        Set<Path> wanted = new LinkedHashSet<>(resolve(configuredRelPaths));
+        CACHE.keySet().retainAll(wanted);
+        LOCKS.keySet().retainAll(wanted);
+        ALARMED.keySet().retainAll(wanted);
+        for (Path f : wanted) {
             try {
-                verifyOnce(l, c);
-                return;
-            } catch (InvalidKeyException | SignatureException e) {
-                // another certificate of that name (re-keyed CA) may have signed it
+                ensureVerified(load(f, true), signers);
+            } catch (GeneralSecurityException | IOException e) {
+                Loaded previous = CACHE.get(f);
+                alarm(f, e instanceof RejectedCrl rc ? rc.issuer : previous == null ? null : previous.issuer, e.getMessage());
+            } catch (RuntimeException e) {
+                log.errorf(e, "STIG-CRL-UNREADABLE \"%s\": %s", f, e.getMessage());
             }
         }
-        throw new GeneralSecurityException("Not available certificate for CRL issuer '" + l.issuer + "' in the truststore, nor in the CA chain");
     }
 
-    private static void verifyOnce(Loaded l, X509Certificate signer) throws GeneralSecurityException {
-        ByteBuffer key = ByteBuffer.wrap(signer.getPublicKey().getEncoded());
-        if (l.verifiedKeys.contains(key)) return;
-        synchronized (l) {                            // a large CRL is verified by one sign-in, the others wait for it
-            if (l.verifiedKeys.contains(key)) return;
-            VERIFICATIONS.incrementAndGet();
-            l.crl.verify(signer.getPublicKey());
-            l.verifiedKeys.add(key);
-        }
+    private static volatile Thread prewarmThread;
+    private static final java.util.concurrent.Semaphore WAKE = new java.util.concurrent.Semaphore(0);
+
+    private static void wake() {
+        if (WAKE.availablePermits() == 0) WAKE.release();
+    }
+
+    /** Starts the background pre-warm (every {@code stig.crl.prewarm.seconds}, default 30). Idempotent. */
+    static synchronized void startPrewarm(KeycloakSessionFactory factory) {
+        if (prewarmThread != null) return;
+        long period = Long.getLong("stig.crl.prewarm.seconds", 30L) * 1000L;
+        Thread t = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    KeycloakModelUtils.runJobInTransaction(factory, s -> prewarm(configuredPaths(s), truststore(s)));
+                } catch (RuntimeException e) {
+                    log.warnf("CRL pre-warm failed: %s", e.getMessage());
+                }
+                try {
+                    WAKE.tryAcquire(period, java.util.concurrent.TimeUnit.MILLISECONDS);   // every period, or when a sign-in saw a change
+                    WAKE.drainPermits();
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        }, "stig-crl-prewarm");
+        t.setDaemon(true);
+        prewarmThread = t;
+        t.start();
+    }
+
+    static synchronized void stopPrewarm() {
+        if (prewarmThread != null) prewarmThread.interrupt();
+        prewarmThread = null;
+    }
+
+    /** Every local CRL path listed by any X.509 authenticator configuration with CRL checking on, in any realm. */
+    private static Set<String> configuredPaths(KeycloakSession s) {
+        Set<String> out = new HashSet<>();
+        s.realms().getRealmsStream().forEach(r -> r.getAuthenticatorConfigsStream().forEach(c -> {
+            Map<String, String> m = c.getConfig();
+            if (m == null || !m.containsKey("x509-cert-auth.crl-relative-path")) return;
+            X509AuthenticatorConfigModel x = new X509AuthenticatorConfigModel(c);
+            if (handles(x)) out.addAll(Objects.requireNonNull(localPaths(x.getCRLRelativePath())));
+        }));
+        return out;
     }
 
     /** Tests only. */
     static void clearForTests() {
         CACHE.clear();
+        LOCKS.clear();
+        ALARMED.clear();
+    }
+
+    static int cachedForTests() {
+        return CACHE.size();
     }
 }

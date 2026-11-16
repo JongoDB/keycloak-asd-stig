@@ -1399,10 +1399,11 @@ def _openssl_dn(args, path):
     return None
 
 def crl_coverage(results, crl_paths, anchors_dir, conf_dir):
-    """pki.crl_coverage: every ISSUING CA in the trust list (an anchor that is not self-signed) has a CRL in the X.509
-    authenticator's crl-relative-path. stig-x509-client-username-form refuses a card whose issuer has no CRL
+    """pki.crl_coverage: revocation coverage equals trust. Every ISSUING CA in the trust list (an anchor that is not
+    self-signed) has a CRL in the X.509 authenticator's crl-relative-path, and so does every root that issued one of
+    them (the issuing CA's own status, V-222550). stig-x509-client-username-form refuses a card when either is missing
     (STIG-CRL-NO-ISSUER-CRL), so a gap here is a sign-in outage for that CA's holders; this turns it into a finding.
-    Roots are path anchors that sign CA certificates only; they are listed but not required."""
+    Roots that issued no trusted CA need no CRL."""
     import shutil
     cid = "pki.crl_coverage"
     if crl_paths is None:
@@ -1412,24 +1413,28 @@ def crl_coverage(results, crl_paths, anchors_dir, conf_dir):
         results[cid] = {"status": "manual", "evidence": "trust anchors (--trust-anchors %s) or Keycloak conf dir (--keycloak-conf %s) not readable here, or no openssl: "
                         "run verify where both are mounted (e.g. inside the keycloak-cac container)" % (anchors_dir, conf_dir)}
         return
-    issuing, roots = {}, []
+    issuing, roots, parents = {}, [], set()
     for f in sorted(glob.glob(os.path.join(anchors_dir, "*.pem")) + glob.glob(os.path.join(anchors_dir, "*.crt"))):
         sub, iss = (_openssl_dn(["x509", "-subject"], f) or [None])[0], (_openssl_dn(["x509", "-issuer"], f) or [None])[0]
         if not sub:
             continue
-        (roots.append(sub) if sub == iss else issuing.setdefault(sub, os.path.basename(f)))
+        if sub == iss:
+            roots.append(sub)
+        else:
+            issuing.setdefault(sub, os.path.basename(f)); parents.add(iss)
     covered, unreadable = set(), []
     for rel in crl_paths:
         pth = os.path.normpath(os.path.join(conf_dir, rel.strip()))
         iss = _openssl_dn(["crl", "-issuer"], pth) if os.path.isfile(pth) else None
         (covered.add(iss[0]) if iss else unreadable.append(rel))
-    missing = sorted(set(issuing) - covered)
+    missing = sorted((set(issuing) | (parents & set(roots))) - covered)
     extra = sorted(covered - set(issuing) - set(roots))
     ok = not missing and not unreadable and bool(issuing)
     results[cid] = {"status": "pass" if ok else "fail", "evidence":
-        "%d issuing CAs trusted, %d CRLs listed; issuing CAs WITHOUT a listed CRL (their cards are refused): %s; listed CRLs not readable: %s; "
-        "CRLs of non-anchors: %s; roots (not required): %d" % (len(issuing), len(crl_paths),
-            [re.sub(r",.*", "", m) for m in missing] or "none", unreadable or "none", [re.sub(r",.*", "", e) for e in extra] or "none", len(roots))}
+        "%d issuing CAs and %d issuing roots trusted, %d CRLs listed; CAs WITHOUT a listed CRL (their cards are refused): %s; "
+        "listed CRLs not readable: %s; CRLs of non-anchors: %s; roots that issued no trusted CA: %d" % (
+            len(issuing), len(parents & set(roots)), len(crl_paths), [re.sub(r",.*", "", m) for m in missing] or "none",
+            unreadable or "none", [re.sub(r",.*", "", e) for e in extra] or "none", len(set(roots) - parents))}
 
 def live_client_auth(results, live_url):
     """Ask the server which client-certificate CAs it requests (openssl s_client). Proves CAC client-auth is on

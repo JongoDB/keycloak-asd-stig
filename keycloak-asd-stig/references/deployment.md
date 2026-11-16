@@ -57,7 +57,8 @@ Logs are JSON on stdout by default (any platform collector); add `KC_LOG=console
 - `PKI_SOURCE=dod`: download and verify the official DISA bundle and CRLs (needs dl.dod.cyber.mil, crl.disa.mil).
 - `PKI_SOURCE=dir:/seed`: air-gapped. Seed = `truststore/` + `crl/` subfolders, or flat `*.pem|*.crt` + `*.crl`
   (flat works for ConfigMaps/Secrets). CRLs that do not verify against the trust store are refused
-  (`STIG-CRL-UNTRUSTED`) - one untrusted CRL in the list makes **every** login fail in Keycloak.
+  (`STIG-CRL-UNTRUSTED`). With Keycloak's own X.509 form one untrusted CRL in the list makes **every** login fail;
+  with `stig-x509-client-username-form` only that CA's cards are refused and `STIG-CRL-UNREADABLE` is logged.
 - Refresh writes files atomically (rename) and logs `STIG-CRL-STALE` when a CRL expires within 24 h.
 - Per-pod `emptyDir` in Kubernetes: no ReadWriteMany storage needed.
 - Profile: `"crl_files": ["pki/crl/DODIDCA_71.crl", ...]` (paths relative to /opt/keycloak/conf).
@@ -105,11 +106,14 @@ protection and logout are cluster-wide.
 | Idle, test PKI | ~0.6 GiB | 0.03-0.1 s |
 | 18 CRLs (DoD ID + derived PIV, ~140 MB, 600k entries/CA), non-FIPS | ~4.9 GiB | first 7.7 s, then 0.14 s |
 | same, strict FIPS (BC-FIPS pure Java), Keycloak's `auth-x509-client-username-form` | ~3.5-3.9 GiB | first 10-11 s, then **4.3-5.3 s every login** |
-| same, strict FIPS, `stig-x509-client-username-form` (issuer-scoped CRL check) | lower (only used CRLs are expanded) | first login per CA after a CRL refresh <= ~1 s extra, then **~0.06 s** for the CRL step (+ OCSP round trip) |
-Guidance: container limit >= 8 GiB with the full DoD CRL set (Helm default); warm each pod with one CAC login
-before adding it to the load balancer. With Keycloak's own X.509 form in strict FIPS, CRL latency scales with the
-TOTAL size of the listed CRLs (every one is re-verified per login); with the stig form it scales with the issuing
-CA's CRL only, so keep the full DoD ID/DERILITY list. Rate-limit logins at the proxy.
+| 19 CRLs (17 DoD ID + DERILITY, 2 roots, ~145 MB), strict FIPS, `stig-x509-client-username-form` | heap ~1.4 GiB steady, **peak 2.3 GiB** while all 19 are re-read and re-verified under 8 concurrent login loops; container RSS peak 4.0 GiB | **~0.06 s** for the CRL step on a 2.6 GHz Xeon (+ OCSP round trip); logins during that refresh: max 0.17 s (lab) |
+Guidance:
+- **Memory:** container limit >= 6 GiB (so the JVM heap, 70-75 % of it, stays well above the measured 2.3 GiB peak);
+  8 GiB (the Helm and compose default) leaves room for sessions and caches. The peak comes from verifying a CRL:
+  BC-FIPS expands the whole CRL in memory, and the background refresh does that one file at a time.
+- **Latency:** with Keycloak's own X.509 form in strict FIPS, CRL latency scales with the TOTAL size of the listed
+  CRLs (every one is re-verified per login); with the stig form it depends on the card's issuer's CRL only.
+- Rate-limit logins at the proxy.
 
 ## 9. What was tested (this skill's lab, Keycloak 26.8.2)
 | Topology | Result |

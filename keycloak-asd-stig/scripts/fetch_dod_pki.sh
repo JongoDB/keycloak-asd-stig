@@ -2,16 +2,18 @@
 # Build the Keycloak trust store and CRL cache from the official DoD PKI bundle (V-222550, V-222553, V-222584).
 #
 # Usage: fetch_dod_pki.sh <out-dir> [--crl-only]
-#   <out-dir>/conf/truststore/*.pem   one PEM per DoD root/intermediate (point truststore-paths here)
-#   <out-dir>/conf/crl/DOD*CA_NN.crl  CRLs of EVERY trusted issuing CA (ID, DERILITY, SW, EMAIL): trust == revocation coverage
+#   <out-dir>/conf/truststore/*.pem   the DoD CAs that issue login certificates (LOGIN_CAS: DOD ID and DERILITY CAs)
+#                                     and the roots that issued them (point truststore-paths here)
+#   <out-dir>/conf/crl/*.crl          the CRL of every trusted issuing CA and of its root: trust == revocation coverage
 #   prints the "crl_files" JSON fragment for the kcstig profile
 # Re-run with --crl-only from cron/systemd at least daily (V-222553); Keycloak re-reads CRL files.
-# Environment: DOD_PKI_ZIP_URL, CRL_BASE (default http://crl.disa.mil/crl), INCLUDE_CAS regex (default "^DOD .+ CA-[0-9]+$": every DoD issuing CA; narrowing it leaves CAs whose cards are refused)
+# Environment: DOD_PKI_ZIP_URL, CRL_BASE (default http://crl.disa.mil/crl), LOGIN_CAS regex (default "^DOD (ID|DERILITY) CA-[0-9]+$": the CAs trusted for login)
 set -euo pipefail
 OUT="${1:?out dir}"; MODE="${2:-}"
 ZIP_URL="${DOD_PKI_ZIP_URL:-https://dl.dod.cyber.mil/wp-content/uploads/pki-pke/zip/unclass-certificates_pkcs7_DoD.zip}"
 CRL_BASE="${CRL_BASE:-http://crl.disa.mil/crl}"
-INCLUDE="${INCLUDE_CAS:-^DOD .+ CA-[0-9]+$}"
+LOGIN="${LOGIN_CAS:-^DOD (ID|DERILITY) CA-[0-9]+$}"
+dn() { openssl x509 -in "$1" -noout -"$2" -nameopt RFC2253 | sed "s/^$2=//"; }
 TS="${TS_DIR:-$OUT/conf/truststore}"; CRLD="${CRL_DIR:-$OUT/conf/crl}"   # flat volume: TS_DIR=$OUT/truststore CRL_DIR=$OUT/crl
 PFX="${CRL_PREFIX:-crl}"   # how crl_files are written in the profile (relative to /opt/keycloak/conf), e.g. pki/crl
 mkdir -p "$TS" "$CRLD"
@@ -43,21 +45,37 @@ if [ "$MODE" != "--crl-only" ]; then
     printf '  %-22s sha256=%s\n' "$cn" "$(openssl x509 -in "$f" -noout -fingerprint -sha256 | cut -d= -f2)"
     mv "$f" "$WORK/ts/$(echo "$cn" | tr ' ' '_' | tr -cd 'A-Za-z0-9_.-').pem.named"
   done
+  # trust only the issuers of login certificates and the roots that issued them (EMAIL/SW CAs issue no login credential)
+  issuers="|"
+  for f in "$WORK/ts/"*.named; do
+    [ "$(dn "$f" subject)" = "$(dn "$f" issuer)" ] && continue
+    cn="$(openssl x509 -in "$f" -noout -subject -nameopt multiline | sed -n 's/^ *commonName *= *//p')"
+    if echo "$cn" | grep -Eq "$LOGIN"; then issuers="$issuers$(dn "$f" issuer)|"; else rm -f "$f"; fi
+  done
+  for f in "$WORK/ts/"*.named; do
+    s=$(dn "$f" subject); [ "$s" = "$(dn "$f" issuer)" ] || continue
+    case "$issuers" in *"|$s|"*) ;; *) rm -f "$f";; esac
+  done
   # replace the trust store contents only after everything verified
   rm -f "$TS/"*.pem; for f in "$WORK/ts/"*.named; do cp "$f" "$TS/$(basename "${f%.named}")"; done
   echo "trust store: $(ls "$TS" | wc -l) DoD CA certificates in $TS (bundle $(basename "$D"))"
 fi
 
-files=()
-for f in "$TS/"*.pem; do
+files=(); cat "$TS/"*.pem > "$WORK/anchors.pem"
+# every issuing CA's CRL (DOD ID CA-70 -> DODIDCA_70) and its root's (from the CA certificate's CRL distribution point)
+names=$(for f in "$TS/"*.pem; do
+  [ "$(dn "$f" subject)" = "$(dn "$f" issuer)" ] && continue
   cn="$(openssl x509 -in "$f" -noout -subject -nameopt multiline | sed -n 's/^ *commonName *= *//p')"
-  echo "$cn" | grep -Eq "$INCLUDE" || continue
-  [[ "$cn" =~ ^DOD\ (.+)\ CA-([0-9]+)$ ]] || continue; kind="${BASH_REMATCH[1]}"; name="DOD${kind// /}CA_${BASH_REMATCH[2]}"   # DOD SW CA-75 -> DODSWCA_75
+  [[ "$cn" =~ ^DOD\ (.+)\ CA-([0-9]+)$ ]] && { kind="${BASH_REMATCH[1]}"; echo "DOD${kind// /}CA_${BASH_REMATCH[2]}"; }
+  openssl x509 -in "$f" -noout -ext crlDistributionPoints 2>/dev/null | grep -o 'URI:[^ ,]*' | head -1 | sed 's#.*/##; s#\.crl$##'
+done | sort -u)
+for name in $names; do
   if curl -fsSL --retry 3 -m 120 -o "$WORK/$name.crl" "$CRL_BASE/$name.crl"; then
-    # accept DER or PEM; verify the CRL signature against its issuing CA before installing it
+    # accept DER or PEM; verify the CRL signature against the trust store before installing it
     fmt=DER; openssl crl -inform DER -in "$WORK/$name.crl" -noout 2>/dev/null || fmt=PEM
-    if openssl crl -inform $fmt -in "$WORK/$name.crl" -CAfile "$f" -noout 2>&1 | grep -q 'verify OK'; then
-      cp "$WORK/$name.crl" "$CRLD/.$name.crl.new" && mv -f "$CRLD/.$name.crl.new" "$CRLD/$name.crl"   # atomic rename
+    if openssl crl -inform $fmt -in "$WORK/$name.crl" -CAfile "$WORK/anchors.pem" -noout 2>&1 | grep -q 'verify OK'; then
+      cmp -s "$WORK/$name.crl" "$CRLD/$name.crl" \
+        || { cp "$WORK/$name.crl" "$CRLD/.$name.crl.new" && mv -f "$CRLD/.$name.crl.new" "$CRLD/$name.crl"; }   # unchanged: untouched
       files+=("\"$PFX/$name.crl\"")
     else
       echo "WARN signature check failed for $name.crl - not installed" >&2

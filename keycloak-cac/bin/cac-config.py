@@ -4,6 +4,7 @@
   cac-config.py profile <out.json>        render the profile from CAC_* env (see README "Environment")
   cac-config.py wait-ready <seconds>      wait for Keycloak's readiness endpoint on the management port
   cac-config.py clear-crl-cache           make every node drop its cached CRLs (after a refresh on disk)
+  cac-config.py sync-crl-list             online mode: point the X.509 authenticators at the CRLs actually installed
   cac-config.py lab-users <pki-dir>       print users/admins JSON for the generated mock CACs (lab mode)
 """
 import glob, json, os, re, ssl, subprocess, sys, time, urllib.request
@@ -80,6 +81,41 @@ def pairs(var, attr):
         out.append({"username": u, attr: v.strip()})
     return out
 
+def installed_crl_files():
+    return ["cac/crl/" + os.path.basename(f) for f in sorted(glob.glob(os.path.join(PKI, "crl", "*.crl")))]
+
+X509_FORMS = ("stig-x509-client-username-form", "auth-x509-client-username-form")
+
+def sync_crl_list():
+    """Set crl-relative-path of every X.509 authenticator (user realm and master) to the CRLs installed now."""
+    import kcstig
+    pf = os.path.join(PKI, "profile.json")
+    p = json.load(open(pf))
+    if not p["x509"].get("crl"):
+        return
+    want = installed_crl_files() or ["cac/crl/none.crl"]
+    joined = "##".join(want)
+    kc = kcstig.KC(p["keycloak"]["url"], "master"); kc.login()
+    changed = 0
+    for realm in dict.fromkeys([p["realm"]["name"], p["keycloak"].get("admin_realm", "master")]):
+        q = kcstig.q(realm)
+        for fl in kc.api("GET", "/realms/%s/authentication/flows" % q) or []:
+            for e in kc.api("GET", "/realms/%s/authentication/flows/%s/executions" % (q, kcstig.q(fl["alias"]))) or []:
+                if e.get("providerId") not in X509_FORMS or not e.get("authenticationConfig"):
+                    continue
+                c = kc.api("GET", "/realms/%s/authentication/config/%s" % (q, e["authenticationConfig"]))
+                if (c.get("config") or {}).get("x509-cert-auth.crl-relative-path") == joined:
+                    continue
+                c["config"]["x509-cert-auth.crl-relative-path"] = joined
+                kc.api("PUT", "/realms/%s/authentication/config/%s" % (q, c["id"]), c)
+                changed += 1
+    p["x509"]["crl_files"] = want
+    fd = os.open(pf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(p, f, indent=1)
+    print("cac-config: CRL list %s (%d CRLs installed, %d authenticator configs updated)" % (
+        "updated" if changed else "unchanged", len(want), changed), file=sys.stderr)
+
 def read_lines(path):
     return [l.strip() for l in open(path)] if os.path.exists(path) else []
 
@@ -91,12 +127,12 @@ def build_profile():
     ocsp = flag("CAC_OCSP", ocsp_default) and mode != "none"
     crl_files = []
     if mode == "online":
-        crl_files = ["cac/crl/" + n for n in read_lines(os.path.join(PKI, "crl-names.txt")) if n]
-        # plus CRLs already installed and verified (e.g. the lab CA's next to the DoD ones)
-        crl_files += ["cac/crl/" + os.path.basename(f) for f in sorted(glob.glob(os.path.join(PKI, "crl", "*.crl")))
-                      if "cac/crl/" + os.path.basename(f) not in crl_files]
+        # Only CRLs actually installed (verified against the anchors). The downloads run after Keycloak starts, so
+        # sync-crl-list re-points the authenticators after every refresh. A CA whose CRL is missing is a coverage gap
+        # (crl-coverage, kcstig pki.crl_coverage) and its cards are refused; the others keep signing in.
+        crl_files = installed_crl_files()
     elif mode == "file":
-        crl_files = ["cac/crl/" + os.path.basename(f) for f in sorted(glob.glob(os.path.join(PKI, "crl", "*.crl")))]
+        crl_files = installed_crl_files()
         if not crl_files:
             die("CRL_MODE=file but no CRL in %s verified against the trust anchors (mount them at CAC_CRL_DIR)" % env("CAC_CRL_DIR", "/crl"))
     realm = env("CAC_REALM", "dod-cac", aliases=("KC_REALM_NAME",))
@@ -201,6 +237,8 @@ if __name__ == "__main__":
         wait_ready(int(sys.argv[2]) if len(sys.argv) > 2 else 300)
     elif c == "clear-crl-cache":
         clear_crl_cache()
+    elif c == "sync-crl-list":
+        sync_crl_list()
     elif c == "check":
         username_source(); crl_mode()
     else:
