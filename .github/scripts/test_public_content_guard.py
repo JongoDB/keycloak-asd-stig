@@ -105,6 +105,19 @@ BYPASSES = {
     "b64-wrapped.sh": b"PAYLOAD='\n" + b"\n".join(
         base64.b64encode(gzip.compress(hashlib.sha512(b"w").digest() * 30 + NAME.encode()))[i:i + 64]
         for i in range(0, 400, 64)) + b"\n'\n",
+    # two zips back to back: zipfile reads only the last central directory; the first zip's entry hides
+    "concat.zip": zipped("hidden.txt", NAME.encode()) + zipped("visible.txt", b"nothing here"),
+    "junk-concat.bin": b"header\n" + zipped("hidden.txt", NAME.encode()) + zipped("visible.txt", b"clean"),
+    # a block of 18-character base64 lines: joined, their decode is misaligned; one line is a stream of its own
+    "b64-block-hidden-line.txt": b"\n".join(
+        [base64.b64encode(hashlib.sha256(bytes([i])).digest()[:13]).rstrip(b"=") for i in range(3)]
+        + [base64.b64encode((NAME + "+" * (13 - len(NAME))).encode()).rstrip(b"=")]
+        + [base64.b64encode(hashlib.sha256(bytes([i])).digest()[:13]).rstrip(b"=") for i in range(3, 6)]) + b"\n",
+    # a padded line in the middle ends one stream; the next lines are another
+    "b64-block-padded-middle.txt": b"\n".join(
+        [base64.b64encode(hashlib.sha512(bytes([i])).digest()[:48]) for i in range(2)]
+        + [base64.b64encode((NAME_AI + " " + NAME_AI + "!").encode())]     # 28 characters, ends in "="
+        + [base64.b64encode(hashlib.sha512(bytes([i])).digest()[:48]) for i in range(2, 4)]) + b"\n",
     # base64 glued to other base64-alphabet characters, at each misalignment
     "b64-off1.txt": b"Q" + base64.b64encode(NAME_AI.encode()),
     "b64-off2.txt": b"Qz" + base64.b64encode(NAME_AI.encode()),
