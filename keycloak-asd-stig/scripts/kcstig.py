@@ -27,7 +27,7 @@ MAP_PATH = os.path.join(SKILL, "references", "control-map.json")
 DEFAULTS = {
     "keycloak": {"url": "https://localhost:8443", "admin_realm": "master"},
     "realm": {"name": "app", "display_name": "Application"},
-    "auth_mode": "cac_or_mfa",          # cac | cac_or_mfa | mfa
+    "auth_mode": "cac_or_mfa",          # cac | cac_or_mfa | mfa | passkey
     "mfa": "otp",                       # second factor on the password path: otp | webauthn
     "x509": {
         "mapping_attribute": "cac_upn",
@@ -46,12 +46,23 @@ DEFAULTS = {
     "lockout": {"max_failures": 3, "window_minutes": 15, "permanent": True, "max_wait_hours": 24, "reset_hours": 24},
     "password": {"min_length": 15, "max_length": 128, "history": 5, "max_age_days": 60, "min_age_hours": 24,
                  "hash": "pbkdf2-sha512", "iterations": 210000},
-    "accounts": {"inactive_days": 35, "temp_hours": 72},
+    # disabled_marker: the inactivity workflow sets stig_disabled_by=inactivity just before it disables an account
+    # (default on for auth_mode=passkey), which is what lets stig-accounts' reactivate tell it from any other disable
+    "accounts": {"inactive_days": 35, "temp_hours": 72, "disabled_marker": False},
     "banner": {"theme": "dod-stig", "terms_required_action": True},
     "events": {"retention_days": 90, "listeners": ["jboss-logging", "stig-audit"]},
     "headers": {"hsts": "max-age=31536000; includeSubDomains"},
     "clients": [],
     "users": [],
+    # auth_mode=passkey only: the WebAuthn Passwordless policy (the two-factor policy is set the same, so no weaker
+    # WebAuthn path exists). Names are Keycloak's (ES256, RS256, ...; EdDSA is spelled Ed25519): an unknown name is
+    # silently dropped by Keycloak, which leaves the realm unable to register anyone, so load_profile refuses it.
+    "webauthn": {"algorithms": ["ES256", "RS256"], "attestation": "none", "attachment": "",
+                 "user_verification": "required", "discoverable": "required", "avoid_same_authenticator": True,
+                 "passkeys": True, "rp_id": "", "sign_in": "discoverable"},
+    # keep: Keycloak's registration flow stays bound (registration itself is off). deny: bind a flow that refuses
+    # everyone, so no registration link (e.g. an organization invitation) can create an account. passkey: always deny.
+    "registration_flow": "keep",
     "admin": {"mfa": "x509", "mapping_attribute": "alt_token_upn", "users": [],
               "mapping_source": "Subject's Alternative Name otherName (UPN)", "regex": "(.*?)(?:$)",
               "automation_client": "stig-automation", "allow_emergency_password": False},
@@ -118,6 +129,45 @@ def check_profile(raw, p):
         print("WARNING profile: " + w, file=sys.stderr)
     return warn
 
+# Keycloak's WebAuthn policy names (WebAuthnRegister). FIPS 140-approved signature verifications under BC-FIPS
+# approved mode: ECDSA and RSA PKCS#1 v1.5 with SHA-2. RS1 (SHA-1) is never accepted; Ed25519 works on bc-fips 2.1.x
+# but stays out until the CMVP certificate of the deployed BC-FIPS version is confirmed to cover EdDSA.
+WEBAUTHN_ALGS = ("ES256", "ES384", "ES512", "RS256", "RS384", "RS512", "Ed25519", "RS1")
+WEBAUTHN_FIPS_ALGS = ("ES256", "ES384", "ES512", "RS256", "RS384", "RS512")
+# COSE algorithm identifiers (RFC 9053 / WebAuthn) -> Keycloak's names, for checking STORED credentials
+COSE_ALGS = {-7: "ES256", -35: "ES384", -36: "ES512", -257: "RS256", -258: "RS384", -259: "RS512", -8: "Ed25519",
+             -65535: "RS1"}
+
+def check_webauthn(p):
+    """Refuse a WebAuthn policy Keycloak would silently weaken or empty (auth_mode=passkey)."""
+    w = p["webauthn"]
+    algs = w.get("algorithms")
+    if not isinstance(algs, list) or not algs:
+        sys.exit("webauthn.algorithms must be a non-empty list, e.g. [\"ES256\", \"RS256\"]")
+    bad = [a for a in algs if a not in WEBAUTHN_ALGS]
+    if bad:
+        sys.exit("webauthn.algorithms: %s not a Keycloak algorithm name (one of %s; EdDSA is spelled Ed25519). Keycloak drops "
+                 "an unknown name silently, which can leave the realm unable to register anyone." % (bad, ", ".join(WEBAUTHN_ALGS)))
+    if "RS1" in algs:
+        sys.exit("webauthn.algorithms: RS1 (RSA with SHA-1) is not allowed")
+    for a in algs:
+        if a not in WEBAUTHN_FIPS_ALGS:
+            print("WARNING profile: webauthn.algorithms %s is not accepted by verify until its FIPS validation is confirmed" % a, file=sys.stderr)
+    if w.get("attestation") not in ("none", "indirect", "direct", "enterprise"):
+        sys.exit("webauthn.attestation must be none | indirect | direct | enterprise")
+    if w.get("attachment") not in ("", "platform", "cross-platform"):
+        sys.exit("webauthn.attachment must be \"\" (any) | platform | cross-platform")
+    if w.get("user_verification") != "required":
+        sys.exit("webauthn.user_verification must be required (it is what makes a passkey multi-factor, V-222522/V-222524)")
+    if w.get("discoverable") != "required":
+        sys.exit("webauthn.discoverable must be required (a passkey is a discoverable credential)")
+    if w.get("sign_in") not in ("username", "discoverable"):
+        sys.exit("webauthn.sign_in must be discoverable (the default: the passkey alone, no username is ever asked, so "
+                 "nothing can be probed) | username (username form with passkeys and autofill, then a passkey step)")
+    rp = w.get("rp_id") or ""
+    if rp and (not re.fullmatch(r"[a-z0-9.-]{1,253}", rp) or "." not in rp):
+        sys.exit("webauthn.rp_id must be empty (the IdP's own host name) or a host name")
+
 def load_profile(path, clients_dir=None):
     with open(path) as f:
         raw = json.load(f)
@@ -133,8 +183,20 @@ def load_profile(path, clients_dir=None):
         raw["clients"] = list(byid.values())
     p = deep_merge(DEFAULTS, raw)
     check_profile(raw, p)
-    if p["auth_mode"] not in ("cac", "cac_or_mfa", "mfa"):
-        sys.exit("auth_mode must be cac | cac_or_mfa | mfa")
+    if p["auth_mode"] not in ("cac", "cac_or_mfa", "mfa", "passkey"):
+        sys.exit("auth_mode must be cac | cac_or_mfa | mfa | passkey")
+    if p["registration_flow"] not in ("keep", "deny"):
+        sys.exit("registration_flow must be keep | deny")
+    if p["auth_mode"] == "passkey":
+        check_webauthn(p)
+        if raw.get("registration_flow") == "keep":
+            sys.exit("auth_mode=passkey always denies registration (registration_flow=deny); remove registration_flow=keep")
+        p["registration_flow"] = "deny"
+        if any(u.get("temporary_password") for u in p["users"]):
+            sys.exit("auth_mode=passkey: users[].temporary_password is not allowed (no password credential exists in the realm)")
+        # the inactivity workflow marks the account it disables, so stig-accounts can tell it from any other disable
+        if "disabled_marker" not in (raw.get("accounts") or {}):
+            p["accounts"]["disabled_marker"] = True
     if p["mfa"] not in ("otp", "webauthn"):
         sys.exit("mfa must be otp | webauthn")
     if p["admin"]["mfa"] not in ("x509", "webauthn", "otp"):
@@ -221,7 +283,25 @@ def realm_settings(p, *, admin_realm=False, event_types=None, extension=True):
     }
     if not admin_realm:
         rep["displayName"] = p["realm"]["display_name"]
+        if p["auth_mode"] == "passkey":
+            rep.update(webauthn_policy(p))
     return rep
+
+def webauthn_policy(p):
+    """Both WebAuthn policies (passwordless and two-factor), as complete sets: Keycloak 26.8 ignores some fields of a
+    partial policy (attestation conveyance, for one) unless the rest of the policy comes with them."""
+    w, out = p["webauthn"], {}
+    for pre in ("webAuthnPolicy", "webAuthnPolicyPasswordless"):
+        out.update({pre + "RpEntityName": p["realm"]["display_name"], pre + "RpId": w.get("rp_id") or "",
+                    pre + "SignatureAlgorithms": list(w["algorithms"]),
+                    pre + "AttestationConveyancePreference": w["attestation"],
+                    pre + "AuthenticatorAttachment": w["attachment"] or "not specified",
+                    pre + "RequireResidentKey": "Yes", pre + "ResidentKey": "required",
+                    pre + "UserVerificationRequirement": w["user_verification"], pre + "CreateTimeout": 0,
+                    pre + "AvoidSameAuthenticatorRegister": bool(w["avoid_same_authenticator"]),
+                    pre + "AcceptableAaguids": [], pre + "ExtraOrigins": []})
+    out["webAuthnPolicyPasswordlessPasskeysEnabled"] = bool(w["passkeys"])
+    return out
 
 def x509_config(p, attr, admin_realm=False):
     x = p["x509"]
@@ -280,8 +360,57 @@ def reset_flow(extension):
             ("exec", "auth-otp-form", "REQUIRED", None)]),
     ])
 
+PASSKEY_CONDITION = "conditional-credential"
+PASSKEY_AUTH = "webauthn-authenticator-passwordless"
+# stig-extensions: right after the username form, an account with no passkey is REFUSED - never enrolled at sign-in
+PASSKEY_REQUIRED = "stig-passkey-required"
+# stig-extensions: Keycloak's username form, but an account without a passkey is answered exactly as an unknown username
+PASSKEY_USERNAME_FORM = "stig-passkey-username-form"
+# everything a passkey realm's browser flow may contain
+PASSKEY_FLOW_PROVIDERS = {"auth-cookie", PASSKEY_USERNAME_FORM, PASSKEY_REQUIRED, PASSKEY_CONDITION, PASSKEY_AUTH, "user-session-limits"}
+
+def session_limits(prefix, s):
+    return ("exec", "user-session-limits", "REQUIRED",
+            {"alias": (prefix + " session limits").lower().replace(" ", "-"),
+             "config": {"userRealmLimit": str(s["max_per_user"]), "userClientLimit": "0",
+                        "behavior": "Deny new session",
+                        "errorMessage": "Maximum concurrent sessions reached. Log out of another session first."}})
+
+def passkey_browser_flow(p, extension=True):
+    """auth_mode=passkey: the username form with passkeys (the "Sign in with passkey" button and autofill finish there),
+    then - only when no passkey was used yet - a passkey step. A plain REQUIRED passkey step would ask a discoverable
+    passkey for a second assertion, so the button and autofill paths could never finish (lab spike, 2026-11-15)."""
+    prefix, s = "STIG Browser", p["sessions"]
+    if p["webauthn"].get("sign_in") == "discoverable":
+        # No username step: the page offers only "Sign in with passkey" (a discoverable credential names its user). An
+        # unknown username cannot be told from a known one because no username is ever asked for.
+        authn = [("exec", PASSKEY_AUTH, "REQUIRED", None)]
+    else:
+        authn = None
+    # The username path: an account with no passkey (an unclaimed invitation, a recovery in progress) is refused by
+    # stig-passkey-required before the passkey step, so whoever knows its username cannot reach a set-up there. A
+    # passkey is registered only through the e-mailed set-up or recovery link.
+    # stig-passkey-username-form answers an account without a passkey exactly as an unknown username (no oracle);
+    # stig-passkey-required behind it refuses one again should the form ever be swapped for Keycloak's own.
+    authn = authn or [("exec", PASSKEY_USERNAME_FORM, "REQUIRED", None), ("exec", PASSKEY_REQUIRED, "REQUIRED", None),
+             ("flow", prefix + " - Passkey", "CONDITIONAL", [
+                 ("exec", PASSKEY_CONDITION, "REQUIRED",
+                  {"alias": "stig-browser-passkey-not-yet-used",
+                   "config": {"credentials": "webauthn-passwordless", "included": "false"}}),
+                 ("exec", PASSKEY_AUTH, "REQUIRED", None)])]
+    forms = ("flow", prefix + " - Forms", "ALTERNATIVE", [
+        ("flow", prefix + " - Authenticate", "REQUIRED", authn), session_limits(prefix, s)])
+    if not extension:
+        sys.exit("auth_mode=passkey needs stig-extensions on the server (stig-passkey-required, the allowlist gate)")
+    return (prefix, [
+        ("flow", prefix + " - Sign in", "REQUIRED", [("exec", "auth-cookie", "ALTERNATIVE", None), forms]),
+        ("exec", ALLOWLIST_GATE, "REQUIRED", None),
+    ])
+
 def browser_flow(p, *, admin_realm, extension=True):
     """Nested flow spec: (alias, [(kind, provider_or_alias, requirement, config|children)])."""
+    if not admin_realm and p["auth_mode"] == "passkey":
+        return passkey_browser_flow(p, extension)
     prefix = "STIG Admin Browser" if admin_realm else "STIG Browser"
     s = p["sessions"]
     if admin_realm:
@@ -309,11 +438,7 @@ def browser_flow(p, *, admin_realm, extension=True):
         ]))
     forms = ("flow", prefix + " - Forms", "ALTERNATIVE", [
             ("flow", prefix + " - Authenticate", "REQUIRED", authn),
-            ("exec", "user-session-limits", "REQUIRED",
-             {"alias": (prefix + " session limits").lower().replace(" ", "-"),
-              "config": {"userRealmLimit": str(s["max_per_user"]), "userClientLimit": "0",
-                         "behavior": "Deny new session",
-                         "errorMessage": "Maximum concurrent sessions reached. Log out of another session first."}}),
+            session_limits(prefix, s),
         ])
     if not extension:
         return (prefix, [("exec", "auth-cookie", "ALTERNATIVE", None), forms])
@@ -326,6 +451,9 @@ def browser_flow(p, *, admin_realm, extension=True):
     ])
 
 DENY_DIRECT_GRANT = ("STIG Direct Grant - Deny", [("exec", "deny-access-authenticator", "REQUIRED", None)])
+# registration_flow=deny: bound as the registration flow, so a registration link - an organization invitation's
+# included - can create nothing, whatever registrationAllowed says
+DENY_REGISTRATION = ("STIG Registration - Deny", [("exec", "deny-access-authenticator", "REQUIRED", None)])
 
 def user_profile_attributes(p, *, admin_realm, extension=True):
     attrs = []
@@ -351,7 +479,12 @@ def user_profile_attributes(p, *, admin_realm, extension=True):
       annotations={"inputType": "select"})
     a("stig_last_login", "Last successful logon (UTC)", ["admin", "user"], ["admin"])
     a("stig_previous_login", "Previous successful logon (UTC)", ["admin", "user"], ["admin"])
+    if not admin_realm and p["accounts"].get("disabled_marker"):
+        # declared, so it survives profile saves; administrators only (the inactivity workflow writes it)
+        a(DISABLED_MARKER, "Disabled by (inactivity marker)", ["admin"], ["admin"])
     return attrs
+
+DISABLED_MARKER = "stig_disabled_by"   # set by the inactivity workflow (disabled_marker), cleared at every sign-in
 
 def workflows(p):
     a = p["accounts"]
@@ -362,7 +495,9 @@ def workflows(p):
         {"name": "stig-disable-inactive-%dd" % a["inactive_days"], "on": "user-created or user-authenticated",
          "if": "not has-user-attribute(account_type:emergency)",
          "concurrency": {"restart-in-progress": "true"},
-         "steps": [{"uses": "disable-user", "after": "%dd" % a["inactive_days"]}]},
+         "steps": ([{"uses": "set-user-attribute", "after": "%dd" % a["inactive_days"], "with": {DISABLED_MARKER: "inactivity"}},
+                    {"uses": "disable-user"}] if a.get("disabled_marker") else
+                   [{"uses": "disable-user", "after": "%dd" % a["inactive_days"]}])},
         # V-222409
         {"name": "stig-temp-account-%dh" % a["temp_hours"], "on": "user-created",
          "if": "has-user-attribute(account_type:temporary)",
@@ -446,6 +581,7 @@ def render(p, extension=True):
         "browser_flow": browser_flow(p, admin_realm=False, extension=extension),
         "direct_grant_flow": DENY_DIRECT_GRANT,
         "reset_flow": reset_flow(extension),
+        "registration_flow": DENY_REGISTRATION if p["registration_flow"] == "deny" else None,
         "user_profile_attributes": user_profile_attributes(p, admin_realm=False, extension=extension),
         "workflows": workflows(p),
         "client_profiles": cprof, "client_policies": cpol,
@@ -590,7 +726,8 @@ def build_flow(kc, realm, spec):
     existing = {f["alias"]: f for f in kc.api("GET", r + "/flows")}
     if alias in existing:
         # unbind before deleting
-        for k, builtin in (("browserFlow", "browser"), ("directGrantFlow", "direct grant"), ("resetCredentialsFlow", "reset credentials")):
+        for k, builtin in (("browserFlow", "browser"), ("directGrantFlow", "direct grant"), ("resetCredentialsFlow", "reset credentials"),
+                           ("registrationFlow", "registration")):
             if rep.get(k) == alias:
                 kc.api("PUT", "/realms/%s" % q(realm), {k: builtin})
         kc.api("DELETE", r + "/flows/%s" % existing[alias]["id"])
@@ -644,7 +781,7 @@ def ensure_user_profile(kc, realm, attrs):
         kc.api("PUT", "/realms/%s/users/profile" % q(realm), up)
         log("user profile attributes ensured")
 
-def ensure_required_actions(kc, realm, terms):
+def ensure_required_actions(kc, realm, terms, passkey=False):
     base = "/realms/%s/authentication" % q(realm)
     have = {a["alias"]: a for a in kc.api("GET", base + "/required-actions")}
     if "TERMS_AND_CONDITIONS" not in have:
@@ -658,6 +795,11 @@ def ensure_required_actions(kc, realm, terms):
             "delete_account": (False, False),
             # accounts are linked to an identity provider only by an administrator-set attribute, never by the user
             "idp_link": (False, False)}
+    if passkey:
+        # no path to a password, OTP or two-factor WebAuthn credential exists in a passkey realm, not even one an
+        # administrator could require; the passkey itself and e-mail verification (set-up and recovery) stay
+        want.update({"CONFIGURE_TOTP": (False, False), "UPDATE_PASSWORD": (False, False), "webauthn-register": (False, False),
+                     "webauthn-register-passwordless": (True, False), "VERIFY_EMAIL": (True, False)})
     for alias, (enabled, default) in want.items():
         if alias in have:
             a = have[alias]
@@ -761,7 +903,8 @@ def ensure_workflows(kc, realm, wfs):
     for w in wfs:
         cur = have.get(w["name"])
         if cur and all(cur.get(k) == w.get(k) for k in ("on", "if")) and \
-                [(s["uses"], s.get("after")) for s in cur.get("steps", [])] == [(s["uses"], s.get("after")) for s in w["steps"]]:
+                [(s["uses"], s.get("after"), s.get("with")) for s in cur.get("steps", [])] == \
+                [(s["uses"], s.get("after"), s.get("with")) for s in w["steps"]]:
             continue  # unchanged; keep scheduled state for existing users
         if cur:
             kc.api("DELETE", rr + "/%s" % cur["id"])
@@ -808,7 +951,7 @@ def apply_realm(kc, p, caps, rendered):
     kc.api("PUT", "/realms/%s" % q(name), settings)
     log("realm settings applied")
     ensure_user_profile(kc, name, rendered["user_profile_attributes"])
-    ensure_required_actions(kc, name, p["banner"]["terms_required_action"])
+    ensure_required_actions(kc, name, p["banner"]["terms_required_action"], passkey=p["auth_mode"] == "passkey")
     remove_offline_access(kc, name)
     remove_account_links(kc, name)
     sid = ensure_stig_claims_scope(kc, name)
@@ -817,6 +960,8 @@ def apply_realm(kc, p, caps, rendered):
     bind = {"browserFlow": bf, "directGrantFlow": dg}
     if rendered.get("reset_flow"):
         bind["resetCredentialsFlow"] = build_flow(kc, name, rendered["reset_flow"])
+    if rendered.get("registration_flow"):
+        bind["registrationFlow"] = build_flow(kc, name, rendered["registration_flow"])
     kc.api("PUT", "/realms/%s" % q(name), bind)
     log("flows bound (%s)" % ", ".join("%s=%s" % kv for kv in bind.items()))
     # client policies first: every later client create/update is evaluated against them
@@ -831,6 +976,8 @@ def apply_realm(kc, p, caps, rendered):
     else:
         log("WARNING WORKFLOWS feature disabled: V-222409/V-222411 not automated")
     mfa_action = None if p["auth_mode"] == "cac" else ("webauthn-register" if p["mfa"] == "webauthn" else "CONFIGURE_TOTP")
+    if p["auth_mode"] == "passkey":
+        mfa_action = "webauthn-register-passwordless"
     for u in p["users"]:
         ensure_user(kc, name, u, p["x509"]["mapping_attribute"], mfa_action)
 
@@ -1076,8 +1223,15 @@ class Checker:
         tc = ras.get("TERMS_AND_CONDITIONS", {})
         self.res("realm.terms_action", tc.get("enabled") is True,
                  "TERMS_AND_CONDITIONS enabled=%s defaultAction=%s" % (tc.get("enabled"), tc.get("defaultAction")))
-        self.res("realm.required_actions", ras.get("UPDATE_PASSWORD", {}).get("enabled") is True,
-                 "UPDATE_PASSWORD enabled=%s" % ras.get("UPDATE_PASSWORD", {}).get("enabled"))
+        if p["auth_mode"] == "passkey":
+            en = {k: ras.get(k, {}).get("enabled") for k in ("UPDATE_PASSWORD", "CONFIGURE_TOTP", "webauthn-register",
+                                                              "webauthn-register-passwordless", "VERIFY_EMAIL")}
+            self.res("realm.required_actions", not en["UPDATE_PASSWORD"] and not en["CONFIGURE_TOTP"] and not en["webauthn-register"]
+                     and en["webauthn-register-passwordless"] is True and en["VERIFY_EMAIL"] is True,
+                     "passkey realm: no password/OTP/two-factor set-up action, passkey and e-mail verification on: %s" % en)
+        else:
+            self.res("realm.required_actions", ras.get("UPDATE_PASSWORD", {}).get("enabled") is True,
+                     "UPDATE_PASSWORD enabled=%s" % ras.get("UPDATE_PASSWORD", {}).get("enabled"))
         self.res("realm.logout_cookies", True, "Keycloak expires KEYCLOAK_IDENTITY/KEYCLOAK_SESSION/AUTH_SESSION_ID on logout (built-in)")
         rd = [x for x in self.kc.api("GET", "/realms/%s/roles" % q(self.realm)) if x["name"].startswith("default-roles")]
         self.res("realm.no_default_admin_roles", True, "default roles carry no realm-management client roles (%s)" % [x["name"] for x in rd])
@@ -1101,6 +1255,10 @@ class Checker:
         self.res("idp.no_mapper_writes_identity_binding", not bad,
                  "identity-binding attributes %s; identity-provider mappers writing one: %s" % (sorted(binds), bad or "none"))
         self.check_flows()
+        if p["registration_flow"] == "deny":
+            self.check_registration_denied()
+        if p["auth_mode"] == "passkey":
+            self.check_passkey()
         self.check_policies()
         self.check_clients()
         self.check_workflows()
@@ -1125,10 +1283,11 @@ class Checker:
                  "browserFlow='%s' authentication paths=%s" % (bf, [sorted(x) for x in primary]))
         self.res("flow.no_password_only", not weak, "paths lacking CAC or second factor: %s" % weak)
         pw_paths = [pa for pa in primary if PW_FORMS & pa]
-        if self.caps.get("extension") and pw_paths:
-            gated = [("stig-username-password-form" in pa) or (ADMIN_GATE in pa) for pa in pw_paths]
-            self.res("flow.admin_second_factor_gate", all(gated),
-                     "password paths refusing an administrator without an enrolled second factor (stig-username-password-form): %s" % gated)
+        if self.caps.get("extension") and (pw_paths or mode == "passkey"):
+            if pw_paths:
+                gated = [("stig-username-password-form" in pa) or (ADMIN_GATE in pa) for pa in pw_paths]
+                self.res("flow.admin_second_factor_gate", all(gated),
+                         "password paths refusing an administrator without an enrolled second factor (stig-username-password-form): %s" % gated)
             top = [(e.get("providerId"), e.get("requirement")) for e in ex if e.get("level") == 0]
             self.res("flow.admin_allowlist_gate", (ALLOWLIST_GATE, "REQUIRED") in top,
                      "browser flow top level %s: every sign-in (an SSO cookie included) passes %s" % (top, ALLOWLIST_GATE))
@@ -1160,12 +1319,142 @@ class Checker:
             self.res("flow.x509_revocation", ok, "ocsp=%s crl=%s(%s) ocsp-fail-open=%s timestamp=%s keyusage=%s policies=%s" % (
                 ocsp, crl, c.get("x509-cert-auth.crl-relative-path"), fo, c.get("x509-cert-auth.timestamp-validation-enabled"),
                 c.get("x509-cert-auth.keyusage"), c.get("x509-cert-auth.certificate-policy")))
+        elif mode == "passkey":
+            # "manual", not "na": a rule mapped only to this check must not read as Not a Finding in a passkey realm
+            # (the certificate rules themselves are Not Applicable there, PASSKEY_NA_PKI)
+            self.res("flow.x509_revocation", "manual", "passkey-only realm: no certificate sign-in (realm.no_x509)")
         else:
             self.res("flow.x509_revocation", False if self.p["auth_mode"] != "mfa" else "manual",
                      "no X.509 authenticator in browser flow (auth_mode=%s)" % self.p["auth_mode"])
         dg = self.flow_execs(realm, R.get("directGrantFlow"))
         self.res("realm.direct_grant_denied", any(e.get("providerId") == "deny-access-authenticator" for e in dg),
                  "directGrantFlow='%s' providers=%s" % (R.get("directGrantFlow"), [e.get("providerId") for e in dg]))
+
+    def check_registration_denied(self):
+        R, realm = self.R, self.realm
+        ex = self.flow_execs(realm, R.get("registrationFlow"))
+        provs = [(e.get("providerId"), e.get("requirement")) for e in ex]
+        self.res("realm.registration_flow_denied", R.get("registrationAllowed") is False and provs == [("deny-access-authenticator", "REQUIRED")],
+                 "registrationAllowed=%s registrationFlow='%s' executions=%s (a registration link, an organization invitation "
+                 "included, must create nothing)" % (R.get("registrationAllowed"), R.get("registrationFlow"), provs))
+
+    def bound_flows(self):
+        """Every flow the realm can run: the realm's bindings and any client's override."""
+        R, rr = self.R, "/realms/%s" % q(self.realm)
+        names = {R.get(k) for k in ("browserFlow", "registrationFlow", "directGrantFlow", "resetCredentialsFlow",
+                                    "clientAuthenticationFlow", "dockerAuthenticationFlow", "firstBrokerLoginFlow") if R.get(k)}
+        ids = set()
+        for c in self.kc.api("GET", rr + "/clients") or []:
+            ids |= {v for v in (c.get("authenticationFlowBindingOverrides") or {}).values() if v}
+        if ids:
+            for f in self.kc.api("GET", rr + "/authentication/flows") or []:
+                if f["id"] in ids:
+                    names.add(f["alias"])
+        return sorted(names)
+
+    def browser_overrides(self):
+        """Aliases of the browser flows clients override the realm's with."""
+        rr = "/realms/%s" % q(self.realm)
+        ids = {(c.get("authenticationFlowBindingOverrides") or {}).get("browser") for c in self.kc.api("GET", rr + "/clients") or []}
+        ids.discard(None)
+        return sorted(f["alias"] for f in self.kc.api("GET", rr + "/authentication/flows") or [] if f["id"] in ids) if ids else []
+
+    def passkey_flow_shape(self, alias):
+        """(passkey_only, evidence, no_enrolment, evidence) for one browser flow of a passkey realm."""
+        realm, p = self.realm, self.p
+        ex = self.flow_execs(realm, alias)
+        provs = [e.get("providerId") for e in ex if not e.get("authenticationFlow")]
+        extra = sorted(set(provs) - PASSKEY_FLOW_PROVIDERS - {ALLOWLIST_GATE})
+        primary = [pa for pa in self.paths(ex) if (pa - {ALLOWLIST_GATE}) != {"auth-cookie"}]
+        # the shape the spike proved: a CONDITIONAL sub-flow = [conditional-credential (webauthn-passwordless, not
+        # used) REQUIRED, webauthn-authenticator-passwordless REQUIRED], right after the username form
+        shape = False
+        for i, e in enumerate(ex):
+            if not (e.get("authenticationFlow") and e.get("requirement") == "CONDITIONAL"):
+                continue
+            kids = []
+            for k in ex[i + 1:]:
+                if k["level"] <= e["level"]:
+                    break
+                if k["level"] == e["level"] + 1:
+                    kids.append(k)
+            if [(k.get("providerId"), k.get("requirement")) for k in kids] == [(PASSKEY_CONDITION, "REQUIRED"), (PASSKEY_AUTH, "REQUIRED")]:
+                cfg = self.exec_config(realm, kids[0])
+                shape = cfg.get("credentials") == "webauthn-passwordless" and str(cfg.get("included")).lower() == "false"
+        top_gate = (ALLOWLIST_GATE, "REQUIRED") in [(e.get("providerId"), e.get("requirement")) for e in ex if e.get("level") == 0]
+        if p["webauthn"].get("sign_in") == "discoverable":
+            shape = all(pa - {ALLOWLIST_GATE, "user-session-limits"} == {PASSKEY_AUTH} for pa in primary)
+            ok = bool(primary) and not extra and shape and top_gate
+        else:
+            ok = bool(primary) and not extra and shape and top_gate and all(PASSKEY_AUTH in pa and PASSKEY_USERNAME_FORM in pa for pa in primary)
+        # No account without a passkey may get past a username step: stig-passkey-username-form, then
+        # stig-passkey-required REQUIRED directly after it at the same level. Otherwise such an account reaches the
+        # passkey step, and whether it is then refused or sent to a passkey set-up depends on the Keycloak release.
+        top = [e for e in ex if e.get("providerId") in ("auth-username-form", PASSKEY_USERNAME_FORM, "auth-username-password-form",
+                                                         "stig-username-password-form")]
+        guarded = []
+        for e in top:
+            i = ex.index(e)
+            nxt = next((k for k in ex[i + 1:] if k["level"] <= e["level"]), None)
+            guarded.append(e.get("providerId") == PASSKEY_USERNAME_FORM and bool(nxt) and nxt["level"] == e["level"]
+                           and nxt.get("providerId") == PASSKEY_REQUIRED and nxt.get("requirement") == "REQUIRED")
+        ne = all(guarded) and (bool(top) or p["webauthn"].get("sign_in") == "discoverable")
+        how = ("discoverable passkey alone (no username step): %s" % shape if p["webauthn"].get("sign_in") == "discoverable" else
+               "username step, then a conditional passkey step: %s" % shape)
+        return ok, "'%s' paths=%s; providers outside the passkey flow: %s; allowlist gate: %s; %s" % (
+            alias, [sorted(x) for x in primary], extra or "none", top_gate, how), ne, (guarded or "no username step")
+
+    def check_passkey(self):
+        """auth_mode=passkey: the passkey is the only credential, and only FIPS-approved algorithms register or sign in."""
+        R, realm, p, rr = self.R, self.realm, self.p, "/realms/%s" % q(self.realm)
+        # the realm's browser flow AND every client's browser-flow override: a client override is a sign-in path too
+        browsers = [R.get("browserFlow")] + self.browser_overrides()
+        po_ok, ne_ok, po_ev, ne_ev = True, True, [], []
+        for alias in browsers:
+            ok, ev, guarded, gev = self.passkey_flow_shape(alias)
+            po_ok, ne_ok = po_ok and ok, ne_ok and guarded
+            po_ev.append(ev); ne_ev.append("'%s': %s" % (alias, gev))
+        self.res("flow.no_enrolment_at_sign_in", ne_ok,
+                 "every username step is %s (no passkey = unknown user) followed by %s REQUIRED: an account without a "
+                 "passkey is refused, never set up at sign-in. %s" % (PASSKEY_USERNAME_FORM, PASSKEY_REQUIRED, "; ".join(ne_ev)))
+        self.res("flow.passkey_only", po_ok, " | ".join(po_ev) + ("" if len(browsers) == 1 else " (client overrides included)"))
+        bad_flows = []
+        for alias in self.bound_flows():
+            for e in self.flow_execs(realm, alias):
+                if e.get("providerId") in X509_FORMS or (e.get("providerId") or "").startswith("auth-x509") \
+                        or e.get("providerId") in ("identity-provider-redirector", "idp-auto-link", "auth-spnego"):
+                    bad_flows.append("%s:%s" % (alias, e.get("providerId")))
+        self.res("realm.no_x509", not [b for b in bad_flows if "x509" in b],
+                 "flows checked=%s; certificate authenticators: %s" % (self.bound_flows(), [b for b in bad_flows if "x509" in b] or "none"))
+        idps = self.kc.api("GET", rr + "/identity-provider/instances") or []
+        self.res("realm.no_idp", not idps and not [b for b in bad_flows if "x509" not in b],
+                 "identity providers: %s; brokering/Kerberos authenticators: %s" % (
+                     [i.get("alias") for i in idps] or "none", [b for b in bad_flows if "x509" not in b] or "none"))
+        want = list(p["webauthn"]["algorithms"])
+        why = []
+        for pre, label in (("webAuthnPolicyPasswordless", "passwordless"), ("webAuthnPolicy", "two-factor")):
+            algs = R.get(pre + "SignatureAlgorithms") or []
+            if not algs:
+                why.append("%s: no algorithm (Keycloak would fall back to its defaults)" % label)
+            unknown = [a for a in algs if a not in WEBAUTHN_ALGS]
+            notfips = [a for a in algs if a not in WEBAUTHN_FIPS_ALGS]
+            if unknown: why.append("%s: unrecognised %s" % (label, unknown))
+            if notfips: why.append("%s: not FIPS-approved %s" % (label, notfips))
+            if sorted(algs) != sorted(want): why.append("%s: %s != profile %s" % (label, algs, want))
+            if R.get(pre + "UserVerificationRequirement") != "required":
+                why.append("%s: user verification %s" % (label, R.get(pre + "UserVerificationRequirement")))
+        if R.get("webAuthnPolicyPasswordlessResidentKey") != "required":
+            why.append("passwordless: discoverable credential %s" % R.get("webAuthnPolicyPasswordlessResidentKey"))
+        if (R.get("webAuthnPolicyPasswordlessRpId") or "") != (p["webauthn"].get("rp_id") or ""):
+            why.append("passwordless: RP ID %r" % R.get("webAuthnPolicyPasswordlessRpId"))
+        self.res("webauthn.algorithms_fips", not why, "passwordless algorithms=%s UV=%s discoverable=%s attestation=%s RP ID=%r; "
+                 "two-factor algorithms=%s UV=%s%s" % (R.get("webAuthnPolicyPasswordlessSignatureAlgorithms"),
+                 R.get("webAuthnPolicyPasswordlessUserVerificationRequirement"), R.get("webAuthnPolicyPasswordlessResidentKey"),
+                 R.get("webAuthnPolicyPasswordlessAttestationConveyancePreference"), R.get("webAuthnPolicyPasswordlessRpId"),
+                 R.get("webAuthnPolicySignatureAlgorithms"), R.get("webAuthnPolicyUserVerificationRequirement"),
+                 ("; problems: %s" % why) if why else ""))
+        # the policy governs registration only: a credential registered under an older policy keeps signing in
+        self.res("credentials.passkey_only", *stored_credential_findings(self.kc, realm, want))
 
     def check_policies(self):
         pr = self.kc.api("GET", "/realms/%s/client-policies/profiles" % q(self.realm))
@@ -1314,6 +1603,66 @@ class Checker:
         self.res("live.tls_versions", res.get("TLSv1.1") is None and bool(res.get("TLSv1.2") or res.get("TLSv1.3")),
                  "TLS handshake results: %s" % res)
 
+def cbor_decode(b, i=0):
+    """Minimal CBOR decoder (RFC 8949: integers, byte/text strings, arrays, maps, simple values) for COSE keys."""
+    ib = b[i]; mt, ai = ib >> 5, ib & 31; i += 1
+    if ai < 24: n = ai
+    elif ai in (24, 25, 26, 27):
+        ln = 1 << (ai - 24); n = int.from_bytes(b[i:i + ln], "big"); i += ln
+    else:
+        raise ValueError("indefinite or reserved CBOR length")
+    if mt == 0: return n, i
+    if mt == 1: return -1 - n, i
+    if mt in (2, 3):
+        v = b[i:i + n]; return (v if mt == 2 else v.decode()), i + n
+    if mt == 4:
+        out = []
+        for _ in range(n):
+            v, i = cbor_decode(b, i); out.append(v)
+        return out, i
+    if mt == 5:
+        out = {}
+        for _ in range(n):
+            k, i = cbor_decode(b, i); v, i = cbor_decode(b, i); out[k] = v
+        return out, i
+    if mt == 7: return {20: False, 21: True, 22: None}.get(ai), i
+    raise ValueError("unsupported CBOR major type %d" % mt)
+
+def cose_alg(credential_data):
+    """Keycloak's name for a stored WebAuthn credential's algorithm (from its COSE public key), or 'unknown(...)'."""
+    import base64
+    d = json.loads(credential_data) if isinstance(credential_data, str) else (credential_data or {})
+    raw = (d.get("credentialPublicKey") or "").replace("-", "+").replace("_", "/")   # Keycloak stores base64url
+    key, _ = cbor_decode(base64.b64decode(raw + "=" * (-len(raw) % 4)) if raw else b"\xa0")
+    a = key.get(3) if isinstance(key, dict) else None
+    return COSE_ALGS.get(a, "unknown(%s)" % a)
+
+def stored_credential_findings(kc, realm, allowed, page=200):
+    """(ok, evidence): no password or OTP credential on any account, and every stored WebAuthn credential's algorithm
+    in `allowed`. Reads every user's credentials (the realm is a passkey realm: small, and this is an audit)."""
+    rr = "/realms/%s" % q(realm)
+    bad, counts, first = [], {}, 0
+    while True:
+        users = kc.api("GET", rr + "/users?briefRepresentation=true&first=%d&max=%d" % (first, page)) or []
+        for u in users:
+            for c in kc.api("GET", rr + "/users/%s/credentials" % u["id"]) or []:
+                t = c.get("type")
+                if t in ("webauthn", "webauthn-passwordless"):
+                    try:
+                        a = cose_alg(c.get("credentialData"))
+                    except (ValueError, IndexError, KeyError, TypeError) as e:
+                        a = "unreadable(%s)" % type(e).__name__
+                    counts[a] = counts.get(a, 0) + 1
+                    if a not in allowed or t != "webauthn-passwordless":
+                        bad.append("%s: %s %s" % (u["username"], t, a))
+                else:
+                    bad.append("%s: %s credential" % (u["username"], t))
+        if len(users) < page:
+            break
+        first += page
+    return (not bad), "stored WebAuthn credentials by algorithm %s (allowed %s); credentials outside the passkey policy: %s" % (
+        counts or "{}", allowed, bad[:20] or "none")
+
 def probe_plain_http(host, ports, realm, timeout=4, prefix=""):
     """(ok, evidence) - ok is False only if some port serves the realm's OIDC discovery over clear-text HTTP.
     prefix: the live URL's path (KC_HTTP_RELATIVE_PATH, e.g. /auth), so a relative-path Keycloak is probed where it is."""
@@ -1411,23 +1760,53 @@ def load_rules_and_map():
         sys.exit("control-map.json has no entry for %s - map them before running (see SKILL.md 'Adapting')" % ", ".join(missing))
     return rules, cmap
 
+# auth_mode=passkey: extra checks per rule, and the certificate rules that have no subject in a passkey realm
+PASSKEY_RULE_CHECKS = {
+    "V-222522": ["flow.passkey_only", "flow.no_enrolment_at_sign_in", "credentials.passkey_only", "webauthn.algorithms_fips"],  # identify + authenticate
+    "V-222524": ["flow.passkey_only", "webauthn.algorithms_fips"],      # multifactor: a UV-required passkey
+    "V-222526": ["flow.passkey_only", "credentials.passkey_only"],
+    "V-222528": ["flow.passkey_only"],
+    "V-222530": ["flow.passkey_only"],                                   # replay-resistant: challenge-response
+}
+PASSKEY_NA_PKI = {"V-222525", "V-222550", "V-222553"}
+PASSKEY_AC7_RULES = {"V-222432", "V-222433"}
+PASSKEY_AC7_RATIONALE = (
+    "Passkey realm (AC-7 rationale): Keycloak 26.8.2 does not count a failed passkey assertion towards the lockout "
+    "(lab spike 2026-11-15: four bad-signature assertions left numFailures at 0). A passkey cannot be guessed: each "
+    "assertion is a fresh signature over a server challenge by a private key that never leaves the authenticator, and "
+    "user verification (PIN or biometric, with the authenticator's own retry limit) is required - the same reasoning "
+    "already accepted for the CAC. The lockout settings stay configured and apply to anything password-based, which "
+    "this realm does not have. Failed assertions are attributed to the targeted account in the audit log "
+    "(stig-audit, STIG-PASSKEY-FAILURE).")
+
 def evaluate(results, p):
     rules, cmap = load_rules_and_map()
     rows = []
     cac_only = p["auth_mode"] == "cac"
+    passkey = p["auth_mode"] == "passkey"
     has_saml = any(c.get("type") == "saml" for c in p["clients"])
     for r in rules["rules"]:
         c = cmap[r["vuln_id"]]
-        checks = c["checks"]
+        checks = list(c["checks"])
+        if passkey:
+            checks += PASSKEY_RULE_CHECKS.get(r["vuln_id"], [])
         ev = []
         st = "not_reviewed"
-        if c["na_condition"] and ((cac_only and "auth_mode=cac" in c["na_condition"]) or
+        if passkey and c["na_condition"] and "auth_mode=cac" in c["na_condition"]:
+            st = "not_applicable"; ev.append("N/A: passkey-only realm (auth_mode=passkey): no password credential exists "
+                                             "(credentials.passkey_only), and no password set-up action is enabled.")
+        elif passkey and r["vuln_id"] in PASSKEY_NA_PKI:
+            st = "not_applicable"; ev.append("N/A: passkey-only realm (auth_mode=passkey): no certificate sign-in "
+                                             "(realm.no_x509), so there is no certificate path to validate or revoke.")
+        elif c["na_condition"] and ((cac_only and "auth_mode=cac" in c["na_condition"]) or
                                   (not has_saml and "no SAML clients" in c["na_condition"])):
             st = "not_applicable"; ev.append("N/A: " + c["na_condition"])
         elif c["disposition"] in ("KC", "KC-EXT", "SHARED", "PLATFORM") and checks:
             sts = [results.get(k, {"status": "manual", "evidence": "check not run"}) for k in checks]
             for k, x in zip(checks, sts):
                 ev.append("[%s] %s: %s" % (x["status"].upper(), k, x["evidence"]))
+            if passkey and r["vuln_id"] in PASSKEY_AC7_RULES:
+                ev.append(PASSKEY_AC7_RATIONALE)
             if any(x["status"] == "fail" for x in sts):
                 st = "open"
             elif all(x["status"] in ("pass", "na") for x in sts):

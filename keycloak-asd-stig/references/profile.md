@@ -24,8 +24,9 @@ Defaults are the STIG values - only change them to be **stricter** (organization
 | `keycloak.admin_realm` | string | `master` | Realm whose admins run Keycloak; hardened by `--harden-master` | V-222390, V-222523 |
 | `realm.name` | string | `app` | Realm to create/harden (also names report files) | - |
 | `realm.display_name` | string | `Application` | Shown on the login page and as WebAuthn RP name | - |
-| `auth_mode` | `cac` \| `cac_or_mfa` \| `mfa` | `cac_or_mfa` | `cac`: certificate only (password rules become N/A). `cac_or_mfa`: certificate, or password + second factor for people without a card. `mfa`: no PKI - V-222524/525 stay Open | V-222524..528 |
+| `auth_mode` | `cac` \| `cac_or_mfa` \| `mfa` \| `passkey` | `cac_or_mfa` | `cac`: certificate only (password rules become N/A). `cac_or_mfa`: certificate, or password + second factor for people without a card. `mfa`: no PKI - V-222524/525 stay Open. `passkey`: a WebAuthn passkey with user verification is the only credential (see `webauthn`); no password, OTP, certificate or identity provider; password and PKI rules become N/A | V-222522..530 |
 | `mfa` | `otp` \| `webauthn` | `otp` | Second factor on the password path | V-222526, V-222530 |
+| `registration_flow` | `keep` \| `deny` | `keep` (`deny` for `passkey`) | `deny` binds `STIG Registration - Deny` as the realm's registration flow, so no registration link creates an account - an organization invitation's (`/protocol/openid-connect/registrations?token=...`) included, which otherwise works with `registrationAllowed=false`. `verify` checks it (`realm.registration_flow_denied`) | V-222389-type account control |
 
 ## `x509` - CAC / PIV authenticator
 
@@ -67,10 +68,46 @@ Defaults are the STIG values - only change them to be **stricter** (organization
 | `password.min_age_hours` | 24 | >= 24 | `minimumPasswordAge()` from stig-extensions.jar | V-222544 |
 | `password.hash` | `pbkdf2-sha512` | FIPS-approved | Never `argon2` (not FIPS) | V-222542, V-222571 |
 | `password.iterations` | 210000 | - | PBKDF2 iterations | - |
+| `accounts.disabled_marker` | false (true for `passkey`) | - | The inactivity workflow sets `stig_disabled_by=inactivity` before disabling | V-222411 |
 | `accounts.inactive_days` | 35 | <= 35 | Workflow: disable after N days without logon | V-222411 |
 | `accounts.temp_hours` | 72 | <= 72 | Workflow: disable `account_type=temporary` users N hours after creation | V-222409 |
 
 Upper/lower/digit/special (1 each), `notUsername`, `notEmail` are always added.
+
+## `webauthn` (`auth_mode=passkey` only)
+
+Keycloak's own policy names; both the passwordless and the two-factor WebAuthn policies are set to these values, so
+no weaker WebAuthn path exists.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `algorithms` | `["ES256", "RS256"]` | Signature algorithms a passkey may register with. Keycloak's names: `ES256`, `ES384`, `ES512`, `RS256`, `RS384`, `RS512`, `Ed25519` (**not** `EdDSA`), `RS1`. Keycloak drops an unknown name silently - a misspelt list can leave the realm unable to register anyone - so `load_profile` refuses one; `RS1` (SHA-1) is refused; `Ed25519` loads with a warning and fails `verify` until the CMVP certificate of the deployed BC-FIPS version is confirmed to cover EdDSA. RS256 is what Windows Hello registers |
+| `user_verification` | `required` | Must be `required`: the PIN or biometric is what makes the passkey multi-factor (V-222522/524) |
+| `discoverable` | `required` | Must be `required` (a passkey is a discoverable credential) |
+| `attestation` | `none` | `none` accepts synced platform passkeys (they send no usable attestation). `direct` only with an AAGUID allowlist, if the ISSO requires attested keys |
+| `attachment` | `""` | `""` = platform or roaming; `platform`; `cross-platform` |
+| `avoid_same_authenticator` | `true` | Refuse registering the same authenticator twice |
+| `passkeys` | `true` | Keycloak's passkeys switch: the username form offers "Sign in with passkey" and conditional (autofill) UI |
+| `rp_id` | `""` | Empty = the IdP's own host. Never a parent domain: a passkey would then be usable on every subdomain |
+| `sign_in` | `discoverable` | `discoverable` (default): no username step at all - the page offers only "Sign in with passkey" - so whether an account exists cannot be probed (no autofill). `username`: `stig-passkey-username-form` (Keycloak's username form with the passkey button and autofill; an account **without** a passkey, and a **disabled** or **locked-out** account, are answered exactly as an unknown username - Keycloak's own invalid-user response and event, not counted against the account), then `stig-passkey-required` (refuses an account without a passkey again, should the form ever be swapped), then - only if no passkey was used yet - a passkey step (`CONDITIONAL`: `conditional-credential` webauthn-passwordless not used -> `webauthn-authenticator-passwordless`). A passkey is never set up at sign-in, only through the e-mailed link. Such a link sets up one passkey: the first browser to complete it wins, after which the link is refused (also for a browser that opened it in parallel, and after a later recovery). `username` still tells an account that holds a passkey (it gets the passkey step) from an unknown one |
+
+Also in a passkey realm: `UPDATE_PASSWORD`, `CONFIGURE_TOTP` and two-factor `webauthn-register` are **disabled** (no
+action can ask for a password or OTP, not even one an administrator sets), `webauthn-register-passwordless` and
+`VERIFY_EMAIL` are enabled, `registration_flow` is `deny`, and the inactivity workflow sets `stig_disabled_by=inactivity`
+just before it disables an account (`accounts.disabled_marker`), so a later reactivation can tell that disable from
+any other. `users[].temporary_password` is refused.
+
+**`verify` in a passkey realm** adds `flow.no_enrolment_at_sign_in` (every username step is `stig-passkey-username-form` followed by `stig-passkey-required`), `flow.passkey_only` (only the passkey flow's authenticators, the conditional
+step's shape, the allowlist gate), `webauthn.algorithms_fips` (both policies: recognised, FIPS-approved, equal to the
+profile, UV and discoverable required), `realm.no_x509` and `realm.no_idp` (every bound flow and client override),
+and `credentials.passkey_only`: **every stored credential** is a `webauthn-passwordless` one whose COSE algorithm is in
+the profile's list, and no password or OTP exists. The policy governs registration only - a credential registered under
+an older, looser policy keeps signing in after the list is narrowed - so the stored credentials are what count.
+
+**AC-7 (V-222432/433) in a passkey realm.** Keycloak 26.8 does not count a failed passkey assertion towards the
+brute-force lockout. The checklist records the rationale already accepted for the CAC: a public-key signature over a
+fresh challenge cannot be guessed, and user verification has the authenticator's own retry limit. The lockout stays
+configured for anything password-based, which the realm does not have.
 
 ## `banner`, `events`, `headers`
 
