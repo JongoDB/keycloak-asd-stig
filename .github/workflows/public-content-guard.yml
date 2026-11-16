@@ -1,0 +1,29 @@
+# Public repository: names of private organizations, products and customers must never be committed, in source,
+# docs or inside any archive (.skill, .zip, .jar). Runs on every pull request and push, whatever the path.
+name: public content guard
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with: {persist-credentials: false}
+      - name: Tracked files and archives
+        run: python3 .github/scripts/public-content-guard.py
+      - name: Freshly built skill packages
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/built"; mkdir -p "$out"; extra=()
+          for d in */; do
+            d="${d%/}"
+            [ -f "$d/SKILL.md" ] || continue
+            git ls-files "$d" | zip -q "$out/$d.skill" -@
+            extra+=(--extra-archive "$out/$d.skill")
+          done
+          python3 .github/scripts/public-content-guard.py "${extra[@]}"

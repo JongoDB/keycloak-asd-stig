@@ -11,7 +11,7 @@ import java.util.List;
  *  2. then allow only exact entries and prefixes from the configured list (an entry ending in '/' is a prefix,
  *     anything else must match exactly), compared byte for byte;
  *  3. everything else is refused.
- * With the list naming one realm (e.g. /realms/defconai/, /admin/defconai/, /admin/realms/defconai/, /resources/),
+ * With the list naming one realm (e.g. /realms/example/, /admin/example/, /admin/realms/example/, /resources/),
  * the master realm and any realm added later are unreachable from the network by construction.
  */
 public final class PublicPathPolicy {

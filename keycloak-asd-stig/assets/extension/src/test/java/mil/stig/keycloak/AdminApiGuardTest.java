@@ -22,16 +22,16 @@ public final class AdminApiGuardTest {
         t("no parameters", AdminApiGuardFilter.namesConcealed(m()), false);
         java.util.function.BiFunction<String, String, AdminApiGuardFilter.Kind> c = (segs, raw) ->
                 AdminApiGuardFilter.classify(java.util.Arrays.asList(segs.split("/", -1)), raw);
-        t("admin API path", c.apply("admin/realms/defconai/users", "/admin/realms/defconai/users") == AdminApiGuardFilter.Kind.ADMIN, true);
-        t("double slash: segments still admin,realms", c.apply("admin//realms/defconai/users", "/admin//realms/defconai/users") == AdminApiGuardFilter.Kind.ADMIN, true);
-        t("matrix params stripped from segments", c.apply("admin/realms/defconai/users", "/admin;x=y/realms;a=b/defconai/users") == AdminApiGuardFilter.Kind.ADMIN, true);
+        t("admin API path", c.apply("admin/realms/example/users", "/admin/realms/example/users") == AdminApiGuardFilter.Kind.ADMIN, true);
+        t("double slash: segments still admin,realms", c.apply("admin//realms/example/users", "/admin//realms/example/users") == AdminApiGuardFilter.Kind.ADMIN, true);
+        t("matrix params stripped from segments", c.apply("admin/realms/example/users", "/admin;x=y/realms;a=b/example/users") == AdminApiGuardFilter.Kind.ADMIN, true);
         t("leading empty segment", c.apply("/admin/realms/x", "//admin/realms/x") == AdminApiGuardFilter.Kind.ADMIN, true);
         t("encoded slash: unclassifiable -> refused", c.apply("admin%2Frealms", "/admin%2Frealms/x/users") == AdminApiGuardFilter.Kind.UNCLASSIFIABLE, true);
         t("encoded backslash: unclassifiable", c.apply("admin\\realms", "/admin%5Crealms/x") == AdminApiGuardFilter.Kind.UNCLASSIFIABLE, true);
         t("dot segment near admin: unclassifiable", c.apply("x/admin", "/x/./admin/realms") == AdminApiGuardFilter.Kind.UNCLASSIFIABLE, true);
         t("double-encoded: unclassifiable", c.apply("admin%252Frealms", "/admin%252Frealms") == AdminApiGuardFilter.Kind.UNCLASSIFIABLE, true);
-        t("realm sign-in path: not admin", c.apply("realms/defconai/protocol/openid-connect/auth", "/realms/defconai/protocol/openid-connect/auth") == AdminApiGuardFilter.Kind.NOT_ADMIN, true);
-        t("admin console (not the API): not admin by segments", c.apply("admin/defconai/console/", "/admin/defconai/console/") == AdminApiGuardFilter.Kind.NOT_ADMIN, true);
+        t("realm sign-in path: not admin", c.apply("realms/example/protocol/openid-connect/auth", "/realms/example/protocol/openid-connect/auth") == AdminApiGuardFilter.Kind.NOT_ADMIN, true);
+        t("admin console (not the API): not admin by segments", c.apply("admin/example/console/", "/admin/example/console/") == AdminApiGuardFilter.Kind.NOT_ADMIN, true);
         t("upper-case ADMIN: not Keycloak's admin path", c.apply("ADMIN/realms/x", "/ADMIN/realms/x") == AdminApiGuardFilter.Kind.NOT_ADMIN, true);
         System.out.printf("%n%d/%d passed%n", run - failed, run);
         System.exit(failed == 0 ? 0 : 1);

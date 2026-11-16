@@ -8,6 +8,7 @@
 5. Audit off-load and alerts (V-222481..V-222485, V-222417..V-222422)
 6. Re-running apply / verify (drift control)
 7. Upgrading Keycloak
+8. Delegated account creation: allowed e-mail domains (stig-accounts)
 
 ## 1. Break-glass / admin recovery
 After hardening, the admin realm has no password grant (ROPC denied), the bootstrap admin is deleted, and
@@ -88,3 +89,35 @@ inactivity clocks of existing users are preserved).
 5. Run `verify` and `e2e_check.py` (tested: 20/20 and clean verify after the upgrade).
 6. Re-check `references/keycloak-notes.md` against the release notes (build-time options, admin API, client-policy
    executors, theme page IDs, workflow syntax).
+
+## 8. Delegated account creation: allowed e-mail domains (stig-accounts)
+The `stig-accounts` admin endpoint (in `stig-extensions.jar`) lets an IdP user manager, or an application's service
+account holding `realm-management/query-users`, create accounts. It creates them only for e-mail addresses in an
+allowlist of domains:
+
+| Where | Attribute | Scope |
+|---|---|---|
+| The caller's client (service-account callers) | `stig.accounts.email-domains` | that caller only; wins over the realm |
+| The realm | `stig.accounts.email-domains` | every caller without a client value |
+
+- Value: a comma list. `.mil` matches any domain ending in `.mil`; `example.org` matches exactly that domain, not
+  its subdomains. Example: `.mil,example.org`.
+- **Unset on both: `.mil` only.** Every other organization's domain must be configured explicitly.
+- **Set but with no entries, or with any malformed entry** (`*.mil`, `@example.org`, `x .org`): **no domain is
+  allowed**. The endpoint fails closed and refuses every creation with "e-mail domain not allowed for this caller".
+  To switch delegated creation off for a caller, set `,`. Keycloak may drop an attribute set to an empty string,
+  which would bring back the `.mil` default.
+- A configured value replaces the default. Keep `.mil` in it if you still want it.
+- `kcstig.py apply` does not touch realm attributes, so the value survives re-runs.
+
+Set it on the realm (every caller):
+```bash
+kcadm.sh update realms/<realm> -s 'attributes."stig.accounts.email-domains"=".mil,example.org"'
+```
+or on one calling client:
+```bash
+kcadm.sh update clients/<client uuid> -r <realm> -s 'attributes."stig.accounts.email-domains"="example.org"'
+```
+Check it with `kcadm.sh get realms/<realm> --fields attributes`. Refusals are logged as `STIG-ACCOUNTS-REFUSED`
+and name the domain list in force.
+
