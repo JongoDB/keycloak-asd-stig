@@ -84,6 +84,18 @@ Upper/lower/digit/special (1 each), `notUsername`, `notEmail` are always added.
 
 ## `clients[]`
 
+Reserved: `client_id` may not be one of Keycloak's own clients (`account`, `account-console`, `admin-cli`,
+`broker`, `realm-management`, `security-admin-console`) or end in `-realm`. `load_profile` stops on such a profile or
+clients.d file, and `upsert_client` refuses them, so no clients.d file can overwrite part of the IdP.
+
+Registering an application team's client: take their `client-request.json` (format and validator in
+`keycloak-rp-integration/`) and run `kcstig.py add-client client-request.json --profile p.json --clients-dir
+clients.d`. It validates the request with the relying-party validator's rules, refuses reserved ids, refuses to
+modify any client it did not create (client attribute `stig.created-by=add-client`; `--adopt <id>` to take one
+over), applies the client live and writes `clients.d/<client_id>.json`. With `auth: client-secret`,
+`--secret-out FILE` writes the secret (0600, never printed). Run `validate-client-request.py --strict` on the file
+you received first, and read its output.
+
 Common keys:
 
 | Key | Type | Default | Meaning |

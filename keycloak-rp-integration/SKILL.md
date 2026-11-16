@@ -12,7 +12,8 @@ app's repository:
 2. Produce a validated `client-request.json` for the operator.
 3. Tell the human what to send and what they will get back.
 
-The operator registers the client from that file (the IdP skill's `add-client`) and returns the issuer URL, plus
+The operator registers the client from that file with the IdP skill's `kcstig.py add-client` (which validates it
+with this skill's validator, refuses reserved ids and clients it did not create) and returns the issuer URL, plus
 a client secret if one was chosen. CAC/PIV, MFA, the DoD banner, lockout and password rules all happen at the IdP.
 The app sees ordinary OIDC users.
 
@@ -26,7 +27,7 @@ The app sees ordinary OIDC users.
 | `assets/client-request.example.json` | Starting point for the request |
 | `scripts/validate-client-request.py` | Validator, the same rules the operator side applies; `--emit-client -` shows what will be registered |
 | `examples/node-express`, `examples/python-flask`, `examples/go` | Complete minimal relying parties, tested end to end against Keycloak |
-| `tests/` | Validator, schema and operator-compatibility tests; `tests/e2e/run_e2e.py` runs the examples against a real Keycloak |
+| `tests/` | Validator, schema and operator-compatibility tests. `tests/e2e/run_e2e.py` is the repository's **reference** test (examples + `add-client` against a real Keycloak); it needs the full keycloak-asd-stig checkout and is not meant to be run from an app repo - copy its checks instead |
 
 ## Workflow
 
@@ -63,16 +64,26 @@ item below is required:
 - Server-side session; idle timeout at most the realm's (15 min, 10 for admin), absolute lifetime at most the
   realm's max (8 h); cookie Secure, HttpOnly, SameSite, no Expires, `__Host-` prefix; a fresh session ID at login;
   session-lifecycle audit log.
-- Log off goes to `end_session_endpoint` with `id_token_hint` and lands on a logged-off page. The back-channel
-  logout endpoint validates the logout token and destroys sessions by `sid` in a store every replica shares.
+- Log off is a **POST** with a CSRF check (same-origin `Origin`/`Referer`, or the framework's CSRF token), never a
+  GET link. It goes (303) to `end_session_endpoint` with `id_token_hint` and lands on a logged-off page.
+- The back-channel logout endpoint validates the logout token (signature, `iss`, `aud`, header `typ` `logout+jwt`,
+  the back-channel `events` member, `iat` neither stale nor in the future, no `nonce`) and destroys sessions by
+  `sid`, or every session of `sub` when there is no `sid`, in a store every replica shares.
+- **No open redirects.** A "return to the page you asked for" path is stored server-side with the login state,
+  accepted only as a relative path starting with a single `/` (never `//`, `/\`, a scheme or an absolute URL),
+  and defaults to `/`. Never redirect to a URL taken from a query parameter or `Referer`.
+- Pre-login state (PKCE verifier, nonce) is server-side, expires (about 10 minutes) and the session store is
+  capped, so anonymous `/login` requests cannot exhaust memory.
 - Show `previous_login` after sign-in. Remove local login forms and password handling. Never log tokens or
   secrets.
 - Build URLs from `APP_BASE_URL`; trust `X-Forwarded-*` only behind your own overwriting proxy (`TRUST_PROXY=1`).
 - Don't add banner pages, client-certificate handling or MFA to the app: the IdP does them.
 
-Add tests: unauthenticated request → 401 or redirect; missing role → 403; a forged back-channel token → 400; the
-JWKS contains no private members; the idle limit ends the session. Where a test Keycloak exists, mirror
-`tests/e2e/run_e2e.py`.
+Add tests to the app's own suite: unauthenticated request → 401 or redirect; missing role → 403; a forged
+back-channel token → 400; `GET /logout` and a cross-origin `POST /logout` do nothing; the JWKS contains no private
+members; the idle limit ends the session; a return path like `//evil.example` falls back to `/`. Where a test
+Keycloak exists, use `tests/e2e/run_e2e.py` as the reference for how to drive it; don't run that script from the
+app repo.
 
 ### 4. Write and validate the request
 Copy `assets/client-request.example.json` to the app repo (for example `deploy/idp/client-request.<env>.json`) and fill
@@ -85,9 +96,10 @@ Fix every `ERROR`. With `--strict`, warnings fail too (placeholder hosts, a URL 
 `client-secret`): fix them or explain them in `notes`. Every URL needs a DNS name; IP addresses are refused in
 every form, and must be ASCII (punycode for IDNs). `localhost` is accepted only with `"dev_request": true`.
 Keycloak's own client ids (`account`, `account-console`, `admin-cli`, `broker`, `realm-management`,
-`security-admin-console`, any `*-realm`) are refused here and by the operator's `add-client`. `add-client` also
-will not modify a client it did not create. Never put a secret or private key in the
-file. The validator refuses fields that look like one.
+`security-admin-console`, any `*-realm`) are refused here and by the operator's `kcstig.py add-client`, which
+also will not modify a client it did not create. Never put a secret or private key in the file: fields named like
+secrets are refused, and `notes`, `name` and `contact` are scanned for credential-looking values (PEM blocks, JWTs,
+tokens, `password: ...`, long random strings). The scan catches common shapes, not every secret.
 
 ### 5. Report back to the human
 - What changed in the app (files, routes, config variables, tests and their results).

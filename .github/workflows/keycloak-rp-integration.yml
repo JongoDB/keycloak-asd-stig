@@ -1,7 +1,8 @@
 # keycloak-rp-integration skill: the client request contract and the example relying parties.
 #   request  validator + JSON Schema on the example and on good/bad fixtures; operator-side compatibility (the emitted
 #            client loads through keycloak-asd-stig's kcstig.py with no warnings); STIG note is up to date
-#   e2e      the Node, Python and Go examples, each with client-jwt and client-secret, against a real Keycloak
+#   e2e      kcstig.py add-client against a real Keycloak (ownership, --adopt, reserved ids, secret file), then the Node,
+#            Python and Go examples, each with client-jwt and client-secret, registered through add-client
 name: keycloak-rp-integration
 on:
   pull_request:
@@ -32,15 +33,19 @@ jobs:
       - run: pip install jsonschema==4.25.1
       - name: The example request is valid
         run: python3 scripts/validate-client-request.py assets/client-request.example.json --emit-client -
-      - name: Good fixtures pass, bad fixtures (http, wildcards, localhost, IP literals in every spelling, bad roles, secrets) fail
+      - name: Good fixtures pass, bad fixtures fail (http, wildcards, localhost, IP literals in every spelling, non-ASCII, reserved ids, trailing newlines, bad roles, secrets, duplicate keys)
         run: |
           for f in tests/fixtures/valid/*.json; do python3 scripts/validate-client-request.py --quiet "$f"; done
           rc=0
-          for f in tests/fixtures/invalid/*.json; do
+          for f in tests/fixtures/invalid/*.json tests/fixtures/invalid-validator-only/*.json; do
             if python3 scripts/validate-client-request.py --quiet "$f" 2>/dev/null; then echo "::error::accepted $f"; rc=1; fi
           done
+          for f in tests/fixtures/strict-invalid/*.json; do
+            python3 scripts/validate-client-request.py --quiet "$f" 2>/dev/null || { echo "::error::refused without --strict: $f"; rc=1; }
+            if python3 scripts/validate-client-request.py --quiet --strict "$f" 2>/dev/null; then echo "::error::accepted under --strict: $f"; rc=1; fi
+          done
           exit $rc
-      - name: Unit tests (validator, JSON Schema agreement, operator-side kcstig compatibility, IP-literal bypass forms)
+      - name: Unit tests (validator, JSON Schema agreement, kcstig add-client refusals, reserved ids in clients.d, bypass forms)
         run: REQUIRE_JSONSCHEMA=1 python3 tests/test_client_request.py
       - name: STIG inheritance note matches the control map
         run: python3 scripts/stig_note.py --check

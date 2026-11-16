@@ -122,6 +122,11 @@ check -> Open; APP/PROCESS rules -> Not Reviewed. Never hand-edit statuses to lo
 `e2e_check.py` consumes accounts (lockout, password change) - use dedicated test users, never real ones.
 
 ### 6. Per-solution integration
+- App teams integrating with an IdP you run use the `keycloak-rp-integration` skill (beside this one) and send a
+  `client-request.json`. Check the file you received with
+  `keycloak-rp-integration/scripts/validate-client-request.py --strict`, then register it with
+  `python3 scripts/kcstig.py add-client client-request.json --profile p.json --clients-dir clients.d [--secret-out FILE]`
+  (validates with the same rules, refuses reserved ids and clients it did not create; see `references/profile.md`).
 - `python3 scripts/kcstig.py inherit --profile p.json --app <solution>`: inherited / shared / app-owned rules.
 - Services without a strong OIDC stack get a generated gateway (`references/gateway.md`):
   `python3 scripts/kcstig.py gateway --profile p.json --client <svc>-web --public-url https://<svc> --upstream http://127.0.0.1:<port> --allowed-role <role> --out gateway/`

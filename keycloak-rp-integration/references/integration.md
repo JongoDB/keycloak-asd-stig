@@ -67,7 +67,7 @@ Generate the key once per environment, store it as a secret (Kubernetes Secret, 
 file with mode 0400), and never commit it:
 
 ```bash
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out client-key.pem   # PKCS#8 PEM
+(umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out client-key.pem)   # PKCS#8 PEM, 0600 from birth
 chmod 0400 client-key.pem
 KID=$(openssl pkey -in client-key.pem -pubout -outform DER | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=' | cut -c1-16)
 ```
@@ -91,7 +91,8 @@ from the private key at start-up. Rules:
 - The operator generates the secret and delivers it **out of band** (see `operator-handoff.md`). Never put it in
   the request, a chat, an email, a ticket or a commit.
 - The app reads it from a file (`OIDC_CLIENT_SECRET_FILE`, a mounted secret) or, failing that, from an
-  environment variable injected by the platform's secret store. Strip a trailing newline.
+  environment variable injected by the platform's secret store. Strip a trailing newline. If you must stage it in a
+  file by hand, create the file private from the start: `(umask 077; cat > client-secret)`, not `chmod` afterwards.
 - Don't log it, put it in an image layer, or put it in `.env` files that are committed or baked into images.
 - Send it with `client_secret_basic` (the HTTP Basic header) or `client_secret_post`. Both are accepted.
 - Rotation: the operator regenerates the secret, and both sides switch during an agreed window. The old secret
@@ -110,8 +111,10 @@ from the private key at start-up. Rules:
 | `nonce` equals the value you stored for this login | Code or ID-token injection |
 | `state` equals the stored value (callback, before the code exchange) | CSRF on the callback |
 
-Discovery: `<issuer>/.well-known/openid-configuration`. Cache the JWKS, and refetch it when a token carries an
-unknown `kid` (the IdP rotates keys).
+Discovery: `<issuer>/.well-known/openid-configuration`. Cache the JWKS, and refetch it **only** when a token carries
+an unknown `kid` (the IdP rotates keys), at most once a minute. Refetching on every failed verification lets anyone
+with a garbage token make the app hammer the IdP. `jose.createRemoteJWKSet` (Node) and go-oidc's remote key set do
+this already; the Python example shows it by hand.
 
 **The access token**, if you read roles from it (section 5) or call APIs with it: verify the signature, `iss` and
 `exp` the same way, and require `azp` to equal your client_id. APIs that accept bearer tokens validate them the
@@ -155,6 +158,20 @@ The IdP's limits are a ceiling for the app, never a floor. Its sessions must not
   example, logout in another app should be reflected within minutes even if back-channel delivery fails), refresh
   the token every few minutes while the user is active, and end the local session on `invalid_grant`. That is what
   the IdP skill's oauth2-proxy gateway does with a one-minute refresh.
+- **Bound what an anonymous visitor can create.** Every `/login` stores state (PKCE verifier, nonce) before anyone
+  is authenticated. Expire it (the examples use 10 minutes), sweep sessions that idled out but were never revisited,
+  and cap the total (`MAX_SESSIONS`, answered with 503), or a script that requests `/login` in a loop fills memory.
+  A shared store needs the same TTLs.
+- **Return-to-page after login without an open redirect.** If you send users back to the page they asked for,
+  store that path **server-side** in the login-in-progress state, never in a query parameter you echo back
+  unchecked. Accept only a relative path that starts with exactly one `/`: reject `//host`, `/\host`, anything
+  with a scheme (`https:`, `javascript:`), a backslash or a control character, and fall back to `/`. After the
+  callback, redirect to that stored path. Don't build it from `Referer`.
+  ```python
+  def safe_return_path(p):
+      return p if isinstance(p, str) and p.startswith("/") and not p.startswith(("//", "/\\")) \
+          and "\\" not in p and p.isprintable() and ":" not in p.split("?", 1)[0] else "/"
+  ```
 - For sensitive transactions your organization defines, force re-authentication with `prompt=login` or
   `max_age=0` and check `auth_time` in the new ID token (V-222520).
 - Show the date and time of the user's previous logon after sign-in (V-222437). The hardened realm provides it as
@@ -164,8 +181,12 @@ The IdP's limits are a ceiling for the app, never a floor. Its sessions must not
 
 **RP-initiated logout** (the visible "Log off" control, V-222391):
 
+0. Make it a **POST** with CSRF protection: a form button, not a link. Check that `Origin` (or, if absent,
+   `Referer`) is your app's own origin, or use your framework's CSRF token. A `GET /logout` lets any page log your
+   users out with an `<img>` tag; the examples answer it with 404/405. `SameSite=Lax` alone doesn't cover it: Lax
+   cookies are still sent on top-level navigations.
 1. Destroy the local session server-side and clear the cookie.
-2. Redirect to the IdP's `end_session_endpoint` with `id_token_hint=<the ID token>` and
+2. Redirect (`303 See Other`) to the IdP's `end_session_endpoint` with `id_token_hint=<the ID token>` and
    `post_logout_redirect_uri=<an exact registered post_logout_redirect_uri>`. This ends the IdP session too.
 3. Show an explicit "you have been logged off" page there (V-222392).
 
@@ -173,13 +194,18 @@ The IdP's limits are a ceiling for the app, never a floor. Its sessions must not
 `logout_token=<JWT>` (form-encoded) to your endpoint when the SSO session ends: logout from another app,
 admin sign-out, or an account being disabled. The call comes from the IdP's server and carries no user cookie, so:
 
-- Remember the mapping from the ID token's `sid` to your session IDs at login, in a store every replica can reach
-  (Redis or a database; the examples use memory).
-- Validate the logout token: signature (JWKS), `iss`, `aud` equal to your client_id, a recent `iat`, an `events`
-  member containing `http://schemas.openid.net/event/backchannel-logout`, `sid` or `sub` present, and **no**
-  `nonce`. Optionally reject a replayed `jti`.
-- Destroy every local session for that `sid`. Return `200` with `Cache-Control: no-store`, or `400` for an
-  invalid token.
+- Remember the mapping from the ID token's `sid` **and** `sub` to your session IDs at login, in a store every
+  replica can reach (Redis or a database; the examples use memory).
+- Validate the logout token:
+  - signature (JWKS), `iss`, and `aud` equal to your client_id;
+  - the JOSE header `typ` is `logout+jwt`, and a `typ` claim, if present, is `Logout` (Keycloak sends both).
+    This stops an ID or access token, which are signed by the same keys, from being replayed as a logout token;
+  - an `events` member containing `http://schemas.openid.net/event/backchannel-logout`;
+  - `iat` no more than 60 seconds in the future and no more than 2 minutes old; `exp` not passed;
+  - `sid` or `sub` present, and **no** `nonce`. Optionally reject a replayed `jti`.
+- With `sid`, destroy the local sessions of that IdP session. With only `sub`, destroy **every** session of that
+  user. Never let a missing `sid` match sessions whose stored `sid` is also missing. Return `200` with
+  `Cache-Control: no-store`, or `400` for an invalid token.
 - The endpoint must be reachable from the IdP, must be exempt from CSRF middleware (it authenticates with the
   token instead) and must not require a session.
 
@@ -249,8 +275,12 @@ const { payload: at } = await jose.jwtVerify(tokens.access_token,
 if (at.azp !== CLIENT_ID) throw new Error('access token not issued to this client');
 const roles = at.resource_access?.[CLIENT_ID]?.roles ?? [];
 
-// GET /logout
-res.redirect(client.buildEndSessionUrl(config, { id_token_hint: idToken, post_logout_redirect_uri: `${BASE}/logged-out` }).href);
+// POST /logout (same-origin only), after destroying the local session
+const src = req.get('origin') ?? req.get('referer');   // absent or unparsable: refuse (never resolve it against BASE)
+let sameOrigin = false;
+try { sameOrigin = !!src && new URL(src).origin === new URL(BASE).origin; } catch {}
+if (!sameOrigin) return res.sendStatus(403);
+res.redirect(303, client.buildEndSessionUrl(config, { id_token_hint: idToken, post_logout_redirect_uri: `${BASE}/logged-out` }).href);
 ```
 
 ### Python / Flask: Authlib
@@ -283,26 +313,54 @@ def callback():                    # validates state and the ID token's signatur
 ### Go: `coreos/go-oidc` v3 + `x/oauth2`
 
 ```go
-provider, _ := oidc.NewProvider(ctx, issuer)
+provider, err := oidc.NewProvider(ctx, issuer)
+if err != nil {
+	log.Fatal(err)
+}
 conf := oauth2.Config{ClientID: clientID, Endpoint: provider.Endpoint(), RedirectURL: base + "/oauth2/callback",
 	Scopes: []string{oidc.ScopeOpenID}}
 conf.Endpoint.AuthStyle = oauth2.AuthStyleInParams // private_key_jwt: client_id in the body, no Basic header
-idv := provider.Verifier(&oidc.Config{ClientID: clientID}) // signature, iss, aud, exp
+idv := provider.Verifier(&oidc.Config{ClientID: clientID})         // signature, iss, aud, exp
+atv := provider.Verifier(&oidc.Config{SkipClientIDCheck: true})     // access token: azp is checked below
 
 // /login
 verifier := oauth2.GenerateVerifier()
 http.Redirect(w, r, conf.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)), http.StatusFound)
 
-// /oauth2/callback (after checking state)
+// /oauth2/callback, after the state check. Every failure ends the request: fail closed.
+assertion, err := signedAssertion() // go-jose: iss=sub=client_id, aud=token URL, jti, exp <= 60 s
+if err != nil {
+	http.Error(w, "sign-in failed", http.StatusInternalServerError)
+	return
+}
 tok, err := conf.Exchange(ctx, code, oauth2.VerifierOption(verifier),
 	oauth2.SetAuthURLParam("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"),
-	oauth2.SetAuthURLParam("client_assertion", signedAssertion())) // go-jose: iss=sub=client_id, aud=token URL, jti, exp
-idt, err := idv.Verify(ctx, tok.Extra("id_token").(string))
-if idt.Nonce != nonce { /* reject */ }
-att, err := provider.Verifier(&oidc.Config{SkipClientIDCheck: true}).Verify(ctx, tok.AccessToken) // then require azp == clientID
+	oauth2.SetAuthURLParam("client_assertion", assertion))
+if err != nil {
+	http.Error(w, "sign-in failed", http.StatusBadRequest)
+	return
+}
+rawID, ok := tok.Extra("id_token").(string)
+if !ok {
+	http.Error(w, "sign-in failed", http.StatusBadRequest)
+	return
+}
+idt, err := idv.Verify(ctx, rawID)
+if err != nil || subtle.ConstantTimeCompare([]byte(idt.Nonce), []byte(nonce)) != 1 { // go-oidc does not check nonce
+	http.Error(w, "sign-in failed", http.StatusBadRequest)
+	return
+}
+att, err := atv.Verify(ctx, tok.AccessToken)
+var at struct {
+	Azp            string                         `json:"azp"`
+	ResourceAccess map[string]struct{ Roles []string } `json:"resource_access"`
+}
+if err != nil || att.Claims(&at) != nil || at.Azp != clientID || att.Subject != idt.Subject {
+	http.Error(w, "sign-in failed", http.StatusBadRequest)
+	return
+}
+roles := at.ResourceAccess[clientID].Roles
 ```
-
-`go-oidc` does not check the nonce for you. Compare it explicitly, as above.
 
 ## 11. Before you send the request
 
@@ -310,9 +368,12 @@ att, err := provider.Verifier(&oidc.Config{SkipClientIDCheck: true}).Verify(ctx,
 - [ ] ID token fully validated; roles read from the verified access token; authorization on every request.
 - [ ] Idle at most 15 min (10 for admin), absolute at most 8 h, server-side; the cookie is Secure, HttpOnly,
       SameSite and non-persistent.
-- [ ] Log off goes to `end_session_endpoint` and lands on a logged-off page; the back-channel endpoint validates
-      tokens and kills sessions by `sid` across replicas.
+- [ ] Log off is a same-origin POST that goes to `end_session_endpoint` and lands on a logged-off page; the
+      back-channel endpoint checks `typ`, `events`, `iat` and the signature, and kills sessions by `sid` (or every
+      session of `sub`) across replicas.
+- [ ] Any return-to-page path is stored server-side and only ever a single-`/` relative path.
+- [ ] Pre-login state expires and the session store is capped.
 - [ ] `previous_login` shown after sign-in.
 - [ ] No local login form, no secrets in git, and no tokens or secrets in logs.
 - [ ] `client-jwt`: JWKS served over https at the URL in the request, reachable from the IdP, public keys only.
-- [ ] `python3 scripts/validate-client-request.py client-request.json` passes.
+- [ ] `python3 scripts/validate-client-request.py --strict client-request.json` passes.

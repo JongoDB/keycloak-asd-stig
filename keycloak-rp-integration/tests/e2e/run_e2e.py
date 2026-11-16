@@ -3,20 +3,29 @@
 
   python3 keycloak-rp-integration/tests/e2e/run_e2e.py [--apps node,python,go] [--auth client-jwt,client-secret]
 
+This is the reference test of this repository's examples and of the operator's `kcstig.py add-client`. It runs
+inside a keycloak-asd-stig checkout (it needs keycloak-asd-stig/scripts/kcstig.py beside this skill); it is not
+something an app team runs standalone - copy its checks into the app's own tests instead.
+
 Needs docker (or podman as `docker`), node + npm, python3 with the python-flask example's requirements and
 `requests`, and go. Starts a throwaway Keycloak (dev mode, HTTPS with a generated certificate, the same pinned image
-as the IdP CI) with one realm. The client is registered the way the operator side does it: a dev client request is
-validated and emitted by scripts/validate-client-request.py, turned into a Keycloak client by the IdP skill's
-kcstig.client_rep (PKCE S256 required, no implicit or password grant, back-channel logout on), then created through
-the admin API. This is NOT the hardened realm: it proves the app side of the contract, not the IdP's STIG settings.
+as the IdP CI) with one realm. Every client is registered the way an operator does it: `kcstig.py add-client` with a
+dev client request (validated with scripts/validate-client-request.py's rules, refused for reserved ids or clients
+add-client did not create, applied through the admin API, written to clients.d). This is NOT the hardened realm: it
+proves the app side of the contract and add-client's guards, not the IdP's STIG settings.
 
-For each example and client authentication method it checks:
+add-client: refuses a hand-made client, adopts it only with --adopt (and warns), is idempotent, refuses a reserved
+id and a clients.d file that overrides one, writes the client secret to a 0600 file and never prints it.
+
+For each example and client authentication method:
   login with PKCE + nonce; roles from resource_access; role-gated route (200 for alice, 403 for bob);
-  session cookie HttpOnly + SameSite and non-persistent; previous_login claim surfaced;
-  local idle timeout; RP-initiated logout ends the IdP session too; back-channel logout (admin signs the user out)
-  ends the app session; a forged logout token is refused.
+  session cookie HttpOnly + SameSite, non-persistent, carrying only a session id; previous_login surfaced;
+  logout is POST-only and refused without a same-origin Origin/Referer; RP-initiated logout ends the IdP session too;
+  back-channel logout (admin signs the user out) ends the app session; a forged logout token is refused;
+  local idle timeout.
 """
 import argparse
+import base64
 import html
 import json
 import os
@@ -29,6 +38,7 @@ import sys
 import tempfile
 import time
 import importlib.util
+import zlib
 from urllib.parse import urljoin, urlsplit
 
 import requests
@@ -56,8 +66,11 @@ def load(name, path):
     return m
 
 
+KCSTIG = os.path.join(REPO, "keycloak-asd-stig", "scripts", "kcstig.py")
+if not os.path.isfile(KCSTIG):
+    sys.exit("run_e2e.py is the repository's reference test: it needs %s (a full keycloak-asd-stig checkout, with "
+             "keycloak-rp-integration/ beside keycloak-asd-stig/). Not found - nothing run." % KCSTIG)
 vcr = load("vcr", os.path.join(SKILL, "scripts", "validate-client-request.py"))
-kcstig = load("kcstig", os.path.join(REPO, "keycloak-asd-stig", "scripts", "kcstig.py"))
 
 FAILS = []
 
@@ -140,43 +153,122 @@ def setup_realm(adm):
     return users
 
 
-def register_client(adm, users, port, auth, work):
-    """Dev client request -> validator -> operator client file -> kcstig.client_rep -> Keycloak."""
-    base = "http://localhost:%d" % port
-    cid = "e2e-%s-%d" % (auth.split("-")[1], port)
+class Operator:
+    """What the IdP operator holds: a profile, a clients.d directory and admin credentials for kcstig.py."""
+    def __init__(self, work, ca, password):
+        self.dir = os.path.join(work, "operator")
+        self.clients = os.path.join(self.dir, "clients.d")
+        os.makedirs(self.clients)
+        self.profile = os.path.join(self.dir, "profile.json")
+        with open(self.profile, "w") as f:
+            json.dump({"keycloak": {"url": KC}, "realm": {"name": REALM}}, f)
+        pw = os.path.join(self.dir, "admin-password")
+        fd = os.open(pw, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(password)
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("KC_")}
+        self.env.update(KC_ADMIN_USER="admin", KC_ADMIN_PASSWORD_FILE=pw, KC_CACERT=ca)
+
+    def add_client(self, req, *extra):
+        path = os.path.join(self.dir, "request-%s.json" % secrets.token_hex(4))
+        with open(path, "w") as f:
+            json.dump(req, f)
+        return subprocess.run([sys.executable, KCSTIG, "add-client", path, "--profile", self.profile,
+                               "--clients-dir", self.clients] + list(extra),
+                              capture_output=True, text=True, env=self.env, timeout=120)
+
+
+def dev_request(cid, base, auth):
     req = {"client_id": cid, "dev_request": True, "root_url": base,
            "redirect_uris": [base + "/oauth2/callback"], "post_logout_redirect_uris": [base + "/logged-out"],
            "backchannel_logout_url": base + "/oauth2/backchannel-logout", "auth": auth,
            "roles": ["viewer", "approver"], "contact": {"name": "E2E", "email": "e2e@example.test"}}
     if auth == "client-jwt":
         req["jwks_url"] = base + "/.well-known/jwks.json"
-    path = os.path.join(work, cid + "-request.json")
-    with open(path, "w") as f:
-        json.dump(req, f)
-    out = os.path.join(work, cid + "-client.json")
-    rc = vcr.main(["--quiet", "--emit-client", out, path])
-    check(rc == 0, "%s: dev client request validates" % cid)
-    with open(out) as f:
-        client = json.load(f)
+    return req
+
+
+def get_client(adm, cid):
+    found = [c for c in adm.call("GET", "/%s/clients?clientId=%s" % (REALM, cid)) if c["clientId"] == cid]
+    return found[0] if found else None
+
+
+def register_client(adm, op, users, port, auth, work):
+    """The operator registers the app with kcstig.py add-client, exactly as documented."""
+    base = "http://localhost:%d" % port
+    cid = "e2e-%s-%d" % (auth.split("-")[1], port)
+    req = dev_request(cid, base, auth)
+    secret_file = os.path.join(op.dir, cid + ".secret")
+    extra = ["--allow-dev"] + (["--secret-out", secret_file] if auth == "client-secret" else [])
+    r = op.add_client(req, *extra)
+    if not check(r.returncode == 0, "%s: kcstig.py add-client registers the dev request" % cid):
+        print(r.stdout + r.stderr)
+        raise SystemExit(1)
+    with open(os.path.join(op.clients, cid + ".json")) as f:
+        check(json.load(f) == vcr.to_client(req), "%s: add-client wrote clients.d/%s.json = the request's client" % (cid, cid))
+    c = get_client(adm, cid)
+    check(c["attributes"].get("stig.created-by") == "add-client", "%s: client carries the add-client ownership marker" % cid)
+    check(c["attributes"].get("pkce.code.challenge.method") == "S256" and not c["implicitFlowEnabled"]
+          and not c["directAccessGrantsEnabled"], "%s: PKCE S256 required, implicit and password grants off" % cid)
+    secret = None
+    if auth == "client-secret":
+        mode = os.stat(secret_file).st_mode & 0o777
+        with open(secret_file) as f:
+            secret = f.read().strip()
+        live = adm.call("GET", "/%s/clients/%s/client-secret" % (REALM, c["id"]))["value"]
+        check(mode == 0o600 and secret == live, "%s: --secret-out wrote the live secret, mode 0600" % cid)
+        check(secret not in r.stdout + r.stderr, "%s: add-client never prints the secret" % cid)
     # Test harness only: the container reaches the app through the Docker host, not localhost.
-    for k in ("jwks_url", "backchannel_logout_url"):
-        if k in client:
-            client[k] = client[k].replace("localhost", HOST_FROM_KC)
-    rep = kcstig.client_rep(client, {"sessions": {"admin_idle_minutes": 10}})
-    roles = rep.pop("_roles")
-    rep.setdefault("protocolMappers", []).append({
+    for k in ("jwks.url", "backchannel.logout.url"):
+        if k in c["attributes"]:
+            c["attributes"][k] = c["attributes"][k].replace("localhost", HOST_FROM_KC)
+    adm.call("PUT", "/%s/clients/%s" % (REALM, c["id"]), c)
+    # The hardened realm supplies previous_login (stig-claims scope + extension); simulate it here.
+    adm.call("POST", "/%s/clients/%s/protocol-mappers/models" % (REALM, c["id"]), {
         "name": "previous_login", "protocol": "openid-connect", "protocolMapper": "oidc-hardcoded-claim-mapper",
         "config": {"claim.name": "previous_login", "claim.value": "2026-01-01T00:00:00Z", "jsonType.label": "String",
                    "id.token.claim": "true", "access.token.claim": "false", "userinfo.token.claim": "true"}})
-    adm.call("POST", "/%s/clients" % REALM, rep)
-    kid = adm.call("GET", "/%s/clients?clientId=%s" % (REALM, cid))[0]["id"]
-    for role in roles:
-        adm.call("POST", "/%s/clients/%s/roles" % (REALM, kid), {"name": role})
     for user, rs in (("alice", ["viewer", "approver"]), ("bob", ["viewer"])):
-        reps = [adm.call("GET", "/%s/clients/%s/roles/%s" % (REALM, kid, r)) for r in rs]
-        adm.call("POST", "/%s/users/%s/role-mappings/clients/%s" % (REALM, users[user], kid), reps)
-    secret = adm.call("GET", "/%s/clients/%s/client-secret" % (REALM, kid))["value"] if auth == "client-secret" else None
+        reps = [adm.call("GET", "/%s/clients/%s/roles/%s" % (REALM, c["id"], role)) for role in rs]
+        adm.call("POST", "/%s/users/%s/role-mappings/clients/%s" % (REALM, users[user], c["id"]), reps)
     return cid, base, secret
+
+
+def operator_checks(adm, op):
+    """add-client's guards against the live Keycloak."""
+    print("== kcstig.py add-client guards", flush=True)
+    base = "http://localhost:3999"
+    # a client the operator made by hand
+    adm.call("POST", "/%s/clients" % REALM, {"clientId": "handmade-app", "protocol": "openid-connect",
+                                             "redirectUris": ["https://handmade.example.test/cb"]})
+    req = dev_request("handmade-app", base, "client-jwt")
+    r = op.add_client(req, "--allow-dev")
+    check(r.returncode != 0 and "not created by add-client" in r.stderr + r.stdout,
+          "add-client refuses to modify a client it did not create")
+    check(get_client(adm, "handmade-app")["redirectUris"] == ["https://handmade.example.test/cb"]
+          and not os.path.exists(os.path.join(op.clients, "handmade-app.json")), "... and changed nothing")
+    r = op.add_client(req, "--allow-dev", "--adopt", "handmade-app")
+    check(r.returncode == 0 and "WARNING add-client: adopting" in r.stderr, "--adopt takes it over, with a warning")
+    c = get_client(adm, "handmade-app")
+    check(c["attributes"].get("stig.created-by") == "add-client" and c["redirectUris"] == req["redirect_uris"],
+          "... marks it and applies the request")
+    r = op.add_client(req, "--allow-dev")
+    check(r.returncode == 0 and "updating" in r.stdout, "add-client is idempotent for its own client")
+    r = op.add_client(dict(req, client_id="handmade-app", dev_request=False), "--allow-dev")
+    check(r.returncode != 0, "a dev URL without dev_request is refused by the shared validator")
+    r = op.add_client(dict(req, client_id="admin-cli"), "--allow-dev")
+    check(r.returncode != 0 and "reserved" in r.stderr + r.stdout, "a reserved client_id is refused")
+    evil = os.path.join(op.clients, "zz-evil.json")
+    with open(evil, "w") as f:
+        json.dump({"client_id": "realm-management", "redirect_uris": ["https://x.example.test/cb"]}, f)
+    r = op.add_client(req, "--allow-dev")
+    check(r.returncode != 0 and "reserved" in r.stderr + r.stdout, "a clients.d file overriding a reserved id stops add-client")
+    r = subprocess.run([sys.executable, KCSTIG, "apply", "--profile", op.profile, "--clients-dir", op.clients],
+                       capture_output=True, text=True, env=op.env, timeout=120)
+    check(r.returncode != 0 and "reserved" in r.stderr + r.stdout, "... and stops kcstig.py apply")
+    os.unlink(evil)
+    r = op.add_client(dict(req, client_id="dev-only-app"))
+    check(r.returncode != 0 and "--allow-dev" in r.stderr + r.stdout, "a dev_request needs --allow-dev")
 
 
 def app_command(name):
@@ -214,9 +306,26 @@ def login(s, base, user):
     return final, q, hops + [r] + more
 
 
-def run_app(name, auth, adm, users, ca, work):
+def cookie_payload(value):
+    """Flask's signed cookie: base64 JSON (zlib-compressed when it starts with '.'), then timestamp and signature."""
+    comp = value.startswith(".")
+    seg = value.lstrip(".").split(".")[0]
+    data = base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4))
+    return json.loads(zlib.decompress(data) if comp else data)
+
+
+def post_logout(sess, base, origin):
+    headers = {"Origin": origin} if origin else {}
+    r = sess.post(base + "/logout", headers=headers, allow_redirects=False, timeout=15)
+    if r.status_code not in (301, 302, 303, 307, 308):
+        return r, [r]
+    final, hops = follow(sess, urljoin(base + "/logout", r.headers["Location"]))
+    return final, [r] + hops
+
+
+def run_app(name, auth, adm, op, users, ca, work):
     port = free_port()
-    cid, base, secret = register_client(adm, users, port, auth, work)
+    cid, base, secret = register_client(adm, op, users, port, auth, work)
     tag = "%s/%s" % (name, auth)
     print("== %s (client %s)" % (tag, cid), flush=True)
     envv = dict(os.environ, OIDC_ISSUER=ISSUER, OIDC_CLIENT_ID=cid, APP_BASE_URL=base, PORT=str(port),
@@ -257,6 +366,10 @@ def run_app(name, auth, adm, users, ca, work):
         ck = cookies[0] if cookies else ""
         check("HttpOnly" in ck and "SameSite=Lax" in ck and "Expires" not in ck and "Max-Age" not in ck,
               "%s: session cookie HttpOnly, SameSite=Lax, non-persistent (%s)" % (tag, ck.split(";")[0][:12] + "..."))
+        value = ck.split(";")[0].partition("=")[2]
+        check(0 < len(value) < 200, "%s: cookie is small - no tokens in it (%d chars)" % (tag, len(value)))
+        if name == "python":
+            check(set(cookie_payload(value)) == {"lsid"}, "%s: Flask cookie carries only the session id" % tag)
         def logged_in(sess):          # 200 without a redirect; a redirect to /logged-out is "no"
             return sess.get(base + "/me", allow_redirects=False).status_code == 200
 
@@ -290,9 +403,16 @@ def run_app(name, auth, adm, users, ca, work):
         s2.verify = ca
         login(s2, base, "alice")
         check(logged_in(s2), "%s: alice logs in again" % tag)
-        out, ohops = follow(s2, base + "/logout")
+        # logout CSRF: GET, no Origin/Referer, or a foreign Origin must not log anyone out
+        g = s2.get(base + "/logout", allow_redirects=False)
+        check(g.status_code in (404, 405) and logged_in(s2), "%s: GET /logout does nothing (%d)" % (tag, g.status_code))
+        r0, _ = post_logout(s2, base, None)
+        check(r0.status_code == 403 and logged_in(s2), "%s: POST /logout without Origin/Referer refused" % tag)
+        r1, _ = post_logout(s2, base, "https://evil.example.test")
+        check(r1.status_code == 403 and logged_in(s2), "%s: POST /logout from another origin refused" % tag)
+        out, ohops = post_logout(s2, base, base)
         check(any("/protocol/openid-connect/logout" in h.url and "id_token_hint=" in h.url for h in ohops)
-              and out.url == base + "/logged-out", "%s: logout goes through end_session with id_token_hint" % tag)
+              and out.url == base + "/logged-out", "%s: same-origin POST /logout goes through end_session with id_token_hint" % tag)
         check(not logged_in(s2), "%s: app session gone after logout" % tag)
         page, _ = follow(s2, base + "/login")
         check('id="kc-form-login"' in page.text, "%s: IdP asks for credentials again (SSO session ended)" % tag)
@@ -328,10 +448,12 @@ def main():
         ca = start_keycloak(work, password)
         adm = Admin(ca, password)
         users = setup_realm(adm)
+        op = Operator(work, ca, password)
+        operator_checks(adm, op)
         for name in apps:
             for auth in a.auth.split(","):
                 adm = Admin(ca, password)     # fresh admin token per run
-                run_app(name, auth, adm, users, ca, work)
+                run_app(name, auth, adm, op, users, ca, work)
     finally:
         if not a.keep:
             subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True)

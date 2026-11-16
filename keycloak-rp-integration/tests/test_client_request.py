@@ -11,6 +11,7 @@
   no implicit or password grant, the requested authenticator, JWKS URL, logout URLs and roles
 """
 import contextlib
+import subprocess
 import glob
 import importlib.util
 import io
@@ -27,6 +28,10 @@ EXAMPLE = os.path.join(SKILL, "assets", "client-request.example.json")
 SCHEMA = os.path.join(SKILL, "assets", "client-request.schema.json")
 VALID = sorted(glob.glob(os.path.join(HERE, "fixtures", "valid", "*.json"))) + [EXAMPLE]
 INVALID = sorted(glob.glob(os.path.join(HERE, "fixtures", "invalid", "*.json")))
+# Refused by the validator; JSON Schema cannot express these (secret-looking free text, duplicate keys, NaN).
+VALIDATOR_ONLY = sorted(glob.glob(os.path.join(HERE, "fixtures", "invalid-validator-only", "*.json")))
+# Valid, with warnings that --strict turns into failures (wildcard-DNS services, single-label hosts).
+STRICT_INVALID = sorted(glob.glob(os.path.join(HERE, "fixtures", "strict-invalid", "*.json")))
 KCSTIG = os.path.join(REPO, "keycloak-asd-stig", "scripts", "kcstig.py")
 
 
@@ -70,6 +75,47 @@ class Validator(unittest.TestCase):
                 rc, _, err = run_cli(f)
                 self.assertEqual(rc, 1, "accepted: " + err)
                 self.assertIn("ERROR ", err)
+
+    def test_validator_only_fixtures_fail(self):
+        self.assertGreaterEqual(len(VALIDATOR_ONLY), 5)
+        for f in VALIDATOR_ONLY:
+            with self.subTest(f=os.path.basename(f)):
+                rc, _, err = run_cli(f)
+                self.assertEqual(rc, 1, "accepted: " + err)
+
+    def test_duplicate_keys_refused(self):
+        rc, _, err = run_cli(os.path.join(HERE, "fixtures", "invalid-validator-only", "duplicate-client-id-key.json"))
+        self.assertEqual(rc, 1)
+        self.assertIn("duplicate key 'client_id'", err)
+
+    def test_warnings_fail_only_under_strict(self):
+        self.assertGreaterEqual(len(STRICT_INVALID), 3)
+        for f in STRICT_INVALID:
+            with self.subTest(f=os.path.basename(f)):
+                rc, _, err = run_cli(f)
+                self.assertEqual(rc, 0, err)
+                self.assertTrue("wildcard-DNS" in err or "single-label" in err, err)
+                self.assertEqual(run_cli("--strict", f)[0], 1)
+
+    def test_trailing_newlines_never_match(self):
+        ex = jload(EXAMPLE)
+        for field, value in (("client_id", "myapp-web\n"), ("client_id", "account\n"), ("client_id", "master-realm\n"),
+                             ("roles", ["viewer\n"]), ("roles", ["viewer\r\n"])):
+            with self.subTest(field=field, value=value):
+                self.assertTrue(vcr.validate(dict(ex, **{field: value})).errors)
+        self.assertTrue(vcr.validate(dict(ex, contact=dict(ex["contact"], email="a@example.mil\n"))).errors)
+        self.assertTrue(vcr.host_problem("myapp.example.mil\n"))
+
+    def test_notes_scanned_for_secrets(self):
+        ex = jload(EXAMPLE)
+        for notes in ("password: correct-horse", "api_key=abc123", "AKIAABCDEFGHIJKLMNOP",
+                      "ghp_abcdefghijklmnopqrstuvwxyz0123", "Zx9Kq2LmP7vR4tY8wN1aB3cD5eF6gH0j"):
+            with self.subTest(notes=notes):
+                self.assertTrue(any(e.startswith("notes") for e in vcr.validate(dict(ex, notes=notes)).errors))
+        for notes in ("The JWKS is served behind the internal proxy.", "Ticket 4411; contact the ops desk",
+                      "https://myapp.example.mil/oauth2/callback must stay exact"):
+            with self.subTest(notes=notes):
+                self.assertEqual(vcr.validate(dict(ex, notes=notes)).errors, [])
 
     def test_strict_turns_warnings_into_failure(self):
         rc, _, _ = run_cli("--strict", EXAMPLE)   # placeholder domain warning
@@ -219,6 +265,66 @@ class OperatorSide(unittest.TestCase):
                     self.assertEqual(at["jwks.url"], req["jwks_url"])
                 if req.get("privileged"):
                     self.assertEqual(at["client.session.idle.timeout"], str(p["sessions"]["admin_idle_minutes"] * 60))
+
+    def test_reserved_ids_agree(self):
+        self.assertEqual(vcr.RESERVED_CLIENT_IDS, self.kc.RESERVED_CLIENT_IDS)
+
+    def _profile_dir(self, d, clients):
+        prof = os.path.join(d, "profile.json")
+        with open(prof, "w") as f:
+            json.dump({"realm": {"name": "apps"}, "keycloak": {"url": "https://127.0.0.1:9"}}, f)
+        cdir = os.path.join(d, "clients.d")
+        os.mkdir(cdir)
+        for name, c in clients.items():
+            with open(os.path.join(cdir, name), "w") as f:
+                json.dump(c, f)
+        return prof, cdir
+
+    def test_load_profile_refuses_reserved_ids_in_clients_d(self):
+        for cid in ("admin-cli", "account", "master-realm", "Security-Admin-Console"):
+            with self.subTest(cid=cid), tempfile.TemporaryDirectory() as d:
+                prof, cdir = self._profile_dir(d, {"x.json": {"client_id": cid, "redirect_uris": ["https://a.example.mil/cb"]}})
+                with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()):
+                    self.kc.load_profile(prof, cdir)
+                self.assertIn("reserved", str(cm.exception.code))
+
+    def test_upsert_client_refuses_reserved_ids(self):
+        class NoCalls:
+            def api(self, *a, **k):
+                raise AssertionError("upsert_client called the admin API for a reserved id")
+        for cid in ("realm-management", "apps-realm"):
+            with self.subTest(cid=cid), self.assertRaises(SystemExit):
+                self.kc.upsert_client(NoCalls(), "apps", {"clientId": cid, "attributes": {}})
+
+    def _add_client(self, d, req, *extra, clients=None):
+        prof, cdir = self._profile_dir(d, clients or {})
+        rpath = os.path.join(d, "req.json")
+        with open(rpath, "w") as f:
+            json.dump(req, f) if isinstance(req, dict) else f.write(req)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("KC_")}   # no admin credentials: must stop first
+        return subprocess.run([sys.executable, KCSTIG, "add-client", rpath, "--profile", prof, "--clients-dir", cdir] +
+                              list(extra), capture_output=True, text=True, env=env, timeout=60), cdir
+
+    def test_add_client_refuses_before_touching_keycloak(self):
+        ex = jload(EXAMPLE)
+        dev = jload(os.path.join(HERE, "fixtures", "valid", "dev-localhost.json"))
+        cases = {
+            "invalid request": (dict(ex, redirect_uris=["https://myapp.example.mil/*"]), [], None, "request refused"),
+            "reserved id": (dict(ex, client_id="admin-cli"), [], None, "request refused"),
+            "trailing newline id": (dict(ex, client_id="account\n"), [], None, "request refused"),
+            "strict warnings": (ex, ["--strict"], None, "request refused"),
+            "dev without --allow-dev": (dev, [], None, "--allow-dev"),
+            "defined by another clients.d file": (ex, [], {"other.json": {"client_id": "myapp-web"}}, "already defined"),
+            "adopt mismatch": (ex, ["--adopt", "other-app"], None, "does not match"),
+            "duplicate keys": ('{"client_id": "myapp-web", "client_id": "admin-cli"}', [], None, "duplicate key"),
+        }
+        for name, (req, extra, clients, expect) in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as d:
+                r, cdir = self._add_client(d, req, *extra, clients=clients)
+                self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIn(expect, r.stdout + r.stderr)
+                self.assertNotIn("Set KC_CLIENT_ID", r.stdout + r.stderr)       # stopped before any login attempt
+                self.assertFalse(os.path.exists(os.path.join(cdir, "%s.json" % ex["client_id"])))
 
     def test_client_fields_are_operator_keys(self):
         self.assertTrue(set(vcr.CLIENT_FIELDS) <= self.kc.CLIENT_KEYS, set(vcr.CLIENT_FIELDS) - self.kc.CLIENT_KEYS)

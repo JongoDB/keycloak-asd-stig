@@ -1,8 +1,9 @@
 # What to send your IdP operator, and what comes back
 
 The operator runs the STIG-hardened Keycloak. They register your client from one file, `client-request.json`,
-using the IdP skill's `add-client` step, which applies the same rules as `scripts/validate-client-request.py`.
-Validate before sending, so the request registers on the first try.
+with the IdP skill's `kcstig.py add-client`. That command imports `scripts/validate-client-request.py` (the same
+rules, not a copy), so validate before sending and the request registers on the first try. The operator section at
+the end describes their side.
 
 ## Send
 
@@ -54,6 +55,34 @@ Validate before sending, so the request registers on the first try.
 4. **The STIG split you are claiming** (optional, but it speeds up the ATO conversation): which rules you will
    mark as inherited (`stig-inheritance.md`). Ask the operator to confirm against their realm.
 
+## The operator's side (for the IdP team)
+
+Treat the file you received as untrusted input, even from a known team. Check **the file you received**, not the
+one they say they sent:
+
+```bash
+python3 keycloak-rp-integration/scripts/validate-client-request.py --strict client-request.json   # read every line
+python3 keycloak-rp-integration/scripts/validate-client-request.py client-request.json --emit-client -   # what will be registered
+python3 keycloak-asd-stig/scripts/kcstig.py add-client client-request.json \
+    --profile profile.json --clients-dir clients.d [--strict] [--secret-out /secure/path/<client_id>.secret]
+```
+
+`add-client`, from a checkout of this repository (it finds the validator in `keycloak-rp-integration/` beside the
+IdP skill, or `--validator` / `KCSTIG_RP_VALIDATOR`):
+
+- refuses the request on any validator error (or warning, with `--strict`), and refuses a `dev_request` unless you
+  pass `--allow-dev` (non-production realms only);
+- refuses reserved ids (`account`, `account-console`, `admin-cli`, `broker`, `realm-management`,
+  `security-admin-console`, `*-realm`). `kcstig.py apply`, `render` and `verify` also refuse a profile or clients.d
+  file that defines one;
+- refuses to modify a client that it did not create (the client attribute `stig.created-by=add-client` marks its
+  own), and refuses an id another clients.d file or the profile already defines. `--adopt <client_id>` takes over a
+  client you already manage, with a warning;
+- applies the client through the admin API (idempotent: rerun it for a changed request) and writes
+  `clients.d/<client_id>.json`, so later `apply` runs keep it;
+- with `client-secret`, writes the secret only to `--secret-out` (created 0600, never printed). Deliver it as
+  described below, then delete that file.
+
 ## Receive
 
 | Item | How | Use it as |
@@ -91,4 +120,5 @@ A client secret is a password for your application. Treat it like one:
 2. Log in as a test user with each role; check the 403 path, log off, back-channel logout (ask the operator to
    sign the test user out at the IdP) and the idle timeout. `tests/e2e/run_e2e.py` shows these checks in code.
 3. Any change (new redirect URI, new role, key move) is a new, validated `client-request.json` with the same
-   `client_id`. The operator replaces the registration with it. `add-client` updates only clients it created.
+   `client_id`. The operator reruns `add-client` with it. `add-client` updates only clients it created. Roles you drop from the
+   request are not deleted automatically; ask the operator to remove them.

@@ -1,6 +1,7 @@
 // Minimal OIDC relying party for an ASD STIG-hardened Keycloak: net/http + coreos/go-oidc v3 + x/oauth2.
 // Authorization code + PKCE S256 + nonce, private_key_jwt (or a client secret read from a file), roles from the
-// access token, 15-minute local idle / 8-hour absolute session, RP-initiated and back-channel logout.
+// access token, 15-minute local idle / 8-hour absolute session, RP-initiated logout (POST, same-origin only) and
+// back-channel logout. Sessions are server-side; the cookie carries only the session id.
 // Configuration (env): see ../README.md.
 package main
 
@@ -30,7 +31,10 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const bclEvent = "http://schemas.openid.net/event/backchannel-logout"
+const (
+	bclEvent   = "http://schemas.openid.net/event/backchannel-logout"
+	pendingTTL = 10 * time.Minute // an unfinished login expires after 10 minutes
+)
 
 type session struct {
 	Sub, Sid, Username, PreviousLogin, IDToken string
@@ -41,7 +45,8 @@ type session struct {
 }
 
 type rp struct {
-	clientID, base, cookie string
+	clientID, base, cookie, origin string
+	maxSessions                    int
 	secure                 bool
 	idle, maxAge           time.Duration
 	oauth                  oauth2.Config
@@ -126,6 +131,10 @@ func main() {
 	a := &rp{clientID: clientID, base: base, secure: strings.HasPrefix(base, "https://"),
 		idle: time.Duration(idleMin * float64(time.Minute)), maxAge: time.Duration(maxH * float64(time.Hour)),
 		endSession: meta.EndSession, ctx: ctx, sessions: map[string]*session{}}
+	a.origin = originOf(base)
+	if a.maxSessions, err = strconv.Atoi(env("MAX_SESSIONS", "10000")); err != nil || a.maxSessions < 1 {
+		log.Fatal("MAX_SESSIONS: must be a positive integer")
+	}
 	a.cookie = "sid"
 	if a.secure {
 		a.cookie = "__Host-sid"
@@ -172,7 +181,7 @@ func main() {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if _, s := a.current(w, r); s != nil && s.Sub != "" {
-			w.Write([]byte(`<a href="/me">me</a> <a href="/logout">Log off</a>`))
+			w.Write([]byte(`<a href="/me">me</a> <form method="post" action="/logout" style="display:inline"><button>Log off</button></form>`))
 			return
 		}
 		w.Write([]byte(`<a href="/login">Log in</a>`))
@@ -186,7 +195,7 @@ func main() {
 	mux.HandleFunc("GET /approve", a.require("approver", func(w http.ResponseWriter, r *http.Request, s *session) {
 		writeJSON(w, 200, map[string]any{"ok": true})
 	}))
-	mux.HandleFunc("GET /logout", a.logout)
+	mux.HandleFunc("POST /logout", a.logout)
 	mux.HandleFunc("GET /logged-out", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("You have been logged off. Close the browser to end any remaining sessions."))
 	})
@@ -196,9 +205,44 @@ func main() {
 	})
 	// TRUST_PROXY: this app builds every URL from APP_BASE_URL, so forwarded headers are never read. Behind a
 	// proxy, set APP_BASE_URL to the public URL; use X-Forwarded-For for audit only when TRUST_PROXY=1.
+	go func() { // expire abandoned logins and sessions nobody returns to
+		for range time.Tick(time.Minute) {
+			a.mu.Lock()
+			for id, s := range a.sessions {
+				if a.expired(s, time.Now()) {
+					delete(a.sessions, id)
+				}
+			}
+			a.mu.Unlock()
+		}
+	}()
 	srv := &http.Server{Addr: env("HOST", "127.0.0.1") + ":" + env("PORT", "3000"), Handler: mux,
 		ReadHeaderTimeout: 10 * time.Second}
 	log.Fatal(srv.ListenAndServe())
+}
+
+func originOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// sameOrigin is the CSRF check for state-changing requests: Origin (or Referer) must be this app's origin.
+func (a *rp) sameOrigin(r *http.Request) bool {
+	src := r.Header.Get("Origin")
+	if src == "" {
+		src = r.Header.Get("Referer")
+	}
+	return src != "" && src != "null" && originOf(src) == a.origin
+}
+
+func (a *rp) expired(s *session, now time.Time) bool {
+	if s.Sub == "" {
+		return now.Sub(s.LastSeen) > pendingTTL
+	}
+	return now.Sub(s.LastSeen) > a.idle || now.Sub(s.LoginAt) > a.maxAge
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -228,7 +272,7 @@ func (a *rp) current(w http.ResponseWriter, r *http.Request) (string, *session) 
 		return "", nil
 	}
 	now := time.Now()
-	if s.Sub != "" && (now.Sub(s.LastSeen) > a.idle || now.Sub(s.LoginAt) > a.maxAge) {
+	if s.Sub != "" && a.expired(s, now) {
 		delete(a.sessions, c.Value)
 		a.setCookie(w, "", true)
 		audit("session_timeout", map[string]any{"user": s.Sub, "sid": s.Sid})
@@ -258,9 +302,14 @@ func (a *rp) login(w http.ResponseWriter, r *http.Request) {
 	id := randString()
 	a.mu.Lock()
 	for k, p := range a.sessions { // drop abandoned logins
-		if p.Sub == "" && time.Since(p.LastSeen) > 10*time.Minute {
+		if p.Sub == "" && a.expired(p, time.Now()) {
 			delete(a.sessions, k)
 		}
+	}
+	if len(a.sessions) >= a.maxSessions {
+		a.mu.Unlock()
+		http.Error(w, "Too many sign-ins in progress. Try again shortly.", http.StatusServiceUnavailable)
+		return
 	}
 	a.sessions[id] = s
 	a.mu.Unlock()
@@ -345,6 +394,11 @@ func (a *rp) callback(w http.ResponseWriter, r *http.Request) {
 		IDToken: rawID, Roles: at.ResourceAccess[a.clientID].Roles, LoginAt: now, LastSeen: now}
 	id := randString()
 	a.mu.Lock()
+	if len(a.sessions) >= a.maxSessions {
+		a.mu.Unlock()
+		http.Error(w, "Too many sessions. Try again shortly.", http.StatusServiceUnavailable)
+		return
+	}
 	a.sessions[id] = ns
 	a.mu.Unlock()
 	a.setCookie(w, id, false)
@@ -353,10 +407,14 @@ func (a *rp) callback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *rp) logout(w http.ResponseWriter, r *http.Request) {
+	if !a.sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin logout refused"})
+		return
+	}
 	id, s := a.current(w, r)
 	a.setCookie(w, "", true)
 	if s == nil || s.IDToken == "" {
-		http.Redirect(w, r, "/logged-out", http.StatusFound)
+		http.Redirect(w, r, "/logged-out", http.StatusSeeOther)
 		return
 	}
 	a.mu.Lock()
@@ -364,31 +422,52 @@ func (a *rp) logout(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	audit("logout", map[string]any{"user": s.Sub})
 	q := url.Values{"id_token_hint": {s.IDToken}, "post_logout_redirect_uri": {a.base + "/logged-out"}}
-	http.Redirect(w, r, a.endSession+"?"+q.Encode(), http.StatusFound)
+	http.Redirect(w, r, a.endSession+"?"+q.Encode(), http.StatusSeeOther)
+}
+
+// headerTyp returns the JOSE header's typ (the signature is checked separately, on the same bytes).
+func headerTyp(raw string) string {
+	seg, _, _ := strings.Cut(raw, ".")
+	b, err := base64.RawURLEncoding.DecodeString(seg)
+	if err != nil {
+		return ""
+	}
+	var h struct {
+		Typ string `json:"typ"`
+	}
+	if json.Unmarshal(b, &h) != nil {
+		return ""
+	}
+	return h.Typ
 }
 
 func (a *rp) backchannelLogout(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	bad := func() { writeJSON(w, 400, map[string]string{"error": "invalid_request"}) }
-	lt, err := a.logoutVerifier.Verify(r.Context(), r.PostFormValue("logout_token")) // sig, iss, aud, exp
-	if err != nil {
+	raw := r.PostFormValue("logout_token")
+	lt, err := a.logoutVerifier.Verify(r.Context(), raw) // sig, iss, aud, exp
+	if err != nil || headerTyp(raw) != "logout+jwt" {
 		bad()
 		return
 	}
 	var c struct {
 		Sid    string                     `json:"sid"`
+		Typ    *string                    `json:"typ"`
 		Nonce  *string                    `json:"nonce"`
 		Events map[string]json.RawMessage `json:"events"`
 	}
+	now := time.Now()
 	if err := lt.Claims(&c); err != nil || c.Events[bclEvent] == nil || c.Nonce != nil ||
-		(c.Sid == "" && lt.Subject == "") || time.Since(lt.IssuedAt) > 2*time.Minute {
+		(c.Typ != nil && *c.Typ != "Logout") || (c.Sid == "" && lt.Subject == "") ||
+		lt.IssuedAt.After(now.Add(time.Minute)) || now.Sub(lt.IssuedAt) > 2*time.Minute {
 		bad()
 		return
 	}
 	n := 0
 	a.mu.Lock()
 	for id, s := range a.sessions {
-		if c.Sid != "" && s.Sid == c.Sid {
+		// sid names one IdP session; a token with only sub ends every session of that user.
+		if (c.Sid != "" && s.Sid == c.Sid) || (c.Sid == "" && s.Sub != "" && s.Sub == lt.Subject) {
 			delete(a.sessions, id)
 			n++
 		}

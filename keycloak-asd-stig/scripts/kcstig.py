@@ -8,6 +8,8 @@ Standard library only (Python 3.9+).
   kcstig.py verify  --profile p.json [--out reports/]         # check live config -> report.md, results.json, .ckl, .cklb
   kcstig.py lookup  V-222432 | --grep "session"               # show STIG text + how this skill handles it
   kcstig.py inherit --profile p.json [--out reports/]         # control-inheritance statement for a relying application
+  kcstig.py add-client request.json --profile p.json --clients-dir clients.d [--adopt ID] [--secret-out FILE]
+                                                              # register one app from its client-request.json
 
 Admin credentials come from the environment, never the profile:
   KC_CLIENT_ID + KC_CLIENT_SECRET   (service account, preferred; created by apply --harden-master)
@@ -82,6 +84,17 @@ STIG_LIMITS = [
     (("accounts", "temp_hours"), lambda v: v <= 72, "V-222409 requires <= 72"),
     (("x509", "crl"), lambda v: v is True, "V-222553 requires a local CRL cache"),
 ]
+# Keycloak's built-in clients, and the per-realm admin clients of the master realm (<realm>-realm). No profile,
+# clients.d file or client request may define one: doing so would overwrite part of the IdP itself.
+# keycloak-rp-integration/scripts/validate-client-request.py refuses the same ids (a test keeps the lists equal).
+RESERVED_CLIENT_IDS = {"account", "account-console", "admin-cli", "broker", "realm-management", "security-admin-console"}
+# add-client marks the clients it creates; it modifies no client without this marker (unless --adopt).
+OWNER_ATTR, OWNER_VALUE = "stig.created-by", "add-client"
+
+def reserved_client_id(cid):
+    c = str(cid).strip().lower()
+    return c in RESERVED_CLIENT_IDS or c.endswith("-realm")
+
 CLIENT_KEYS = {"client_id", "type", "name", "root_url", "redirect_uris", "privileged", "post_logout_redirect_uris",
                "backchannel_logout_url", "web_origins", "auth", "jwks_url", "subject_dn", "service_account",
                "standard_flow", "par", "acs_url", "slo_url", "signing_cert", "encryption_cert", "roles"}
@@ -131,6 +144,10 @@ def load_profile(path, clients_dir=None):
             for c in (obj if isinstance(obj, list) else [obj]):
                 byid[c["client_id"]] = c
         raw["clients"] = list(byid.values())
+    for c in raw.get("clients", []):
+        if reserved_client_id(c.get("client_id", "")):
+            sys.exit("clients: %r is reserved for Keycloak's own clients (%s and any *-realm) - refusing to load a profile "
+                     "or clients.d file that would overwrite it" % (c.get("client_id"), ", ".join(sorted(RESERVED_CLIENT_IDS))))
     p = deep_merge(DEFAULTS, raw)
     check_profile(raw, p)
     if p["auth_mode"] not in ("cac", "cac_or_mfa", "mfa"):
@@ -723,6 +740,8 @@ def ensure_stig_claims_scope(kc, realm):
     return sid
 
 def upsert_client(kc, realm, rep, stig_scope_id=None):
+    if reserved_client_id(rep.get("clientId", "")):
+        sys.exit("client %r is reserved for Keycloak's own clients - refusing to create or update it" % rep.get("clientId"))
     rr = "/realms/%s" % q(realm)
     rep = dict(rep); roles = rep.pop("_roles", [])
     found = kc.api("GET", rr + "/clients?clientId=%s" % q(rep["clientId"]))
@@ -935,6 +954,131 @@ def cmd_apply(a):
     if a.harden_master:
         harden_admin_realm(kc, p, caps, rendered, a.secret_out, a.remove_bootstrap_admin, a.automation_secret_file)
     print("done. Next: kcstig.py verify --profile %s" % a.profile)
+
+# --------------------------------------------------------------------------------------------
+# add-client: register one relying party from its client-request.json (keycloak-rp-integration)
+# --------------------------------------------------------------------------------------------
+def load_rp_validator(path=None):
+    """Import (never copy) the relying-party validator, so the app side and this side apply the same rules."""
+    cands = [path, os.environ.get("KCSTIG_RP_VALIDATOR"),
+             os.path.join(os.path.dirname(SKILL), "keycloak-rp-integration", "scripts", "validate-client-request.py")]
+    for c in cands:
+        if c and os.path.isfile(c):
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("validate_client_request", c)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            for fn in ("validate", "load_request", "to_client"):
+                if not hasattr(mod, fn):
+                    sys.exit("add-client: %s has no %s() - use the validator from the same keycloak-asd-stig checkout" % (c, fn))
+            return mod
+    sys.exit("add-client: the request validator was not found. It ships in keycloak-rp-integration/ next to this skill "
+             "(github.com/JongoDB/keycloak-asd-stig); pass --validator <path to validate-client-request.py> or set "
+             "KCSTIG_RP_VALIDATOR. add-client refuses to register a request it cannot validate.")
+
+def write_private(path, text):
+    """Create or replace a file readable only by its owner (0600), without a window in which it is wider."""
+    d = os.path.dirname(os.path.abspath(path))
+    tmp = os.path.join(d, ".%s.%s.tmp" % (os.path.basename(path), uuid.uuid4().hex))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+def cmd_add_client(a):
+    v = load_rp_validator(a.validator)
+    try:
+        req = v.load_request(a.request)
+    except (OSError, ValueError) as e:
+        sys.exit("add-client: cannot read %s: %s" % (a.request, e))
+    res = v.validate(req)
+    for w in res.warnings:
+        print("WARNING request: " + w, file=sys.stderr)
+    for e in res.errors:
+        print("ERROR request: " + e, file=sys.stderr)
+    if res.errors or (a.strict and res.warnings):
+        sys.exit("add-client: request refused (%d error(s), %d warning(s)%s) - nothing changed" % (
+            len(res.errors), len(res.warnings), ", --strict" if a.strict else ""))
+    if req.get("dev_request") and not a.allow_dev:
+        sys.exit("add-client: this is a dev_request (localhost URLs). Register it only in a non-production realm, "
+                 "and say so with --allow-dev - nothing changed")
+    client = v.to_client(req)
+    cid = client["client_id"]
+    if reserved_client_id(cid):      # the validator refuses these too; checked again on this side on purpose
+        sys.exit("add-client: %r is reserved for Keycloak's own clients - nothing changed" % cid)
+    if a.adopt and a.adopt != cid:
+        sys.exit("add-client: --adopt %r does not match the request's client_id %r - nothing changed" % (a.adopt, cid))
+    clients_dir = a.clients_dir or os.environ.get("STIG_CLIENTS_DIR")
+    if not clients_dir or not os.path.isdir(clients_dir):
+        sys.exit("add-client: --clients-dir (or STIG_CLIENTS_DIR) must name the existing clients.d directory")
+    target = os.path.join(clients_dir, cid + ".json")
+    # The same id defined anywhere else in the configuration belongs to someone else.
+    with open(a.profile) as f:
+        raw = json.load(f)
+    others = ["profile %s" % a.profile] if any(c.get("client_id") == cid for c in raw.get("clients", [])) else []
+    for fpath in sorted(glob.glob(os.path.join(clients_dir, "*.json"))):
+        if os.path.abspath(fpath) == os.path.abspath(target):
+            continue
+        with open(fpath) as f:
+            obj = json.load(f)
+        if any(c.get("client_id") == cid for c in (obj if isinstance(obj, list) else [obj])):
+            others.append(fpath)
+    if others and a.adopt != cid:
+        sys.exit("add-client: client %r is already defined by %s - refusing to override it (use --adopt %s only if "
+                 "this request replaces that definition, then remove it there)" % (cid, ", ".join(others), cid))
+    p = load_profile(a.profile, clients_dir)
+    realm = p["realm"]["name"]
+    kc = KC(a.url or p["keycloak"]["url"], p["keycloak"]["admin_realm"], os.environ.get("KC_CACERT"))
+    rr = "/realms/%s" % q(realm)
+    if kc.api("GET", rr, ok404=True) is None:
+        sys.exit("add-client: realm %s does not exist - run kcstig.py apply first" % realm)
+    found = kc.api("GET", rr + "/clients?clientId=%s" % q(cid)) or []
+    found = [c for c in found if c.get("clientId") == cid]
+    if found:
+        owner = (found[0].get("attributes") or {}).get(OWNER_ATTR)
+        if owner == OWNER_VALUE:
+            print("client %s exists and was created by add-client: updating" % cid)
+        elif a.adopt == cid:
+            print("WARNING add-client: adopting existing client %s, which add-client did not create (%s=%r). Its "
+                  "settings are replaced by this request and it is marked as add-client's from now on." % (
+                      cid, OWNER_ATTR, owner), file=sys.stderr)
+        else:
+            sys.exit("add-client: client %r already exists in realm %s and was not created by add-client (%s=%r). "
+                     "Refusing to modify it. If the operator manages it and this request is meant to replace its "
+                     "settings, rerun with --adopt %s - nothing changed" % (cid, realm, OWNER_ATTR, owner, cid))
+    rep = client_rep(client, p)
+    rep["attributes"][OWNER_ATTR] = OWNER_VALUE
+    sid = ensure_stig_claims_scope(kc, realm)
+    uuid_ = upsert_client(kc, realm, rep, sid)
+    os.makedirs(clients_dir, exist_ok=True)
+    tmp = target + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(client, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, target)
+    print("wrote %s" % target)
+    if client.get("auth") == "client-secret":
+        if a.secret_out:
+            sec = (kc.api("GET", rr + "/clients/%s/client-secret" % uuid_) or {}).get("value")
+            if not sec:
+                sec = (kc.api("POST", rr + "/clients/%s/client-secret" % uuid_) or {}).get("value")
+            if not sec:
+                sys.exit("add-client: Keycloak returned no client secret for %s" % cid)
+            write_private(a.secret_out, sec + "\n")
+            print("client secret written to %s (mode 0600). Deliver it out of band - never by chat or email - and "
+                  "delete this copy once delivered." % a.secret_out)
+        else:
+            print("client secret not exported. Rerun with --secret-out <file> (written 0600, never printed), or let "
+                  "the app team's secret store receive it directly.")
+    elif a.secret_out:
+        print("WARNING add-client: --secret-out ignored: client-jwt clients have no secret", file=sys.stderr)
+    print("done. Tell the app team: issuer %s/realms/%s (give them the public URL), client_id %s, the IdP CA bundle, "
+          "and the realm's session limits. Then: kcstig.py inherit --profile %s --app %s" % (
+              p["keycloak"]["url"].rstrip("/"), realm, cid, a.profile, cid))
 
 def cmd_render(a):
     p = load_profile(a.profile, getattr(a, 'clients_dir', None))
@@ -2138,6 +2282,17 @@ def main():
     l.add_argument("--brief", action="store_true"); l.set_defaults(fn=cmd_lookup)
     i = sub.add_parser("inherit"); i.add_argument("--profile", required=True); i.add_argument("--app"); i.add_argument("--out", default="reports")
     i.add_argument("--clients-dir", help="directory of per-service client *.json files (or STIG_CLIENTS_DIR)"); i.set_defaults(fn=cmd_inherit)
+    ac = sub.add_parser("add-client", help="register one relying party from its client-request.json (validated with "
+                        "keycloak-rp-integration's rules; refuses reserved ids and clients it did not create)")
+    ac.add_argument("request", help="client-request.json from the app team")
+    ac.add_argument("--profile", required=True); ac.add_argument("--url")
+    ac.add_argument("--clients-dir", help="clients.d directory to write <client_id>.json into (or STIG_CLIENTS_DIR)")
+    ac.add_argument("--adopt", metavar="CLIENT_ID", help="take over an existing client that add-client did not create")
+    ac.add_argument("--allow-dev", action="store_true", help="accept a dev_request (localhost URLs): non-production realms only")
+    ac.add_argument("--strict", action="store_true", help="refuse on validator warnings too")
+    ac.add_argument("--secret-out", metavar="FILE", help="client-secret only: write the secret here (mode 0600); it is never printed")
+    ac.add_argument("--validator", help="path to validate-client-request.py (default: keycloak-rp-integration/ beside this skill)")
+    ac.set_defaults(fn=cmd_add_client)
     asx = sub.add_parser("assess", help="offline: run the verify checks against realm export JSON")
     asx.add_argument("--export", required=True, help="realm export (Admin console > Realm settings > Partial export, or kc.sh export)")
     asx.add_argument("--admin-export", action="append", help="export of the admin realm (master) for the admin checks")
