@@ -155,6 +155,18 @@ for _ in range(4):
 signin("a counter that went backwards (a cloned authenticator): refused", False, a, "button", counter=1)
 other = S.Authenticator("ES256", workdir=A.dir); other.user_handle = a.user_handle
 signin("a device without the credential: refused", False, other, "button")
+t_attr = int(time.time())
+signin("(attribution) a bad signature", False, a, "button", bad_signature=True)
+signin("(attribution) a device without the credential, claiming the account", False, other, "button")
+signin("(attribution) a passkey nobody here holds", False, S.Authenticator("ES256", workdir=A.dir), "button")
+time.sleep(2)
+fl_logs = [l[l.find("STIG-PASSKEY-FAILURE"):][:l[l.find("STIG-PASSKEY-FAILURE"):].find('"')] for l in logs(t_attr).splitlines()
+           if "STIG-PASSKEY-FAILURE" in l]
+check("a failed passkey assertion is attributed: the targeted account, and its own credential",
+      any(("user=%s " % name) in l and "credential=this-account" in l and "bad-signature" in l for l in fl_logs), fl_logs)
+check("... a credential claiming the account but not one of its passkeys is told apart",
+      any(("user=%s " % name) in l and "credential=not-this-account" in l for l in fl_logs), fl_logs)
+check("... a passkey that names no account here is logged without a user", any("user=- " in l and "credential=unknown(" in l for l in fl_logs), fl_logs)
 signin("a username alone: no code (it stays on the passkey step)", False, a, "username-only", name)
 bf = kc.api("GET", RR + "/attack-detection/brute-force/users/%s" % uid)
 check("failed passkey assertions do not count towards the lockout (AC-7 rationale recorded)", bf.get("numFailures") == 0 and not bf.get("disabled"), bf)
