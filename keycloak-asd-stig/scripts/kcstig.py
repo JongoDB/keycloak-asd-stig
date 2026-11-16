@@ -1151,14 +1151,23 @@ class Checker:
             ocsp = c.get("x509-cert-auth.ocsp-checking-enabled") == "true"
             crl = c.get("x509-cert-auth.crl-checking-enabled") == "true"
             fo = c.get("x509-cert-auth.ocsp-fail-open") == "true"
-            ok = (ocsp or crl) and (not fo or crl) and c.get("x509-cert-auth.timestamp-validation-enabled") == "true"
+            # a stale local CRL must refuse the sign-in (fail closed), not be used past its nextUpdate
+            stale_closed = c.get("x509-cert-auth-crl-abort-if-non-updated") == "true"
+            ok = (ocsp or crl) and (not fo or crl) and (not crl or stale_closed) \
+                and c.get("x509-cert-auth.timestamp-validation-enabled") == "true"
+            # stig-x509-client-username-form with local CRL files checks the issuing CA's CRL only (IssuerCrlCheck);
+            # Keycloak's own form re-verifies every listed CRL on every sign-in. Both are fail-closed; scope is reported.
+            scope = ("issuer" if xe[0].get("providerId") == "stig-x509-client-username-form" and crl
+                     and c.get("x509-cert-auth.crldp-checking-enabled") != "true"
+                     and not any(f.startswith(("http", "ldap")) for f in (c.get("x509-cert-auth.crl-relative-path") or "").split("##"))
+                     else "all" if crl else "-")
             pins = [x for x in (c.get("x509-cert-auth.casubjectdn") or "").split("##") if x]
             self.res("flow.x509_anchor_pinned", True if pins else "manual",
                      ("trust anchors pinned: %s" % pins) if pins else
                      "x509.ca_subject_dns empty: any anchor in Keycloak's truststore (incl. the JVM public CAs when a proxy forwards the cert) "
                      "can issue login certs. Pin the DoD root DNs (Keycloak also logs this empty setting as deprecated).")
-            self.res("flow.x509_revocation", ok, "ocsp=%s crl=%s(%s) ocsp-fail-open=%s timestamp=%s keyusage=%s policies=%s" % (
-                ocsp, crl, c.get("x509-cert-auth.crl-relative-path"), fo, c.get("x509-cert-auth.timestamp-validation-enabled"),
+            self.res("flow.x509_revocation", ok, "ocsp=%s crl=%s(%s) crl-scope=%s stale-crl-refuses=%s ocsp-fail-open=%s timestamp=%s keyusage=%s policies=%s" % (
+                ocsp, crl, c.get("x509-cert-auth.crl-relative-path"), scope, stale_closed, fo, c.get("x509-cert-auth.timestamp-validation-enabled"),
                 c.get("x509-cert-auth.keyusage"), c.get("x509-cert-auth.certificate-policy")))
         else:
             self.res("flow.x509_revocation", False if self.p["auth_mode"] != "mfa" else "manual",

@@ -13,7 +13,9 @@
    - checks revocation: **CRL from the local cache** (`x509-cert-auth.crl-relative-path`, files under
      `/opt/keycloak/conf/crl`, `##`-separated) **and** OCSP (AIA URL or `ocsp_responder_uri`). Both run on
      every login; `ocsp-fail-open` is set only when CRL checking is on, so an unreachable responder never
-     skips revocation (V-222553). `x509-cert-auth-crl-abort-if-non-updated=true` refuses stale CRLs;
+     skips revocation (V-222553). `x509-cert-auth-crl-abort-if-non-updated=true` refuses stale CRLs. With
+     `stig-x509-client-username-form` (stig-extensions.jar) the CRL step consults **only the issuing CA's CRL**
+     and verifies a CRL's signature once per file version, not on every login (see "Card login latency" below);
    - extracts the **UPN from SAN otherName** (`1234567890@mil` = EDIPI@mil) and finds the ONE user whose
      admin-only attribute `cac_upn` equals it. Users cannot edit that attribute (user profile permissions
      edit=[admin]), so nobody can map someone else's card to their account (V-222552, V-222522).
@@ -69,6 +71,22 @@ spi-x509cert-lookup--nginx--certificate-chain-length=10
 spi-x509cert-lookup--nginx--trust-proxy-verification=false   # keep false: Keycloak re-validates
 ```
 Strip any client-supplied copy of that header at the proxy, and restrict Keycloak's port to the proxy only.
+
+## Card login latency: only the issuing CA's CRL is checked (stig-extensions)
+Keycloak 26.8.2 caches parsed CRLs, but `CertificateValidator.checkRevocationStatusUsingCRL` runs `CRLUtils.check`
+on **every** configured CRL on **every** login, and `CRLUtils.check` re-verifies each CRL's signature. In strict
+FIPS (BC-FIPS, pure Java) that re-encodes and hashes all ~140 MB of DoD CRLs per login: 5.1-6.1 s on a 2.6 GHz
+Xeon (measured: 5.1 s signature checks + 0.4 s `isRevoked` scans), although only the issuing CA's CRL can list the card.
+
+`stig-x509-client-username-form` replaces that one step (`IssuerCrlCheck`): same files, same signer rule (chain,
+then truststore), same `crl-abort-if-non-updated`, same `isRevoked`, and any unreadable configured CRL still refuses
+every login; but only the CRL(s) whose issuer is the card's issuer are consulted, and a CRL's signature is verified
+once per file version (inode, size, mtime) and signer key. A card whose issuer has **no** CRL in the list is refused
+(`STIG-CRL-NO-ISSUER-CRL`; Keycloak's form lets it through with no CRL evidence). Measured on the same Xeon: about
+0.06 s per login; the first login of each CA after a CRL refresh also verifies that CA's CRL (up to 0.85 s for the
+23 MB ID CA-70/71/72 CRLs). Everything else (trust, dates, key usage, policy, CA pins, OCSP) is Keycloak's validator,
+unchanged. CRL distribution points and http/ldap CRL paths are left to Keycloak's own code. Because the check re-reads
+a file whose version changed, a refreshed CRL is used by the next login even before `clear-crl-cache` runs.
 
 ## Keycloak caches CRLs until their nextUpdate (verified 26.8.2)
 Keycloak's CRL storage keeps each loaded CRL until the CRL's own `nextUpdate` (`cacheTime` only extends it),

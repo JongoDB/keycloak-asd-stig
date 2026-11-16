@@ -104,10 +104,12 @@ protection and logout are cluster-wide.
 |---|---|---|
 | Idle, test PKI | ~0.6 GiB | 0.03-0.1 s |
 | 18 CRLs (DoD ID + derived PIV, ~140 MB, 600k entries/CA), non-FIPS | ~4.9 GiB | first 7.7 s, then 0.14 s |
-| same, strict FIPS (BC-FIPS pure Java) | ~3.5-3.9 GiB | first 10-11 s, then **4.3-5.3 s every login** |
+| same, strict FIPS (BC-FIPS pure Java), Keycloak's `auth-x509-client-username-form` | ~3.5-3.9 GiB | first 10-11 s, then **4.3-5.3 s every login** |
+| same, strict FIPS, `stig-x509-client-username-form` (issuer-scoped CRL check) | lower (only used CRLs are expanded) | first login per CA after a CRL refresh <= ~1 s extra, then **~0.06 s** for the CRL step (+ OCSP round trip) |
 Guidance: container limit >= 8 GiB with the full DoD CRL set (Helm default); warm each pod with one CAC login
-before adding it to the load balancer; in strict FIPS list only the CRLs of the DoD ID CAs that issue your users'
-certificates (latency scales with the total CRL size) and rate-limit logins at the proxy.
+before adding it to the load balancer. With Keycloak's own X.509 form in strict FIPS, CRL latency scales with the
+TOTAL size of the listed CRLs (every one is re-verified per login); with the stig form it scales with the issuing
+CA's CRL only, so keep the full DoD ID/DERILITY list. Rate-limit logins at the proxy.
 
 ## 9. What was tested (this skill's lab, Keycloak 26.8.2)
 | Topology | Result |

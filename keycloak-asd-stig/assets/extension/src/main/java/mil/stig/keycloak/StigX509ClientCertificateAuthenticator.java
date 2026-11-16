@@ -1,7 +1,8 @@
 /*
  * Derived from Keycloak 26.8.2 org.keycloak.authentication.authenticators.x509.X509ClientCertificateAuthenticator
  * Copyright Red Hat, Inc. and/or its affiliates and other contributors, Apache License 2.0
- * (http://www.apache.org/licenses/LICENSE-2.0). Changed: the brute-force (password lockout) check is removed.
+ * (http://www.apache.org/licenses/LICENSE-2.0). Changed: the brute-force (password lockout) check is removed, and the local
+ * CRL step checks only the issuing CA's CRL, whose signature is verified once per file version (IssuerCrlCheck).
  */
 package mil.stig.keycloak;
 
@@ -10,6 +11,7 @@ import org.keycloak.authentication.authenticators.x509.CertificateValidator;
 import org.keycloak.authentication.authenticators.x509.X509AuthenticatorConfigModel;
 
 import java.security.cert.X509Certificate;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +25,7 @@ import org.keycloak.authentication.authenticators.browser.AbstractUsernameFormAu
 import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
 import org.keycloak.forms.login.LoginFormsProvider;
+import org.keycloak.models.AuthenticatorConfigModel;
 import org.keycloak.models.ModelDuplicateException;
 import org.keycloak.models.UserCredentialModel;
 import org.keycloak.models.UserModel;
@@ -37,7 +40,8 @@ import org.jboss.logging.Logger;
  * @version $Revision: 1 $
  *
  */
-/** The X.509 browser authenticator of Keycloak 26.8.2, unchanged except that password lockout does not apply. */
+/** The X.509 browser authenticator of Keycloak 26.8.2, unchanged except that password lockout does not apply and the local
+ *  CRL check is scoped to the issuing CA (IssuerCrlCheck). */
 public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCertificateAuthenticator {
 
     private final static Logger logger = Logger.getLogger(StigX509ClientCertificateAuthenticator.class);
@@ -87,15 +91,30 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
 
             // Validate X509 client certificate
             try {
-                CertificateValidator.CertificateValidatorBuilder builder = certificateValidationParameters(context.getSession(), config);
+                // STIG: with local CRL files, the CRL step is IssuerCrlCheck (the issuing CA's CRL, signature verified once
+                // per file version) instead of Keycloak's (every configured CRL re-verified on every sign-in). Keycloak's
+                // validator still runs every other check, OCSP included, on a copy of the configuration with CRL off.
+                boolean issuerCrl = IssuerCrlCheck.handles(config);
+                X509AuthenticatorConfigModel validatorConfig = config;
+                if (issuerCrl) {
+                    AuthenticatorConfigModel copy = new AuthenticatorConfigModel();
+                    copy.setId(config.getId());
+                    copy.setAlias(config.getAlias());
+                    copy.setConfig(new HashMap<>(config.getConfig()));   // never mutate the realm's cached model
+                    validatorConfig = new X509AuthenticatorConfigModel(copy).setCRLEnabled(false);
+                }
+                CertificateValidator.CertificateValidatorBuilder builder = certificateValidationParameters(context.getSession(), validatorConfig);
                 CertificateValidator validator = builder.build(certs);
                 validator.validateTrust()
                          .validateCASubjectDN()
                          .validateTimestamps()
                          .validateKeyUsage(isLegacyCriticalBehavior())
                          .validateExtendedKeyUsage(isLegacyCriticalBehavior())
-                         .validatePolicy()
-                         .checkRevocationStatus();
+                         .validatePolicy();
+                if (issuerCrl) {
+                    IssuerCrlCheck.check(context.getSession(), certs, config.getCRLRelativePath(), config.getCrlAbortIfNonUpdated());
+                }
+                validator.checkRevocationStatus();
             } catch(Exception e) {
                 logger.error(e.getMessage(), e);
                 // TODO use specific locale to load error messages
