@@ -1,5 +1,6 @@
-# Public repository: names of private organizations, products and customers must never be committed, in source,
-# docs or inside any archive (.skill, .zip, .jar). Runs on every pull request and push, whatever the path.
+# Public repository: names of private organizations, products and customers, and private identifiers, must never
+# be committed - in source, docs, file names, commit messages, or inside any archive or encoding. Runs on every pull
+# request and push, whatever the path. See .github/scripts/public-content-guard.py for what it decodes.
 name: public content guard
 on:
   pull_request:
@@ -13,9 +14,29 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
-        with: {persist-credentials: false}
-      - name: Tracked files and archives
-        run: python3 .github/scripts/public-content-guard.py
+        with: {persist-credentials: false, fetch-depth: 0}
+      - name: The guard's own tests (every bypass fixture is generated at test time)
+        run: python3 .github/scripts/test_public_content_guard.py
+      - name: Tracked files, their paths and archives, and the commit messages being added
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          range=""
+          if [ "$EVENT" = pull_request ]; then
+            range="$PR_BASE..$PR_HEAD"
+          elif [ "$EVENT" = push ] && [ -n "$PUSH_BEFORE" ] && ! [[ "$PUSH_BEFORE" =~ ^0+$ ]]; then
+            range="$PUSH_BEFORE..$PUSH_AFTER"
+          fi
+          if [ -n "$range" ]; then
+            python3 .github/scripts/public-content-guard.py --commits "$range"
+          else
+            python3 .github/scripts/public-content-guard.py
+          fi
       - name: Freshly built skill packages
         run: |
           set -euo pipefail
@@ -26,4 +47,4 @@ jobs:
             git ls-files "$d" | zip -q "$out/$d.skill" -@
             extra+=(--extra-archive "$out/$d.skill")
           done
-          python3 .github/scripts/public-content-guard.py "${extra[@]}"
+          python3 .github/scripts/public-content-guard.py --no-tree "${extra[@]}"

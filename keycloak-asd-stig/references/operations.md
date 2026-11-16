@@ -91,6 +91,18 @@ inactivity clocks of existing users are preserved).
    executors, theme page IDs, workflow syntax).
 
 ## 8. Delegated account creation: allowed e-mail domains (stig-accounts)
+
+> **Upgrade note.** The built-in default no longer includes any domain other than `.mil`, and a configured value
+> is now authoritative and fails closed. **Before upgrading**, set `stig.accounts.email-domains` (on the realm, or
+> on the calling client) to the list you rely on, or creations for those domains are refused with 403.
+>
+> | Situation | Before | After |
+> |---|---|---|
+> | Attribute unset on both client and realm | `.mil` plus one built-in non-`.mil` domain | `.mil` only |
+> | Client attribute set but blank | fell through to the realm attribute | no domain allowed for that caller |
+> | Realm attribute set but blank | fell back to the built-in default | no domain allowed |
+> | A list with one malformed entry (`*.mil`, `@x.org`, `x .org`) | the bad entry was skipped and the rest applied | no domain allowed |
+> | A well-formed list | applied | applied (unchanged) |
 The `stig-accounts` admin endpoint (in `stig-extensions.jar`) lets an IdP user manager, or an application's service
 account holding `realm-management/query-users`, create accounts. It creates them only for e-mail addresses in an
 allowlist of domains:

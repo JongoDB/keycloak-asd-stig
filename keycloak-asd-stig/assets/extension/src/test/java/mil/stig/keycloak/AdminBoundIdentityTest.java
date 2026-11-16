@@ -6,7 +6,7 @@ import java.util.Map;
 /** Unit tests of the administrator-bound identity decision (no Keycloak runtime needed). Run by build.sh. */
 public final class AdminBoundIdentityTest {
     static int failed = 0, run = 0;
-    static final String T = "74746a74-7b2e-4c58-833a-c421aa37ba65", OID = "0b8c5a8e-1111-4222-8333-944455556666";
+    static final String T = "00000000-0000-4000-8000-000000000001", OID = "00000000-0000-4000-8000-0000000000a1";
     static final AdminBoundIdentity.Cfg C = new AdminBoundIdentity(Map.of(AdminBoundIdentity.P_TENANT, T)).cfg();
 
     static void expect(String name, String why, boolean allowed) {
