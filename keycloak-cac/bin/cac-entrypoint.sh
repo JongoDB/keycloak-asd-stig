@@ -75,6 +75,12 @@ if [ -z "${KC_HOSTNAME:-}" ]; then
 fi
 python3 "$TOOLS/cac-config.py" check
 
+# The baked DoD bundle holds every DoD CA; only the issuers of login certificates (CAC_LOGIN_CAS, default DOD ID and
+# DERILITY CAs) and their roots are trusted for card login. Explicit CAC_TRUST_ANCHORS_DIR / CAC_EXTRA_ANCHORS_DIR are not narrowed.
+baked_login_anchors() { # dest-dir
+  rm -rf "$D/anchors.baked"; mkdir -p "$D/anchors.baked"; cp "$BAKED/anchors/"*.pem "$D/anchors.baked/"
+  "$TOOLS/cac-pki.sh" narrow "$D/anchors.baked" && cp "$D/anchors.baked/"*.pem "$1/"; rm -rf "$D/anchors.baked"
+}
 # ---- 2. trust anchors -> $D/anchors (+ client-ca.p12 with ONLY these anchors for TLS client auth)
 rm -rf "$D/anchors.new"; mkdir -p "$D/anchors.new"
 if [ -n "${CAC_TRUST_ANCHORS_DIR:-}" ]; then
@@ -88,10 +94,10 @@ elif $LAB; then
   fi
   cp "$D/lab/conf/truststore/"*.pem "$D/anchors.new/"
 else
-  cp "$BAKED/anchors/"*.pem "$D/anchors.new/"
-  log "trust anchors: $(ls "$D/anchors.new" | wc -l) from the image ($(cat "$BAKED/source.txt"))"
+  baked_login_anchors "$D/anchors.new"
+  log "trust anchors: $(ls "$D/anchors.new" | wc -l) from the image ($(cat "$BAKED/source.txt")), login CAs only"
 fi
-if $LAB && truthy "${CAC_LAB_TRUST_DOD:-false}" && [ -z "${CAC_TRUST_ANCHORS_DIR:-}" ]; then cp "$BAKED/anchors/"*.pem "$D/anchors.new/"; fi
+if $LAB && truthy "${CAC_LAB_TRUST_DOD:-false}" && [ -z "${CAC_TRUST_ANCHORS_DIR:-}" ]; then baked_login_anchors "$D/anchors.new"; fi
 if [ -n "${CAC_EXTRA_ANCHORS_DIR:-}" ]; then
   "$TOOLS/cac-pki.sh" bundle "$D/extra" "$CAC_EXTRA_ANCHORS_DIR" && cp "$D/extra/anchors/"*.pem "$D/anchors.new/"
   log "trust anchors: added $(ls "$D/extra/anchors" | wc -l) from $CAC_EXTRA_ANCHORS_DIR:"; sed 's/^/  /' "$D/extra/anchors.txt" >&2
@@ -190,6 +196,7 @@ crl_refresh() {
     file)   "$TOOLS/cac-pki.sh" crl-sync "$CRL_SRC" "$D/anchors" "$D/crl";;
   esac
   "$TOOLS/cac-pki.sh" crl-health "$D/crl" || true
+  "$TOOLS/cac-pki.sh" crl-coverage "$D/anchors" "$D/crl" || true   # logs STIG-CRL-COVERAGE-GAP per uncovered CA
 }
 # lab PKI's own CRL is always installed, so mock cards keep working next to real ones
 if $LAB && [ -d "$D/lab/conf/crl" ] && [ "$MODE" != file ]; then "$TOOLS/cac-pki.sh" crl-sync "$D/lab/conf/crl" "$D/anchors" "$D/crl"; fi
@@ -237,11 +244,13 @@ apply() {
   return 1
 }
 crl_loop() {
-  [ "$MODE" = online ] && { crl_refresh; python3 "$TOOLS/cac-config.py" clear-crl-cache || true; touch "$D/.crl-loaded"; }
+  [ "$MODE" = online ] && { crl_refresh; python3 "$TOOLS/cac-config.py" sync-crl-list || log "WARN could not update the CRL list"
+                           python3 "$TOOLS/cac-config.py" clear-crl-cache || true; touch "$D/.crl-loaded"; }
   [ "$MODE" != online ] && touch "$D/.crl-loaded"
   [ "$MODE" = online ] || [ "$MODE" = file ] || return 0
   while sleep "${CAC_CRL_REFRESH_SECONDS:-21600}"; do
     crl_refresh || log "WARN CRL refresh failed; keeping cached CRLs"
+    [ "$MODE" = online ] && { python3 "$TOOLS/cac-config.py" sync-crl-list || log "WARN could not update the CRL list"; }
     python3 "$TOOLS/cac-config.py" clear-crl-cache || log "WARN could not clear Keycloak's CRL cache"
   done
 }

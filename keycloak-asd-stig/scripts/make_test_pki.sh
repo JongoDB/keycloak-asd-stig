@@ -8,6 +8,7 @@
 #   conf/tls/db.{crt,key}       PostgreSQL TLS cert;  conf/tls/db-ca.crt  trust anchor for the DB link
 #   conf/truststore/*.pem       TEST root + issuing CA (what Keycloak trusts for client certs)
 #   conf/crl/test-id-ca.crl     CRL of the issuing CA (one revoked user)
+#   conf/crl/test-root-ca.crl   CRL of the root (status of the issuing CA)
 #   ocsp/                       index + signer for `openssl ocsp` responder
 #   users/<name>.{pem,key,p12}  CAC-like user certs (UPN SAN = EDIPI@mil), alt token, revoked
 set -euo pipefail
@@ -34,6 +35,15 @@ default_crl_days = 30
 policy = anything
 copy_extensions = none
 unique_subject = no
+[ rootca ]
+dir = ./ca/rootdb
+database = \$dir/index.txt
+new_certs_dir = \$dir
+serial = \$dir/serial
+crlnumber = \$dir/crlnumber
+default_md = sha256
+default_crl_days = 30
+policy = anything
 [ anything ]
 countryName = optional
 organizationName = optional
@@ -50,6 +60,7 @@ keyUsage = critical,keyCertSign,cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid
 certificatePolicies = 2.16.840.1.101.2.1.11.39,2.16.840.1.101.2.1.11.42
+crlDistributionPoints = URI:http://crl.test.invalid/TESTROOTCA99.crl
 [ v3_server ]
 basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature,keyEncipherment
@@ -119,6 +130,9 @@ openssl x509 -req -in rogue/u.csr -CA rogue/ca.crt -CAkey rogue/ca.key -CAcreate
 # revoke one cert, publish CRL
 openssl ca -config ca/openssl.cnf -cert ca/idca.crt -keyfile ca/idca.key -revoke users/revoked.crt -crl_reason keyCompromise 2>/dev/null
 openssl ca -config ca/openssl.cnf -cert ca/idca.crt -keyfile ca/idca.key -gencrl -out conf/crl/test-id-ca.crl 2>/dev/null
+# the root's CRL: the issuing CA's own revocation status is checked too (V-222550)
+mkdir -p ca/rootdb && touch ca/rootdb/index.txt && echo 1000 > ca/rootdb/crlnumber
+openssl ca -config ca/openssl.cnf -name rootca -cert ca/root.crt -keyfile ca/root.key -gencrl -out conf/crl/test-root-ca.crl 2>/dev/null
 
 # OCSP signer for the issuing CA
 SAN=x UPN=x EMAIL=x issue ocsp/signer "/C=US/O=U.S. Government/CN=TEST DOD ID CA-99 OCSP" v3_ocsp

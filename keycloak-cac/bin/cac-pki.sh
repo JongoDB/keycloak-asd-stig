@@ -10,6 +10,8 @@
 #   cac-pki.sh crl-sync  <src-dir> <anchors-dir> <crl-dir>   copy signature-checked CRLs from a mounted dir (air-gapped)
 #   cac-pki.sh crl-prune <crl-dir> <anchors-dir>  delete CRLs whose issuer is no longer an anchor (also after fetch/sync)
 #   cac-pki.sh crl-health <crl-dir>               exit 1 if a CRL expires within 24h
+#   cac-pki.sh crl-coverage <anchors-dir> <crl-dir>  exit 1 if a trusted issuing CA or its root has no CRL
+#   cac-pki.sh narrow <anchors-dir>               keep only the issuing CAs of login certificates ($CAC_LOGIN_CAS) and their roots
 #
 # Every anchor must be a CA certificate. A zip that ships a signed SHA-256 manifest (the DISA bundles do) must verify.
 # Never adds anything to the JVM cacerts: client certificates are checked against client-ca.p12 only (V-222584).
@@ -17,7 +19,14 @@ set -euo pipefail
 DOD_ZIP=https://dl.dod.cyber.mil/wp-content/uploads/pki-pke/zip/unclass-certificates_pkcs7_DoD.zip
 URLS="${PKI_BUNDLE_URLS:-$DOD_ZIP}"
 CRL_BASE="${CRL_BASE:-http://crl.disa.mil/crl}"
-INCLUDE="${CRL_INCLUDE_CAS:-^DOD (ID|DERILITY) CA-[0-9]+$}"   # issuers of CAC/PIV authentication certificates
+# Revocation coverage must equal trust: every ISSUING CA among the anchors (not self-signed) gets its CRL, because
+# stig-x509-client-username-form refuses a card whose issuer has no CRL. CRL_INCLUDE_CAS (an ERE on the CA's CN) only
+# narrows that, and every CA it leaves out is a coverage gap: crl-coverage and kcstig verify (pki.crl_coverage) report it.
+INCLUDE="${CRL_INCLUDE_CAS:-}"
+# CAs whose certificates may sign in: CAC/PIV authentication certificates come from DOD ID CA-n and DOD DERILITY CA-n.
+# DOD EMAIL (signature/encryption) and DOD SW (software) CA certificates are not login credentials, so they are not
+# trusted for TLS client authentication at all - which also keeps the CRL set to what login needs (~141 MB, not ~296 MB).
+LOGIN_CAS="${CAC_LOGIN_CAS:-^DOD (ID|DERILITY) CA-[0-9]+$}"
 log() { echo "cac-pki: $*" >&2; }
 die() { log "ERROR $*"; exit 1; }
 cn_of() { openssl x509 -in "$1" -noout -subject -nameopt multiline | sed -n 's/^ *commonName *= *//p' | head -1; }
@@ -119,12 +128,37 @@ cmd_compile() {
   openssl pkcs12 -export -nokeys -in "$out/.anchors.pem" -jdktrust anyExtendedKeyUsage \
     -passout "pass:${PKI_P12_PASSWORD:-cac-anchors}" -out "$out/.client-ca.p12.new"
   mv -f "$out/.client-ca.p12.new" "$out/client-ca.p12"; rm -f "$out/.anchors.pem"
-  : > "$out/ca-subject-dns.txt"; : > "$out/crl-names.txt"
+  : > "$out/ca-subject-dns.txt"
+  local s
   for f in "$a"/*.pem; do
     s=$(dn_of "$f" subject); [ "$s" = "$(dn_of "$f" issuer)" ] && echo "$s" >> "$out/ca-subject-dns.txt"
-    cn=$(cn_of "$f"); if echo "$cn" | grep -Eq "$INCLUDE"; then
-      echo "$cn" | sed -E 's/^DOD ([A-Z]+) CA-([0-9]+)$/DOD\1CA_\2.crl/' | sed 's/ /_/g' >> "$out/crl-names.txt"; fi
   done
+  crl_names "$a" log | sed 's/$/.crl/' > "$out/crl-names.txt"
+}
+
+# The CRLs revocation checking needs = what trust covers: the CRL of every ISSUING CA among the anchors (the card's
+# status), and the CRL of every root that issued one of them (the issuing CA's own status, V-222550). Root CRL names
+# come from the issuing CA certificate's CRL distribution point (DISA: DODROOTCA3.crl ...).
+crl_names() { # anchors-dir [log] -> base names, one per line, sorted, unique
+  local a="$1" f n
+  for f in "$a"/*.pem; do
+    n=$(crl_name_of "$f" "${2:-}") || continue; echo "$n"
+    n=$(openssl x509 -in "$f" -noout -ext crlDistributionPoints 2>/dev/null | grep -o 'URI:[^ ,]*' | head -1 | sed 's#.*/##; s#\.crl$##')
+    if [ -n "$n" ]; then echo "$n"
+    else [ -n "${2:-}" ] && log "issuing CA \"$(cn_of "$f")\" names no CRL distribution point: supply its root's CRL in the CRL directory"; fi
+  done | sort -u
+}
+
+crl_name_of() { # anchor.pem [log] -> DISA CRL base name (DOD SW CA-75 -> DODSWCA_75) of an ISSUING CA; 1 if none
+  local f="$1" cn kind
+  [ "$(dn_of "$f" subject)" = "$(dn_of "$f" issuer)" ] && return 1            # root: path anchor, issues CAs only
+  cn=$(cn_of "$f")
+  if [ -n "$INCLUDE" ] && ! echo "$cn" | grep -Eq "$INCLUDE"; then
+    [ -n "${2:-}" ] && log "WARN CRL_INCLUDE_CAS leaves out issuing CA \"$cn\": its cards will be refused (STIG-CRL-NO-ISSUER-CRL)"
+    return 1; fi
+  if [[ "$cn" =~ ^DOD\ (.+)\ CA-([0-9]+)$ ]]; then kind="${BASH_REMATCH[1]}"; echo "DOD${kind// /}CA_${BASH_REMATCH[2]}"; return 0; fi
+  [ -n "${2:-}" ] && log "issuing CA \"$cn\" has no DISA CRL name: supply its CRL in the CRL directory (crl-sync) or its cards are refused"
+  return 1
 }
 
 crl_ok() { # crl anchors-pem -> installs only if the signature verifies against a trusted anchor
@@ -147,16 +181,16 @@ cmd_crl_prune() { # crl-dir anchors-dir -> delete every *.crl that does not veri
 }
 
 cmd_crl_fetch() {
-  local a="$1" d="$2" w; w=$(mktemp -d); mkdir -p "$d"; cat "$a"/*.pem > "$w/anchors.pem"
-  local ok=0 bad=0
-  for f in "$a"/*.pem; do
-    cn=$(cn_of "$f"); echo "$cn" | grep -Eq "$INCLUDE" || continue
-    n=$(echo "$cn" | sed -E 's/^DOD ([A-Z]+) CA-([0-9]+)$/DOD\1CA_\2/')
+  local a="$1" d="$2" w n; w=$(mktemp -d); mkdir -p "$d"; cat "$a"/*.pem > "$w/anchors.pem"
+  local ok=0 same=0 bad=0
+  for n in $(crl_names "$a"); do
     if curl -fsSL --retry 3 -m 180 -o "$w/$n.crl" "$CRL_BASE/$n.crl" && crl_ok "$w/$n.crl" "$w/anchors.pem"; then
-      mv -f "$w/$n.crl" "$d/.$n.crl.new" && mv -f "$d/.$n.crl.new" "$d/$n.crl"; ok=$((ok+1))   # atomic swap
-    else log "WARN $n.crl: download or signature check failed - keeping cached copy"; bad=$((bad+1)); fi
+      # unchanged bytes: leave the installed file alone, so Keycloak does not re-read and re-verify it
+      if cmp -s "$w/$n.crl" "$d/$n.crl"; then same=$((same+1)); rm -f "$w/$n.crl"
+      else mv -f "$w/$n.crl" "$d/.$n.crl.new" && mv -f "$d/.$n.crl.new" "$d/$n.crl"; ok=$((ok+1)); fi   # atomic swap
+    else log "WARN $n.crl: download or signature check failed - keeping cached copy"; bad=$((bad+1)); rm -f "$w/$n.crl"; fi
   done
-  rm -rf "$w"; log "CRLs refreshed: $ok ok, $bad failed (from $CRL_BASE)"
+  rm -rf "$w"; log "CRLs refreshed: $ok replaced, $same unchanged, $bad failed (from $CRL_BASE)"
   cmd_crl_prune "$d" "$a"
 }
 
@@ -165,11 +199,43 @@ cmd_crl_sync() {
   local ok=0
   for f in "$src"/*.crl "$src"/crl/*.crl; do
     [ -e "$f" ] || continue
-    if crl_ok "$f" "$w/anchors.pem"; then cp "$f" "$d/.$(basename "$f").new" && mv -f "$d/.$(basename "$f").new" "$d/$(basename "$f")"; ok=$((ok+1))
+    if cmp -s "$f" "$d/$(basename "$f")"; then ok=$((ok+1))   # unchanged: keep the installed file (no re-read by Keycloak)
+    elif crl_ok "$f" "$w/anchors.pem"; then cp "$f" "$d/.$(basename "$f").new" && mv -f "$d/.$(basename "$f").new" "$d/$(basename "$f")"; ok=$((ok+1))
     else log "STIG-CRL-UNTRUSTED $(basename "$f"): issuer not trusted or bad signature - NOT installed"; fi
   done
   rm -rf "$w"; log "CRLs synced from $src: $ok installed"
   cmd_crl_prune "$d" "$a"
+}
+
+cmd_crl_coverage() { # anchors-dir crl-dir -> exit 1 (and STIG-CRL-COVERAGE-GAP per CA) if an issuing CA has no CRL
+  local a="$1" d="$2" gaps=0 have=" " f s
+  for f in "$d"/*.crl; do [ -e "$f" ] || continue
+    s=$(openssl crl -inform DER -in "$f" -noout -issuer -nameopt RFC2253 2>/dev/null || openssl crl -in "$f" -noout -issuer -nameopt RFC2253 2>/dev/null || true)
+    have="$have${s#issuer=}|"
+  done
+  local i seen=" "
+  for f in "$a"/*.pem; do
+    s=$(dn_of "$f" subject); i=$(dn_of "$f" issuer); [ "$s" = "$i" ] && continue
+    case "$have" in *"|$s|"*|" $s|"*) ;; *) log "STIG-CRL-COVERAGE-GAP no CRL for trusted issuing CA \"$(cn_of "$f")\": its cards are refused"; gaps=$((gaps+1));; esac
+    case "$seen" in *"|$i|"*) continue;; esac; seen="$seen|$i|"
+    case "$have" in *"|$i|"*|" $i|"*) ;; *) log "STIG-CRL-COVERAGE-GAP no CRL for root \"$i\": the status of the CAs it issued is unknown, their cards are refused"; gaps=$((gaps+1));; esac
+  done
+  [ $gaps -eq 0 ] && log "CRL coverage: every trusted issuing CA and its root has a CRL" || { log "CRL coverage: $gaps CA(s) without a CRL"; return 1; }
+}
+
+cmd_narrow() { # anchors-dir -> delete issuing CAs not matching LOGIN_CAS, then roots that issued none of the rest
+  local a="$1" f s i cn issuers="|" n=0
+  for f in "$a"/*.pem; do
+    s=$(dn_of "$f" subject); i=$(dn_of "$f" issuer); [ "$s" = "$i" ] && continue
+    cn=$(cn_of "$f")
+    if echo "$cn" | grep -Eq "$LOGIN_CAS"; then issuers="$issuers$i|"; else rm -f "$f"; n=$((n+1)); fi
+  done
+  for f in "$a"/*.pem; do
+    s=$(dn_of "$f" subject); [ "$s" = "$(dn_of "$f" issuer)" ] || continue
+    case "$issuers" in *"|$s|"*) ;; *) rm -f "$f"; n=$((n+1));; esac
+  done
+  log "trust narrowed to login CAs ($LOGIN_CAS): removed $n, kept $(ls "$a"/*.pem 2>/dev/null | wc -l)"
+  ls "$a"/*.pem >/dev/null 2>&1 || die "CAC_LOGIN_CAS=$LOGIN_CAS leaves no trust anchors"
 }
 
 cmd_crl_health() {
@@ -184,5 +250,6 @@ cmd_crl_health() {
 c="${1:-}"; shift || true
 case "$c" in
   bundle) cmd_bundle "$@";; compile) cmd_compile "$@";; crl-fetch) cmd_crl_fetch "$@";;
-  crl-sync) cmd_crl_sync "$@";; crl-prune) cmd_crl_prune "$@";; crl-health) cmd_crl_health "$@";; *) sed -n '2,14p' "$0"; exit 2;;
+  crl-sync) cmd_crl_sync "$@";; crl-prune) cmd_crl_prune "$@";; crl-health) cmd_crl_health "$@";;
+  crl-coverage) cmd_crl_coverage "$@";; narrow) cmd_narrow "$@";; *) sed -n '2,16p' "$0"; exit 2;;
 esac

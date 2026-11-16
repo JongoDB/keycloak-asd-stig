@@ -1587,10 +1587,11 @@
   },
   "V-222550": {
    "disposition": "KC",
-   "implementation": "Path building to DoD trust anchors (truststore-paths) with revocation status (OCSP, CRL fallback).",
+   "implementation": "Path building to the DoD trust anchors (truststore-paths; only the CAs that issue login certificates and their roots) with status information for every certificate in the path below the anchor: the card against its issuing CA's CRL (and OCSP), and every CA certificate on the path to a self-signed anchor - including every truststore certificate carrying the same CA key - against its issuer's CRL; a path that cannot be built is refused (stig-x509-client-username-form). Every trusted CA that issued a trusted certificate has its CRL listed.",
    "checks": [
     "flow.x509_revocation",
-    "deploy.truststore"
+    "deploy.truststore",
+    "pki.crl_coverage"
    ],
    "app_action": null,
    "na_condition": null,
@@ -1619,9 +1620,10 @@
   },
   "V-222553": {
    "disposition": "SHARED",
-   "implementation": "X.509 authenticator: OCSP with CRL fallback from a locally cached CRL file (x509-cert-auth.crl-relative-path); scripts/fetch_dod_pki.sh refreshes CRLs on a schedule.",
+   "implementation": "X.509 authenticator: OCSP with CRL fallback from a locally cached CRL file (x509-cert-auth.crl-relative-path); scripts/fetch_dod_pki.sh refreshes CRLs on a schedule; the CRL list covers every trusted issuing CA and its root.",
    "checks": [
-    "flow.x509_revocation"
+    "flow.x509_revocation",
+    "pki.crl_coverage"
    ],
    "app_action": "Run the CRL refresh job (cron/systemd timer) at least daily.",
    "na_condition": null,
