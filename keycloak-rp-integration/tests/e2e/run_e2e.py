@@ -104,19 +104,24 @@ class Admin:
 
 
 def start_keycloak(work, password):
-    cert, key = os.path.join(work, "tls.crt"), os.path.join(work, "tls.key")
+    # The container runs as uid 1000: give it its own traversable directory (mkdtemp's is 0700, owned by the caller).
+    certs = os.path.join(work, "certs")
+    os.mkdir(certs)
+    os.chmod(certs, 0o755)
+    cert, key = os.path.join(certs, "tls.crt"), os.path.join(certs, "tls.key")
     subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost",
                     "-addext", "subjectAltName=DNS:localhost", "-keyout", key, "-out", cert],
                    check=True, capture_output=True)
     os.chmod(key, 0o644)   # read by the container's non-root user; throwaway lab key in a temp dir
-    subprocess.run(["docker", "run", "-d", "--rm", "--name", CONTAINER, "-p", "127.0.0.1:%d:8443" % KC_PORT,
-                    "--add-host", "host.docker.internal:host-gateway", "-v", "%s:/certs:ro" % work,
+    os.chmod(cert, 0o644)
+    subprocess.run(["docker", "run", "-d", "--name", CONTAINER, "-p", "127.0.0.1:%d:8443" % KC_PORT,
+                    "--add-host", "host.docker.internal:host-gateway", "-v", "%s:/certs:ro" % certs,
                     "-e", "KC_BOOTSTRAP_ADMIN_USERNAME=admin", "-e", "KC_BOOTSTRAP_ADMIN_PASSWORD=" + password,
                     IMAGE, "start-dev", "--http-enabled=false", "--hostname=" + KC,
                     "--https-certificate-file=/certs/tls.crt", "--https-certificate-key-file=/certs/tls.key"],
                    check=True, capture_output=True)
     if not wait_http(KC + "/realms/master/.well-known/openid-configuration", verify=cert):
-        subprocess.run(["docker", "logs", CONTAINER])
+        subprocess.run(["docker", "logs", "--tail", "60", CONTAINER])
         sys.exit("keycloak did not start")
     return cert
 
