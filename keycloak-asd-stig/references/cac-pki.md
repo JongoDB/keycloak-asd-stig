@@ -88,9 +88,11 @@ Xeon (measured: 5.1 s signature checks + 0.4 s `isRevoked` scans), although only
 
 `stig-x509-client-username-form` replaces that one step (`IssuerCrlCheck`), with the same files,
 `crl-abort-if-non-updated` and `isRevoked`:
-- **What is checked:** the card against the CRL(s) of its issuing CA, and the issuing CA's certificate (the
-  truststore certificate whose key verifies the card) against the CRL(s) of its root. Keycloak checks neither the
-  intermediate nor uses only the relevant CRLs.
+- **What is checked:** the card against the CRL(s) of its issuing CA, and every CA certificate on the path to a
+  self-signed anchor, walked through the truststore: at each step the issuer is chosen by name and key, and every
+  truststore certificate carrying that CA key (re-issued or cross certificates) is checked against its own issuer's
+  CRL. One revoked certificate refuses the login; a path that cannot be built refuses it too. Keycloak checks no
+  intermediate.
 - **Fail closed:** a card is refused when its issuer's or the root's CRL is missing (`STIG-CRL-NO-ISSUER-CRL`),
   unreadable, or rejected. Rejected: delta CRLs, a partitioned or indirect `issuingDistributionPoint`, a scope that
   does not cover the certificate, unsupported critical extensions, a `thisUpdate` more than 5 minutes ahead.
@@ -101,9 +103,15 @@ Xeon (measured: 5.1 s signature checks + 0.4 s `isRevoked` scans), although only
 - **Availability:** an unreadable or rejected CRL of **another** issuer logs `STIG-CRL-UNREADABLE` (at most once a
   minute per file) and does not refuse anyone else's login.
 - **Refresh without blocking:** a background job (every 30 s, `-Dstig.crl.prewarm.seconds`, and whenever a login sees
-  a changed file) re-reads and verifies changed files and evicts files no realm lists any more. Locks are per file;
-  while one file is re-read, logins keep using its previous verified version. `crl-fetch` and `crl-sync` leave
-  unchanged files untouched, so an unchanged CRL is never re-verified.
+  a changed file) re-reads and verifies changed files and evicts files no realm lists any more. Locks are per file.
+  A login that finds a file changed waits for its re-read; only if that takes longer than
+  `-Dstig.crl.reread.wait.ms` (default 2 s) does it use the previous verified version, and only while that version is
+  still before its nextUpdate. `crl-fetch` and `crl-sync` leave unchanged files untouched, so an unchanged CRL is
+  never re-verified.
+- **Which files are listed (keycloak-cac, online mode):** after each refresh `cac-config.py sync-crl-list` gives the
+  stig form only the CRLs actually installed, and Keycloak's stock form every expected CRL (`crl-names.txt`), installed
+  or not: the stock form passes a card whose issuer has no CRL listed, so a missing file must stay listed (and refuse
+  every login) rather than silently stop the check.
 
 Measured on the same Xeon: about 0.06 s per login for the CRL step. A refreshed file is used by the next login even
 before `clear-crl-cache` runs. Everything else (trust, dates, key usage, policy, CA pins, OCSP) is Keycloak's

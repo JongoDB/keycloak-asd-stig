@@ -1587,7 +1587,7 @@
   },
   "V-222550": {
    "disposition": "KC",
-   "implementation": "Path building to the DoD trust anchors (truststore-paths; only the CAs that issue login certificates and their roots) with status information for every certificate in the path below the anchor: the card against its issuing CA's CRL (and OCSP), and the issuing CA's certificate against its root's CRL (stig-x509-client-username-form). Every trusted CA that issued a trusted certificate has its CRL listed.",
+   "implementation": "Path building to the DoD trust anchors (truststore-paths; only the CAs that issue login certificates and their roots) with status information for every certificate in the path below the anchor: the card against its issuing CA's CRL (and OCSP), and every CA certificate on the path to a self-signed anchor - including every truststore certificate carrying the same CA key - against its issuer's CRL; a path that cannot be built is refused (stig-x509-client-username-form). Every trusted CA that issued a trusted certificate has its CRL listed.",
    "checks": [
     "flow.x509_revocation",
     "deploy.truststore",

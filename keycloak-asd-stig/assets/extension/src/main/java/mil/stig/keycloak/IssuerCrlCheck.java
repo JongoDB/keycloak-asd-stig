@@ -52,8 +52,10 @@ import org.keycloak.truststore.TruststoreProvider;
  * <p>What it checks, on every sign-in:
  * <ol>
  *   <li>the card against the CRL(s) of its issuing CA;</li>
- *   <li>the issuing CA's certificate (the truststore certificate whose key verifies the card) against the CRL(s) of
- *       ITS issuer, the root, unless the issuing CA is itself self-signed. Keycloak checks neither intermediate.</li>
+ *   <li>every CA certificate on the path to a self-signed anchor, through the truststore: at each step the issuer is
+ *       chosen by name and key, and EVERY truststore certificate carrying that CA key (re-issued or cross certificates)
+ *       is checked against its own issuer's CRL. One revoked certificate refuses the login; a path that cannot be
+ *       built refuses it too. Keycloak checks no intermediate at all.</li>
  * </ol>
  * A certificate whose issuer has no usable CRL is refused. CRL signatures are verified only against truststore
  * certificates, never against the client-supplied chain, and once per file version (file key, size, mtime, ctime)
@@ -64,7 +66,9 @@ import org.keycloak.truststore.TruststoreProvider;
  * <p>Availability: an unreadable or rejected CRL of ANOTHER issuer raises {@code STIG-CRL-UNREADABLE} and does not refuse
  * the sign-in; one of the card's own issuer (or of the issuing CA's root) refuses it. A background job
  * ({@link #startPrewarm}) re-reads and verifies changed files off the request path and evicts files no realm lists any
- * more; while a file is being reloaded, sign-ins keep using its previous verified version (locks are per file).
+ * more. Locks are per file. A sign-in that finds a file changed waits for its re-read; only if that takes longer than
+ * {@code stig.crl.reread.wait.ms} (default 2 s) does it use the previous verified version, and only while that version
+ * is still before its nextUpdate.
  */
 final class IssuerCrlCheck {
     private static final Logger log = Logger.getLogger(IssuerCrlCheck.class);
@@ -85,6 +89,8 @@ final class IssuerCrlCheck {
     /** Where CRL signers and issuing-CA certificates come from: the truststore, by subject. */
     interface Signers {
         List<X509Certificate> named(X500Principal subject) throws GeneralSecurityException;
+        /** Every truststore certificate (to find all certificates of one CA key). */
+        List<X509Certificate> all() throws GeneralSecurityException;
     }
 
     /** A file's identity on disk: replaced, rewritten or touched files all differ. */
@@ -177,15 +183,28 @@ final class IssuerCrlCheck {
     }
 
     static Signers truststore(KeycloakSession session) {
-        return subject -> {
-            TruststoreProvider tp = session.getProvider(TruststoreProvider.class);
-            if (tp == null || tp.getTruststore() == null) throw new GeneralSecurityException("Truststore not available");
-            List<X509Certificate> found = new ArrayList<>();
-            List<X509Certificate> i = tp.getIntermediateCertificates().get(subject);
-            List<X509Certificate> r = tp.getRootCertificates().get(subject);
-            if (i != null) found.addAll(i);
-            if (r != null) found.addAll(r);
-            return found;
+        return new Signers() {
+            private TruststoreProvider tp() throws GeneralSecurityException {
+                TruststoreProvider tp = session.getProvider(TruststoreProvider.class);
+                if (tp == null || tp.getTruststore() == null) throw new GeneralSecurityException("Truststore not available");
+                return tp;
+            }
+            @Override public List<X509Certificate> named(X500Principal subject) throws GeneralSecurityException {
+                TruststoreProvider tp = tp();
+                List<X509Certificate> found = new ArrayList<>();
+                List<X509Certificate> i = tp.getIntermediateCertificates().get(subject);
+                List<X509Certificate> r = tp.getRootCertificates().get(subject);
+                if (i != null) found.addAll(i);
+                if (r != null) found.addAll(r);
+                return found;
+            }
+            @Override public List<X509Certificate> all() throws GeneralSecurityException {
+                TruststoreProvider tp = tp();
+                List<X509Certificate> found = new ArrayList<>();
+                tp.getIntermediateCertificates().values().forEach(found::addAll);
+                tp.getRootCertificates().values().forEach(found::addAll);
+                return found;
+            }
         };
     }
 
@@ -200,7 +219,7 @@ final class IssuerCrlCheck {
         List<Failure> failed = new ArrayList<>();
         for (Path f : files) {
             try {
-                loaded.add(load(f, false));
+                loaded.add(load(f, false, nowMillis));
             } catch (GeneralSecurityException | IOException e) {
                 Loaded previous = CACHE.get(f);
                 X500Principal iss = e instanceof RejectedCrl rc ? rc.issuer : previous == null ? null : previous.issuer;
@@ -210,25 +229,52 @@ final class IssuerCrlCheck {
         }
         X509Certificate leaf = certs[0];
         evaluate(leaf, false, loaded, failed, truststore, abortIfNonUpdated, nowMillis);
-
-        // the issuing CA's own revocation status, against its issuer's (the root's) CRL
-        X509Certificate ica = issuingCa(leaf, truststore);
-        if (!ica.getSubjectX500Principal().equals(ica.getIssuerX500Principal())) {
-            evaluate(ica, true, loaded, failed, truststore, abortIfNonUpdated, nowMillis);
-        }
+        checkPath(leaf, loaded, failed, truststore, abortIfNonUpdated, nowMillis);
     }
 
-    /** The truststore certificate that issued {@code cert} (name match AND its key verifies the signature). */
-    private static X509Certificate issuingCa(X509Certificate cert, Signers truststore) throws GeneralSecurityException {
-        for (X509Certificate c : truststore.named(cert.getIssuerX500Principal())) {
-            try {
-                cert.verify(c.getPublicKey());
-                return c;
-            } catch (InvalidKeyException | SignatureException e) {
-                // another CA certificate of that name (re-keyed CA)
+    static final int MAX_PATH = 8;
+
+    /**
+     * Walks from {@code leaf} to a self-signed anchor through the truststore. At each step the issuer is chosen by name
+     * AND key (its key verifies the certificate). Every truststore certificate carrying that CA key is a certificate of
+     * the same CA: each one that is not self-signed is checked against its own issuer's CRL (a revoked one refuses the
+     * login) and walked further in turn. Fails closed when a step cannot be resolved or the path is too long.
+     */
+    private static void checkPath(X509Certificate leaf, List<Loaded> loaded, List<Failure> failed, Signers truststore,
+                                  boolean abortIfNonUpdated, long now) throws GeneralSecurityException {
+        List<X509Certificate> all = truststore.all();
+        java.util.ArrayDeque<X509Certificate> todo = new java.util.ArrayDeque<>();
+        Set<ByteBuffer> seenKeys = new HashSet<>();
+        todo.add(leaf);
+        int steps = 0;
+        while (!todo.isEmpty()) {
+            X509Certificate cert = todo.poll();
+            if (++steps > MAX_PATH * 4) throw new GeneralSecurityException("Certification path too long");
+            PublicKey issuerKey = null;
+            for (X509Certificate c : truststore.named(cert.getIssuerX500Principal())) {
+                try {
+                    cert.verify(c.getPublicKey());
+                    issuerKey = c.getPublicKey();
+                    break;
+                } catch (InvalidKeyException | SignatureException e) {
+                    // another CA certificate of that name (re-keyed CA)
+                }
+            }
+            if (issuerKey == null) {
+                log.errorf("STIG-CRL-NO-PATH no truststore certificate named \"%s\" verifies \"%s\": certification path cannot be built",
+                        cert.getIssuerX500Principal().getName(), cert.getSubjectX500Principal().getName());
+                throw new GeneralSecurityException("Certification path cannot be built through the truststore");
+            }
+            if (!seenKeys.add(key(issuerKey))) continue;            // that CA was handled already (or a loop)
+            if (seenKeys.size() > MAX_PATH) throw new GeneralSecurityException("Certification path too long");
+            ByteBuffer k = key(issuerKey);
+            for (X509Certificate ca : all) {
+                if (!key(ca.getPublicKey()).equals(k)) continue;
+                if (ca.getSubjectX500Principal().equals(ca.getIssuerX500Principal())) continue;   // the anchor itself
+                evaluate(ca, true, loaded, failed, truststore, abortIfNonUpdated, now);         // its status at its issuer
+                todo.add(ca);                                                                    // and that issuer's
             }
         }
-        throw new GeneralSecurityException("Issuing CA certificate of '" + cert.getIssuerX500Principal() + "' not in the truststore");
     }
 
     private static void evaluate(X509Certificate cert, boolean isCa, List<Loaded> loaded, List<Failure> failed, Signers truststore,
@@ -297,13 +343,26 @@ final class IssuerCrlCheck {
      * sign-in): when another thread is re-reading the file and a previous verified version exists, that version is
      * returned instead of waiting, and the pre-warm is woken to finish the refresh.
      */
-    private static Loaded load(Path f, boolean wait) throws GeneralSecurityException, IOException {
+    private static Loaded load(Path f, boolean wait, long now) throws GeneralSecurityException, IOException {
         Version v = Version.of(f);
         Loaded cur = CACHE.get(f);
         if (cur != null && cur.version.equals(v)) return cur;
         ReentrantLock lock = LOCKS.computeIfAbsent(f, k -> new ReentrantLock());
-        if (!lock.tryLock()) {
-            if (!wait && cur != null && cur.verified()) { wake(); return cur; }   // re-read in progress elsewhere
+        boolean locked;
+        try {
+            // the file changed: wait for the re-read (another sign-in or the pre-warm may be doing it) ...
+            locked = wait ? lockNow(lock) : lock.tryLock(REREAD_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new GeneralSecurityException("Interrupted while a CRL was being re-read");
+        }
+        if (!locked) {
+            // ... and only past a short timeout fall back to the previous verified version, if still before its nextUpdate
+            Date next = cur == null ? null : cur.crl.getNextUpdate();
+            if (cur != null && cur.verified() && next != null && next.getTime() > now) {
+                log.warnf("CRL \"%s\" is still being re-read after %d ms: this sign-in uses the previous version (next update %s)", f, REREAD_WAIT_MS, next);
+                return cur;
+            }
             lock.lock();
         }
         try {
@@ -317,6 +376,19 @@ final class IssuerCrlCheck {
         } finally {
             lock.unlock();
         }
+    }
+
+    /** How long a sign-in waits for a CRL being re-read before it may use the previous version ({@code stig.crl.reread.wait.ms}). */
+    static volatile long REREAD_WAIT_MS = Long.getLong("stig.crl.reread.wait.ms", 2000L);
+
+    private static boolean lockNow(ReentrantLock lock) {
+        lock.lock();
+        return true;
+    }
+
+    /** Tests only: the lock a re-read of {@code f} holds. */
+    static ReentrantLock lockForTests(Path f) {
+        return LOCKS.computeIfAbsent(f, k -> new ReentrantLock());
     }
 
     private static Loaded read(Path f, Version v) throws GeneralSecurityException, IOException {
@@ -442,7 +514,7 @@ final class IssuerCrlCheck {
         ALARMED.keySet().retainAll(wanted);
         for (Path f : wanted) {
             try {
-                ensureVerified(load(f, true), signers);
+                ensureVerified(load(f, true, System.currentTimeMillis()), signers);
             } catch (GeneralSecurityException | IOException e) {
                 Loaded previous = CACHE.get(f);
                 alarm(f, e instanceof RejectedCrl rc ? rc.issuer : previous == null ? null : previous.issuer, e.getMessage());

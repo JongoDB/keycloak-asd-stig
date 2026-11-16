@@ -38,7 +38,18 @@ public final class IssuerCrlCheckTest {
         Files.write(tmp, der(pem));
         return Files.move(tmp, dir.resolve(name), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
+    static IssuerCrlCheck.Signers signers(List<X509Certificate> trusted) {
+        return new IssuerCrlCheck.Signers() {
+            @Override public List<X509Certificate> named(javax.security.auth.x500.X500Principal p) {
+                List<X509Certificate> out = new ArrayList<>();
+                for (X509Certificate c : trusted) if (c.getSubjectX500Principal().equals(p)) out.add(c);
+                return out;
+            }
+            @Override public List<X509Certificate> all() { return trusted; }
+        };
+    }
     interface Run { void run() throws Exception; }
+    static long timed(Run r) throws Exception { long t = System.nanoTime(); r.run(); return (System.nanoTime() - t) / 1_000_000; }
     static void expect(String name, boolean allowed, Run r) {
         boolean got; String why = "";
         try { r.run(); got = true; } catch (GeneralSecurityException e) { got = false; why = " (" + e.getMessage() + ")"; }
@@ -55,7 +66,7 @@ public final class IssuerCrlCheckTest {
         X509Certificate root = cert(ROOT), caA = cert(CA_A), caB = cert(CA_B), caC = cert(CA_C), impostor = cert(CA_A_IMPOSTOR);
         X509Certificate good = cert(LEAF_A_GOOD), revoked = cert(LEAF_A_REVOKED), leafB = cert(LEAF_B), leafC = cert(LEAF_C);
         List<X509Certificate> trusted = List.of(root, caA, caB, caC);
-        IssuerCrlCheck.Signers ts = p -> { List<X509Certificate> out = new ArrayList<>(); for (X509Certificate c : trusted) if (c.getSubjectX500Principal().equals(p)) out.add(c); return out; };
+        IssuerCrlCheck.Signers ts = signers(trusted);
 
         Path dir = Files.createTempDirectory("issuer-crl");
         System.setProperty("jboss.server.config.dir", dir.toString());
@@ -75,7 +86,7 @@ public final class IssuerCrlCheckTest {
         expect("card of CA C, which has no CRL (fail closed)", false, () -> IssuerCrlCheck.check(new X509Certificate[] {leafC}, all, ts, true, NOW));
         expect("CA A's CRL past nextUpdate, abort-if-non-updated on", false, () -> IssuerCrlCheck.check(goodOnly, all, ts, true, AFTER_NEXT_UPDATE));
         expect("CA A's CRL past nextUpdate, abort-if-non-updated off (Keycloak's semantics)", true, () -> IssuerCrlCheck.check(goodOnly, all, ts, false, AFTER_NEXT_UPDATE));
-        expect("no truststore certificates at all", false, () -> IssuerCrlCheck.check(goodOnly, all, p -> List.of(), true, NOW));
+        expect("no truststore certificates at all", false, () -> IssuerCrlCheck.check(goodOnly, all, signers(List.of()), true, NOW));
 
         // intermediate revocation: the issuing CA against the root's CRL
         expect("root CRL not listed: the issuing CA's status is unknown (fail closed)", false, () -> IssuerCrlCheck.check(goodOnly, List.of(crlB, crlA), ts, true, NOW));
@@ -137,6 +148,60 @@ public final class IssuerCrlCheckTest {
         expect("in-place rewrite with the same inode, size and mtime (ctime only) is re-read" + (sameKey ? "" : " [fileKey changed]"), false,
                 () -> IssuerCrlCheck.check(goodOnly, all, ts, true, NOW));
 
+        // the full path: leaf <- Test Issuing CA I <- Test Sub CA S <- Test Root
+        write(dir, "a.crl", CRL_A_REVOKES_ONE);
+        X509Certificate caS = cert(CA_S), caI = cert(CA_I), leafI = cert(LEAF_I);
+        IssuerCrlCheck.Signers ts3 = signers(List.of(root, caA, caB, caS, caI));
+        Path crlI = write(dir, "i.crl", CRL_I), crlS = write(dir, "s.crl", CRL_S);
+        List<Path> chainFiles = List.of(crlI, crlS, crlR);
+        X509Certificate[] leafIOnly = {leafI};
+        expect("three-level path, every CA unrevoked", true, () -> IssuerCrlCheck.check(leafIOnly, chainFiles, ts3, true, NOW));
+        write(dir, "s.crl", CRL_S_REVOKES_I);
+        expect("the sub CA's CRL revokes the issuing CA", false, () -> IssuerCrlCheck.check(leafIOnly, chainFiles, ts3, true, NOW));
+        write(dir, "s.crl", CRL_S);
+        write(dir, "root.crl", CRL_ROOT_REVOKES_S);
+        expect("the root's CRL revokes the sub CA (two levels above the card)", false, () -> IssuerCrlCheck.check(leafIOnly, chainFiles, ts3, true, NOW));
+        expect("... a card under CA A (also issued by the root) is unaffected", true, () -> IssuerCrlCheck.check(goodOnly, all, ts3, true, NOW));
+        write(dir, "root.crl", CRL_ROOT);
+        expect("the sub CA's CRL is not listed: the issuing CA's status is unknown", false, () -> IssuerCrlCheck.check(leafIOnly, List.of(crlI, crlR), ts3, true, NOW));
+        expect("the sub CA is not in the truststore: the path cannot be built", false, () -> IssuerCrlCheck.check(leafIOnly, chainFiles, signers(List.of(root, caI)), true, NOW));
+        expect("the root is not in the truststore: the path cannot be built", false, () -> IssuerCrlCheck.check(goodOnly, all, signers(List.of(caA, caB)), true, NOW));
+        // a second truststore certificate for CA A's key (re-issued by the root): revoking it refuses CA A's cards
+        X509Certificate caA2 = cert(CA_A_SECOND_CERT);
+        IssuerCrlCheck.Signers tsA2 = signers(List.of(root, caA, caA2, caB));
+        expect("CA A's key has two certificates, neither revoked", true, () -> IssuerCrlCheck.check(goodOnly, all, tsA2, true, NOW));
+        write(dir, "root.crl", CRL_ROOT_REVOKES_A_SECOND);
+        expect("the root revokes CA A's SECOND certificate only: CA A's card", false, () -> IssuerCrlCheck.check(goodOnly, all, tsA2, true, NOW));
+        expect("... the same revocation does not matter when that certificate is not trusted", true, () -> IssuerCrlCheck.check(goodOnly, all, ts, true, NOW));
+        write(dir, "root.crl", CRL_ROOT);
+
+        // a re-read in progress: wait for it; fall back to the previous version only after the timeout and before nextUpdate
+        IssuerCrlCheck.REREAD_WAIT_MS = 400;
+        write(dir, "a.crl", CRL_A_REVOKES_ONE);
+        IssuerCrlCheck.check(goodOnly, all, ts, true, NOW);
+        java.util.concurrent.locks.ReentrantLock lockA = IssuerCrlCheck.lockForTests(crlA);
+        write(dir, "a.crl", CRL_A_REVOKES_BOTH);
+        hold(lockA, 200);
+        long waited = timed(() -> expect("re-read in progress for 200 ms: the sign-in waits and sees the new CRL", false,
+                () -> IssuerCrlCheck.check(goodOnly, all, ts, true, NOW)));
+        expectEq("... it waited for the re-read (>= 150 ms)", 1, waited >= 150 ? 1 : 0);
+        write(dir, "a.crl", CRL_A_REVOKES_ONE);
+        IssuerCrlCheck.check(goodOnly, all, ts, true, NOW);
+        write(dir, "a.crl", CRL_A_REVOKES_BOTH);
+        hold(lockA, 1500);
+        waited = timed(() -> expect("re-read takes longer than the 400 ms wait, previous CRL before nextUpdate: previous version used", true,
+                () -> IssuerCrlCheck.check(goodOnly, all, ts, true, NOW)));
+        expectEq("... after waiting the timeout, not the whole re-read (400-1400 ms)", 1, waited >= 380 && waited < 1400 ? 1 : 0);
+        Thread.sleep(1600);
+        write(dir, "a.crl", CRL_A_REVOKES_ONE);
+        IssuerCrlCheck.check(goodOnly, all, ts, false, NOW);
+        write(dir, "a.crl", CRL_A_REVOKES_BOTH);
+        hold(lockA, 1200);
+        waited = timed(() -> expect("previous CRL past nextUpdate: the sign-in waits for the re-read and sees the new CRL", false,
+                () -> IssuerCrlCheck.check(goodOnly, all, ts, false, AFTER_NEXT_UPDATE)));
+        expectEq("... it waited the whole re-read (>= 1100 ms)", 1, waited >= 1100 ? 1 : 0);
+        IssuerCrlCheck.REREAD_WAIT_MS = 2000;
+
         // pre-warm off the request path, and eviction of files no longer configured
         write(dir, "a.crl", CRL_A_REVOKES_ONE);
         IssuerCrlCheck.prewarm(List.of("a.crl", "b.crl", "root.crl"), ts);
@@ -153,6 +218,13 @@ public final class IssuerCrlCheckTest {
 
         System.out.println(failed == 0 ? "all passed" : failed + " failed");
         System.exit(failed == 0 ? 0 : 1);
+    }
+
+    /** Holds {@code lock} on another thread for {@code ms}, as a slow re-read would; returns once it is held. */
+    static void hold(java.util.concurrent.locks.ReentrantLock lock, long ms) throws InterruptedException {
+        java.util.concurrent.CountDownLatch held = new java.util.concurrent.CountDownLatch(1);
+        Thread t = new Thread(() -> { lock.lock(); held.countDown(); try { Thread.sleep(ms); } catch (InterruptedException e) { } finally { lock.unlock(); } });
+        t.setDaemon(true); t.start(); held.await();
     }
 
     // ---- fixtures (openssl, see the class comment)
@@ -483,6 +555,146 @@ public final class IssuerCrlCheckTest {
         "dGHlQfLKuTjV1TL3sON/WdDcd8N4uM+vWlKYq5DZFwB1t0AKIN3Q6dSNdCtGjsHF\n" +
         "c/IKZOVRZVbJZR5BikgDv/K33yaMf65zHTCFEdAqC/6kjdSlglV4N2vx73SamGmf\n" +
         "b3iYl8iV5WIR61jTk1Pe+QICUn1fwgH0DLu6iw3QQz0g/kpDOF645SPEzxcRtp0=\n" +
+        "-----END X509 CRL-----\n" +
+        "";
+    static final String CA_S =
+        "-----BEGIN CERTIFICATE-----\n" +
+        "MIIC7DCCAdSgAwIBAgICEAMwDQYJKoZIhvcNAQELBQAwFDESMBAGA1UEAwwJVGVz\n" +
+        "dCBSb290MCAXDTI2MTExNjAzNTU0OFoYDzIxMjYxMDIzMDM1NTQ4WjAYMRYwFAYD\n" +
+        "VQQDDA1UZXN0IFN1YiBDQSBTMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKC\n" +
+        "AQEA32Fut2fcdY6a5HZ/x1U0fko6iomZGbzvd5ZKp9zGQxIfETC4Jn+zByugF7hO\n" +
+        "hjdbnWaynRYhYDnU6yorb5CJaQds7WOmzAXy4NqkdL/S+ZgVng3am6YkGcWklEPJ\n" +
+        "JrF4puzJQXtD/oFCizI2sO/+3kCLNLTyTQrIDw4HdXQp7V9kW5JqHMWt3YcsSIm5\n" +
+        "HXaJ7EDBKeXYMCb4p8qBTEL93n5xLO+WRhoSGU8rQPbXPsjHtiFszUPxCXv2fiv2\n" +
+        "BN0hE7Td7FwSUvMuwgTuhherLuIrxTLWYtJTIH2Vteczv8h/5VOlb5fYQjNthheh\n" +
+        "ADGmPahs0ilHqy8OXZg2WLUoSQIDAQABo0IwQDAPBgNVHRMBAf8EBTADAQH/MA4G\n" +
+        "A1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUTAv14oLk3EToqy5+WfEHzeua26wwDQYJ\n" +
+        "KoZIhvcNAQELBQADggEBAHkh8cMjG3A3319Wl6QvYADepX2D775/cJUBfpb3jZTQ\n" +
+        "0++9IaeIPQZVo5fk9JlJdRR5DkC13qxRhEgxoX7yffnuF909jNz5RyxN3jfLfCtS\n" +
+        "RSbnNpdQYYE4shFtX6oOrlE/eGnmQla4HHSSI8GvI2HnaBqStAvPXHugIV0uKSGU\n" +
+        "pKmjdEINCqczolr6Wbk42R+IZ4w+lzWk13ZmzbE9HXcmEVPx87y0t3P20nTVaPNV\n" +
+        "s+zOlZnHiXecaUmNmDtnXjNL2BCN8hYaIj6k3KrcmRao35LaqLLG5HIkbvyE+r8R\n" +
+        "cgpOjoEtjfQ6UJbOaZaeawEpgENimALc+0l5MugQ61k=\n" +
+        "-----END CERTIFICATE-----\n" +
+        "";
+    static final String CA_I =
+        "-----BEGIN CERTIFICATE-----\n" +
+        "MIIC9DCCAdygAwIBAgICEAAwDQYJKoZIhvcNAQELBQAwGDEWMBQGA1UEAwwNVGVz\n" +
+        "dCBTdWIgQ0EgUzAgFw0yNjExMTYwMzU1NDhaGA8yMTI2MTAyMzAzNTU0OFowHDEa\n" +
+        "MBgGA1UEAwwRVGVzdCBJc3N1aW5nIENBIEkwggEiMA0GCSqGSIb3DQEBAQUAA4IB\n" +
+        "DwAwggEKAoIBAQClkNjFt/O8CRX3LBv/UrSKLHYQ2eoYrB4lAY/szARU0Uc86FPR\n" +
+        "aJZsQTV0f2gu5IhT2xu0vK3RX0v3U9qlT98Nx5vRxLeY9ElBizaOK/Oh0YcdwS72\n" +
+        "2K9I2/elxM/QodrO/bP2Viwn1u/5Cn7ZGpjhRXTzy29fCeITdofdQBUP//PKmmr3\n" +
+        "PogF4cEDs9jVaaEpivD6RdO/zBX48chq/MX03TXg2MUgq9XBNNtoxer7LTQk2Bf+\n" +
+        "wbuvHXw1HphvVtlhffrb9H2kqHfX7AJl2Y6ywyiP0Ex23QQRd2/0BWjCGrdf6f6w\n" +
+        "TxVQ2XUIuzZWIYvZQpPHZS19JKiTpqLMbIZPAgMBAAGjQjBAMA8GA1UdEwEB/wQF\n" +
+        "MAMBAf8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBSrFKMZdTgYh9yA/nxHfZHd\n" +
+        "vSVLLjANBgkqhkiG9w0BAQsFAAOCAQEAWp8OyVIIZQ/1R0Ywr3LX//7SkZ938DAK\n" +
+        "Zfivwa+cYWt8DcJLW0ZnleU2u5oKL9Qb4SXL5LakNiMqWn1jdN8Tp+WmY27EuPHk\n" +
+        "fQcRVeObLZ522swLfIHD4Gek3TuO7rrDJQGscbmFowyzS6tC3JLbzqu3blda5sr6\n" +
+        "6TYwEAIaU59z5keewQmGitD9f/KqVQY6hFWN4P1MefDArWbQq2ulz+OKfN0C6j4V\n" +
+        "XDzYDbSJ0wLqRFEwPBS8NxUG4BowDI6tQqIfNaOUpx0Pi87VPao/fN7G3MWg3CVe\n" +
+        "0SXkBGW58cz7V6edtAMpewOP/Q26uBKI2ejqUTyxhzBbEShr19M2vg==\n" +
+        "-----END CERTIFICATE-----\n" +
+        "";
+    static final String LEAF_I =
+        "-----BEGIN CERTIFICATE-----\n" +
+        "MIIB+zCB5KADAgECAgIQADANBgkqhkiG9w0BAQsFADAcMRowGAYDVQQDDBFUZXN0\n" +
+        "IElzc3VpbmcgQ0EgSTAgFw0yNjExMTYwMzU1NDhaGA8yMTI2MTAyMzAzNTU0OFow\n" +
+        "EDEOMAwGA1UEAwwFaWxlYWYwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATYUgXU\n" +
+        "tiZyOYJj2wKXvKmZcgVB0kn0Yn2WBiXIfANsBKJfSIw0OzccxGzWOOzxB8TMyEtR\n" +
+        "LmNblmnblicGLTQ5ox0wGzAJBgNVHRMEAjAAMA4GA1UdDwEB/wQEAwIHgDANBgkq\n" +
+        "hkiG9w0BAQsFAAOCAQEAjPBSXomrPTceFCCkioSYOJlLPxSL+z+r1tNtpH2l7f1Q\n" +
+        "6r2aJVQu6QKFQ58gWM6xnWxOG/C+wxtvqHVwC+JKzZSQ/R+vzmhq5Uy8t94vvr3H\n" +
+        "2f+SBiWwFtF6x/bUXZIIimEvM09DzGYSMPajvDf+6au1RysqRveuE8WILUARnhAO\n" +
+        "oA5Tri4gBOuh8eVWxThSaj9gmnv1cjmCATVMRjvLQjeQCIst3EqkPk9tJrTjv04I\n" +
+        "Wb55tmg+g+OOXeBUlkk2TsPwWStAbR9o2A43WKtWanTa+Fl1Olco3LXrP0ghfnvD\n" +
+        "k0x4jfn+QtXnPoRZeeu1d2eyN5zfm8JmjHRXEBv8bQ==\n" +
+        "-----END CERTIFICATE-----\n" +
+        "";
+    static final String CA_A_SECOND_CERT =
+        "-----BEGIN CERTIFICATE-----\n" +
+        "MIIC6DCCAdCgAwIBAgICEAQwDQYJKoZIhvcNAQELBQAwFDESMBAGA1UEAwwJVGVz\n" +
+        "dCBSb290MCAXDTI2MTExNjAzNTU0OFoYDzIxMjYxMDIzMDM1NTQ4WjAUMRIwEAYD\n" +
+        "VQQDDAlUZXN0IENBIEEwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC4\n" +
+        "NMXgFO60ZAzuItU77bV5p8BpLDW8X+0ieE3N6QU4HGCa/u5vgoex3JEuvVWTD9z6\n" +
+        "if98Gu8bDuQLjSL7prv+l6DBfRd8sNXMPG4bMmb+OEy2SHEW4Gxgy1VHpvq/KnQU\n" +
+        "30z51dySJ0xowFTZthK3giaQSWO1X3Zrb0boALaj3U0jrvbDerhZhdqTLbd+RRw6\n" +
+        "eDHP+TId1QZ/9GMGBXUOof8WQQdrOtNQieBuoQ+aI2gIX5TCgHjMx4nbpibFWrUi\n" +
+        "Kqdnqx/8bvYeVXkf4W/UAiZL+SuBijnoad8OF1s/BocEeIv00BmRVPhYjrEMRufk\n" +
+        "lT1cyeKKU8RF/aLCVcD3AgMBAAGjQjBAMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0P\n" +
+        "AQH/BAQDAgEGMB0GA1UdDgQWBBSHge6zO1VSgjLXs12IuwUTVuwx/TANBgkqhkiG\n" +
+        "9w0BAQsFAAOCAQEAVL2YRm/iuo2cqqAFwxfwpsjZqVm8iu3KF3cDJPjy3GAgE/3r\n" +
+        "tNbCksb9lwoExt7jrC/Q7sdAP5SgMkxigNiTsCRGK/iF3Dv9mYtGoDU5wvvW9G0B\n" +
+        "i36RlZvrza+SHV7akXY7lzcmZezr1AomHKKhYFVZcu0BosecP1RU1KLl3ZiECKTU\n" +
+        "CExhcFHM/tzffQdpu8qStUBJCGo6ppNwf1TE0B1FMWw01tTrodmkjJ6oMpDUccUN\n" +
+        "hDOg/r5v1dLzXejJ6a7+bZRWmTjug1cH/TUlrbRI1t0WI8F/RGrNWWi5dUCvNNUw\n" +
+        "i5ZntAiWr0a+aiYolf1Sf41CmklvBpVivYGYpg==\n" +
+        "-----END CERTIFICATE-----\n" +
+        "";
+    static final String CRL_I =
+        "-----BEGIN X509 CRL-----\n" +
+        "MIIBlTB/AgEBMA0GCSqGSIb3DQEBCwUAMBwxGjAYBgNVBAMMEVRlc3QgSXNzdWlu\n" +
+        "ZyBDQSBJFw0yNjExMTYwMzU1NDhaFw0zNjExMTMwMzU1NDhaoC8wLTAfBgNVHSME\n" +
+        "GDAWgBSrFKMZdTgYh9yA/nxHfZHdvSVLLjAKBgNVHRQEAwIBATANBgkqhkiG9w0B\n" +
+        "AQsFAAOCAQEAJ2lqYqLIGMmPKKCvlDfz0kCq9T+WQZOxHaOlJMjOlwF7gJaCoYQe\n" +
+        "kkOCGQ3Rujb6ZUbZE7LLxFZaQZwMfyu3O00mo+lBNeubwCBunxIkq6fR0Df9hTnK\n" +
+        "2Bh/65iouedoF9BuH8OH3/7AhQISoZrsADcSvGP6HrKGrhK4xNkXZqbD7bC0RITG\n" +
+        "MFjWHnbT/dco3tmfb3EwdNWrwhrQg4IkJCVEEc33EwsIpVv07VG87Pa3cfkFm7tk\n" +
+        "o27s0cQT2l4hOx1w+gAHgIsikx5NyIiAyp8dmet7xtfPMQ7T4rCjWGKlbrevh1Ra\n" +
+        "N0USlvJXclOpVlDhcFJPKVCHR2E/pa3QaQ==\n" +
+        "-----END X509 CRL-----\n" +
+        "";
+    static final String CRL_S =
+        "-----BEGIN X509 CRL-----\n" +
+        "MIIBkTB7AgEBMA0GCSqGSIb3DQEBCwUAMBgxFjAUBgNVBAMMDVRlc3QgU3ViIENB\n" +
+        "IFMXDTI2MTExNjAzNTU0OFoXDTM2MTExMzAzNTU0OFqgLzAtMB8GA1UdIwQYMBaA\n" +
+        "FEwL9eKC5NxE6KsuflnxB83rmtusMAoGA1UdFAQDAgEBMA0GCSqGSIb3DQEBCwUA\n" +
+        "A4IBAQBcVuLomkP7ENSeaXK3k8KSkPM3Y22ab02MRcFZo130+msFDwUss9OkoLNb\n" +
+        "fa6iIDMxlLBL8prk8zUMYdjQPH0mETMF4CngJOs1uTl014w02JtuJg9mS10q7A73\n" +
+        "NZEbJbbKvJrABSLOVADu67thaqwfAnu8TlAMeHeMFDdqytln9e8E2cQ9jAnTGA9t\n" +
+        "C+KqPjdVQYu1Fb+L0LRMSOcvYDPQYSNffoNDvQ6/zCQw/ryyJ0HL1jjia+5usNyq\n" +
+        "3OEVO3sNIA3csAtafoylfWKnpYGtpqSXzp7Z5SVRC9q6g/lmxymNMFGjErwOnTLi\n" +
+        "wgNgviVXKz03COPIlZJSJyhJmIHN\n" +
+        "-----END X509 CRL-----\n" +
+        "";
+    static final String CRL_S_REVOKES_I =
+        "-----BEGIN X509 CRL-----\n" +
+        "MIIBqTCBkgIBATANBgkqhkiG9w0BAQsFADAYMRYwFAYDVQQDDA1UZXN0IFN1YiBD\n" +
+        "QSBTFw0yNjExMTYwMzU1NDhaFw0zNjExMTMwMzU1NDhaMBUwEwICEAAXDTI2MTEx\n" +
+        "NjAzNTU0OFqgLzAtMB8GA1UdIwQYMBaAFEwL9eKC5NxE6KsuflnxB83rmtusMAoG\n" +
+        "A1UdFAQDAgECMA0GCSqGSIb3DQEBCwUAA4IBAQBgAOnQxXr7Pfx8yeJh98nPnckG\n" +
+        "RhAPxBpIIA4pmMmsKIgzZW+lEWZ9QO8v4OWTJWolzU7vqEcLXv3/1TG1bhGOTZpb\n" +
+        "uHXGCJBXojQQ4b3PPP7hPgE8flAlOEnWy8UM0l0R675fXkuJizjs37iDUkn8b7k0\n" +
+        "ORxXaQ6uqSQry6OkxkSDSvpTEfYXL2IoKuIyTXPzPO5bZ0fgmtXBvPK4YbjjTa+w\n" +
+        "UIrh9plxa97znZuB9+c0iO0hhyZ8YApYlRL/DXtKy+qfgHeWUyFYAu0QTY4RJwki\n" +
+        "6PC4DjomElzjSzsqI/aoC0dARuF4TLNI3Z1UPGSeWEqPMsKH/8cmXYx50w1F\n" +
+        "-----END X509 CRL-----\n" +
+        "";
+    static final String CRL_ROOT_REVOKES_S =
+        "-----BEGIN X509 CRL-----\n" +
+        "MIIBpTCBjgIBATANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDDAlUZXN0IFJvb3QX\n" +
+        "DTI2MTExNjAzNTU0OFoXDTM2MTExMzAzNTU0OFowFTATAgIQAxcNMjYxMTE2MDM1\n" +
+        "NTQ4WqAvMC0wHwYDVR0jBBgwFoAUB3xCmLhsXHbXCPlqsuujYitgt0QwCgYDVR0U\n" +
+        "BAMCAQQwDQYJKoZIhvcNAQELBQADggEBAH0pmF1BgnF48n+kv+uXXDNjyG+Ne2f3\n" +
+        "4W158LzFWVsKIlnbc/4sv1W0XB8oYPstjSlCPvovJcgvwHUzxB9p8wEPZn+RPfgQ\n" +
+        "/S4qEEFiJGXi8NewYFLjrU5BeT9YAQO7inx3YkwfOpFHwAffKp41YjREbHnVAHxr\n" +
+        "+wbzkyuuuSvW84LAI81cdjjCm8DubR6qcOEa3SpudoLO2EBTBTcfasD5n6cof1yE\n" +
+        "OUP8GmcbF5V+V2FbFEk7Fn8tzlC2Xt8JHm2yhvGdQr/uPifkCUiXZDrKNeiPMPRc\n" +
+        "5ZfHE6xwcklc9CwtI03y3k/eXrYZnoHlsp53HJlIWFxZSU7/MDpNC6Q=\n" +
+        "-----END X509 CRL-----\n" +
+        "";
+    static final String CRL_ROOT_REVOKES_A_SECOND =
+        "-----BEGIN X509 CRL-----\n" +
+        "MIIBpTCBjgIBATANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDDAlUZXN0IFJvb3QX\n" +
+        "DTI2MTExNjAzNTU0OFoXDTM2MTExMzAzNTU0OFowFTATAgIQBBcNMjYxMTE2MDM1\n" +
+        "NTQ4WqAvMC0wHwYDVR0jBBgwFoAUB3xCmLhsXHbXCPlqsuujYitgt0QwCgYDVR0U\n" +
+        "BAMCAQUwDQYJKoZIhvcNAQELBQADggEBAKU0iWQMp6usqrJcXcChgBlc5ef9DjnC\n" +
+        "1mEC/9pTaPM37RIIHm30Nx6AY2Q6sU8QCOL7GmeApHghhfGkzsgNY6iCdwWtMOik\n" +
+        "VNqhkCARItBEwsZ20rQmNdfjbpw4yHTOITgp1YW9fqUUok25UDncl+zanrsojo4/\n" +
+        "aizLIcTBsL2sAbemRRvfnyocetxXvYMRfOXG1Ah5zIHUxItdMPscnt9t7pU37r+u\n" +
+        "VK08rXk0Cm7IqxBQ8FAuq8inXu4qObTOKtciqPcdh5hzteSn8pDWHtdaQ5x6P4AL\n" +
+        "7CE0RIAhOm662MfJ4/w8sxehP5lXvmfMKU6xQg8I7dV16vMckOarJt8=\n" +
         "-----END X509 CRL-----\n" +
         "";
 }
