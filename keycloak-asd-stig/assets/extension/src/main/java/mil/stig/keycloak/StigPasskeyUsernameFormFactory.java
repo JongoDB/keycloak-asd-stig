@@ -26,8 +26,8 @@ import org.keycloak.provider.ProviderConfigProperty;
  * Passkey realms (kcstig auth_mode=passkey, sign_in=username): Keycloak's own username form (passkeys, conditional UI,
  * "Sign in with passkey"), except that an account holding NO passwordless passkey is answered EXACTLY as an unknown
  * username - Keycloak's own invalid-user path (testInvalidUser with no user), the same page, status and event - so
- * the response does not tell whether such an account exists. A disabled account is answered the same way (Keycloak's
- * own "Account is disabled" would tell it apart),, and it is never taken on to a passkey step where it
+ * the response does not tell whether such an account exists. A disabled or locked-out account is answered the same way
+ * (Keycloak's own "Account is disabled" would tell it apart),, and it is never taken on to a passkey step where it
  * could be offered a set-up. A passkey is registered only through the e-mailed set-up or recovery link.
  * UsernameForm is final, so this wraps it and intercepts the flow context's success().
  * Logged as STIG-PASSKEY-NOT-ENROLLED.
@@ -63,7 +63,10 @@ public class StigPasskeyUsernameFormFactory implements AuthenticatorFactory {
                         cu = tried == null ? null : org.keycloak.models.utils.KeycloakModelUtils.findUserByNameOrEmail(
                                 ctx.getSession(), ctx.getRealm(), tried);
                     }
-                    disabledAnswer = cu != null && !cu.isEnabled();
+                    // disabled, or locked by brute-force protection (unreachable in a passkey realm today - Keycloak
+                    // 26.8.2 counts no failed passkey assertion, with or without a user in context - but answered the
+                    // same way, so a later release that counts them cannot turn the lock into an account oracle)
+                    disabledAnswer = cu != null && (!cu.isEnabled() || lockedOut(ctx, cu));
                 }
                 boolean disabledFailure = (m.getName().equals("failureChallenge") || m.getName().equals("failure")) && args != null
                         && args.length > 0 && (args[0] == AuthenticationFlowError.USER_DISABLED || args[0] == AuthenticationFlowError.USER_TEMPORARILY_DISABLED);
@@ -79,6 +82,12 @@ public class StigPasskeyUsernameFormFactory implements AuthenticatorFactory {
             };
             return (AuthenticationFlowContext) Proxy.newProxyInstance(AuthenticationFlowContext.class.getClassLoader(),
                     new Class<?>[] {AuthenticationFlowContext.class}, h);
+        }
+
+        private static boolean lockedOut(AuthenticationFlowContext ctx, UserModel u) {
+            org.keycloak.services.managers.BruteForceProtector p = ctx.getProtector();
+            return p != null && ctx.getRealm().isBruteForceProtected()
+                    && (p.isTemporarilyDisabled(ctx.getSession(), ctx.getRealm(), u) || p.isPermanentlyLockedOut(ctx.getSession(), ctx.getRealm(), u));
         }
 
         /** Answer exactly as Keycloak answers an unknown username: no user in the context, the event or the auth

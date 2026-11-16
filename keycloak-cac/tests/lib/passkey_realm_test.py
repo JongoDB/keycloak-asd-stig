@@ -4,7 +4,7 @@
 Admin calls use the lab image's automation account (its secret derives from the bootstrap password in lab mode only).
 Every account here is a throwaway in a throwaway container.
 """
-import argparse, base64, email, glob, hashlib, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request, uuid
+import argparse, base64, email, glob, hashlib, html, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request, uuid
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "keycloak-asd-stig", "scripts"))
@@ -107,9 +107,25 @@ creds = kc.api("GET", RR + "/users/%s/credentials" % uid)
 check("... exactly one credential: a passwordless ES256 passkey", [(c["type"], K.cose_alg(c["credentialData"])) for c in creds]
       == [("webauthn-passwordless", "ES256")], [(c["type"], K.cose_alg(c["credentialData"])) for c in creds])
 # a set-up link sets up ONE passkey: once used, it is refused; a second browser that opened it in parallel cannot add one
-k_re, u_re, p_re = E.Browser(CA).go(link, None, BASE + RR + "/account")
-check("a set-up link, once used, is refused (no second set-up from it)", k_re == "error" or E.page_id(p_re) not in ("login-info", "login-terms", "login-webauthn-register"),
-      (k_re, E.page_id(p_re) if k_re == "page" else u_re[:60]))
+creds_before = len(kc.api("GET", RR + "/users/%s/credentials" % uid))
+b_re = E.Browser(CA)
+trail, k_re, u_re, p_re = [], *b_re.go(link, None, "https://never.invalid/")
+for _ in range(4):                          # follow whatever it offers, the way someone holding the link would
+    trail.append((k_re, E.page_id(p_re) if k_re == "page" else u_re[:80]))
+    if k_re != "page":
+        break
+    nxt = re.search(r'href="([^"]*(?:action-token|required-action|login-actions)[^"]*)"', p_re)
+    act, f = E.form(p_re)
+    if nxt:
+        k_re, u_re, p_re = b_re.go(html.unescape(nxt.group(1)), None, "https://never.invalid/")
+    elif act:
+        k_re, u_re, p_re = b_re.go(act, f, "https://never.invalid/")
+    else:
+        break
+reached = [t for t in trail if t[0] == "redirect" or "code=" in str(t[1])
+           or t[1] in ("login-info", "login-terms", "login-webauthn-register", "login-verify-email")]
+check("a set-up link, once used, is refused: no set-up page, no redirect, no code, no new credential",
+      not reached and trail[0][0] == "error" and len(kc.api("GET", RR + "/users/%s/credentials" % uid)) == creds_before, trail)
 par_id, par_link = invite("parallel.%s" % uuid.uuid4().hex[:6])
 bA = E.Browser(CA); bA.go(par_link, None, BASE + RR + "/account")              # browser A opens it ...
 _, okB, _, _ = set_up(par_link)                                                # ... browser B completes it ...
@@ -142,6 +158,12 @@ signin("a device without the credential: refused", False, other, "button")
 signin("a username alone: no code (it stays on the passkey step)", False, a, "username-only", name)
 bf = kc.api("GET", RR + "/attack-detection/brute-force/users/%s" % uid)
 check("failed passkey assertions do not count towards the lockout (AC-7 rationale recorded)", bf.get("numFailures") == 0 and not bf.get("disabled"), bf)
+for _ in range(4):                          # the username path: the account IS in the context when the assertion fails
+    PF.sign_in(fl, a, "username", name, cacert=CA, bad_signature=True)
+PF.sign_in(fl, other, "username", name, cacert=CA)
+bf = kc.api("GET", RR + "/attack-detection/brute-force/users/%s" % uid)
+check("... nor in the username path, with the account in context (no lockout anyone could cause, no 'locked' oracle)",
+      bf.get("numFailures") == 0 and not bf.get("disabled"), bf)
 signin("... and the account still signs in", True, a, "button")
 # an account with NO passkey (an unclaimed invitation; one invited and half set up; one with nothing pending) is
 # refused at sign-in by its username alone - never sent to a passkey set-up - and the e-mailed link still sets it up
