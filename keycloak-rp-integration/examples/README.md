@@ -43,11 +43,10 @@ when you run more than one replica.
 | `OIDC_CLIENT_SECRET_FILE` | `client-secret`: file holding the secret (used when no private key is set) |
 | `SESSION_SECRET_FILE` | Node/Python: file with a random string that signs the session cookie |
 | `SESSION_IDLE_MINUTES` / `SESSION_MAX_HOURS` | Default 15 / 8. Keep them at or below the realm's values (10 for admin apps) |
-| `TRUST_PROXY` | `1` only behind your own proxy that overwrites `X-Forwarded-*` (Node/Python; Go relies on `APP_BASE_URL` only) |
+| `TRUST_PROXY` | `1` only behind your own proxy that overwrites `X-Forwarded-*`. URLs always come from `APP_BASE_URL`; the forwarded client IP is used for audit and the login limit |
 | `OIDC_CA_FILE` (Go), `NODE_EXTRA_CA_CERTS` (Node), `REQUESTS_CA_BUNDLE` (Python) | The IdP's CA bundle, when it chains to a private or DoD root |
-| `MAX_SESSIONS` | Default 10000: cap on sessions plus logins in progress (503 beyond it). Unfinished logins expire after 10 minutes |
-| `MAX_PENDING_LOGINS` | Default 1000: `/login` starts allowed per 10 minutes in total, far below `MAX_SESSIONS` (503 beyond it) |
-| `LOGIN_RATE_PER_IP` | Default 30: `/login` starts per client IP per 10 minutes (429 beyond it). The client IP is the TCP peer, or the forwarded one with `TRUST_PROXY=1`, so set that behind a proxy or every user shares one budget |
+| `MAX_PENDING_LOGINS` | Default 1000: logins in progress held server-side. When full, the **oldest** unfinished login is dropped; a new `/login` is never refused for this reason, so a flood cannot lock real users out. Unfinished logins also expire after 10 minutes |
+| `LOGIN_RATE_PER_IP` | Default 30: `/login` starts per client per 10 minutes (429 with `Retry-After` beyond it). A client is an IPv4 address or an IPv6 /64. The address is the TCP peer, or the forwarded one with `TRUST_PROXY=1`, so set that behind a proxy or every user shares one budget |
 | `HOST` / `PORT` | Listen address. Default `127.0.0.1:3000`; put a TLS proxy in front |
 
 ```bash

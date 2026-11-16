@@ -159,12 +159,13 @@ The IdP's limits are a ceiling for the app, never a floor. Its sessions must not
   the token every few minutes while the user is active, and end the local session on `invalid_grant`. That is what
   the IdP skill's oauth2-proxy gateway does with a one-minute refresh.
 - **Bound what an anonymous visitor can create.** Every `/login` stores state (PKCE verifier, nonce) before anyone
-  is authenticated. Expire it (the examples use 10 minutes), sweep sessions that idled out but were never revisited,
-  and cap the total (`MAX_SESSIONS`, answered with 503), or a script that requests `/login` in a loop fills memory.
-  Give logins in progress their own, much smaller budget (`MAX_PENDING_LOGINS` starts per 10 minutes, 503) and a
-  per-client-IP limit (`LOGIN_RATE_PER_IP`, 429 with `Retry-After`), so one client cannot use up the budget for
-  everyone. Behind a proxy, the per-IP limit needs the real client IP (section 9), or every user shares one
-  budget. A shared store needs the same TTLs and counters.
+  is authenticated. Expire it (the examples use 10 minutes) and sweep sessions that idled out but were never
+  revisited. Bound the pending-login store (`MAX_PENDING_LOGINS`), and when it is full **drop the oldest unfinished
+  login rather than refusing new ones**: a refusal would let a flood of anonymous requests lock every real user
+  out. Limit each client separately (`LOGIN_RATE_PER_IP`, 429 with `Retry-After`), counting an IPv6 client by its
+  /64 so rotating addresses within one prefix doesn't reset the count, and bound that table too. Behind a proxy,
+  the per-client limit needs the real client IP (section 9), or every user shares one budget. A shared store needs
+  the same TTLs and counters.
 - **Return-to-page after login without an open redirect.** If you send users back to the page they asked for,
   store that path **server-side** in the login-in-progress state, never in a query parameter you echo back
   unchecked. Accept only a relative path that starts with exactly one `/`: reject `//host`, `/\host`, anything

@@ -37,39 +37,58 @@ const (
 	pendingTTL = 10 * time.Minute // an unfinished login expires after 10 minutes
 )
 
-// loginLimiter bounds how fast anonymous /login requests can create server-side state: in total and per client IP.
+// loginLimiter counts login starts per client - an IPv4 address or an IPv6 /64 - and refuses (429) beyond perIP
+// in pendingTTL. It never refuses because of overall load: the pending-login store evicts its oldest entry instead.
 type loginLimiter struct {
-	mu           sync.Mutex
-	starts       map[string][]time.Time
-	total, perIP int
+	mu          sync.Mutex
+	starts      map[string][]time.Time
+	perIP, maxN int // maxN bounds the table itself
 }
 
-func (l *loginLimiter) admit(ip string, now time.Time) int {
+// ipBucket is the key a client is counted under: IPv4 (also IPv4-mapped IPv6) as is, IPv6 by its /64.
+func ipBucket(ip string) string {
+	host, _, _ := strings.Cut(ip, "%")
+	p := net.ParseIP(host)
+	if p == nil {
+		return ip
+	}
+	if v4 := p.To4(); v4 != nil {
+		return v4.String()
+	}
+	return p.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
+func (l *loginLimiter) admit(ip string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	n := 0
-	for k, ts := range l.starts {
-		live := ts[:0]
-		for _, t := range ts {
-			if now.Sub(t) < pendingTTL {
-				live = append(live, t)
+	key := ipBucket(ip)
+	live := l.starts[key][:0]
+	for _, t := range l.starts[key] {
+		if now.Sub(t) < pendingTTL {
+			live = append(live, t)
+		}
+	}
+	if len(live) >= l.perIP {
+		l.starts[key] = live
+		return false
+	}
+	l.starts[key] = append(live, now)
+	if len(l.starts) > l.maxN { // bound the table: drop expired buckets first, then any other bucket
+		for k, ts := range l.starts {
+			if k != key && (len(ts) == 0 || now.Sub(ts[len(ts)-1]) >= pendingTTL) {
+				delete(l.starts, k)
 			}
 		}
-		if len(live) == 0 {
-			delete(l.starts, k)
-		} else {
-			l.starts[k] = live
-			n += len(live)
+		for k := range l.starts {
+			if len(l.starts) <= l.maxN {
+				break
+			}
+			if k != key {
+				delete(l.starts, k)
+			}
 		}
 	}
-	if len(l.starts[ip]) >= l.perIP {
-		return http.StatusTooManyRequests
-	}
-	if n >= l.total {
-		return http.StatusServiceUnavailable
-	}
-	l.starts[ip] = append(l.starts[ip], now)
-	return 0
+	return true
 }
 
 type session struct {
@@ -82,7 +101,7 @@ type session struct {
 
 type rp struct {
 	clientID, base, cookie, origin string
-	maxSessions                    int
+	maxPending                     int
 	trustProxy                     bool
 	limiter                        *loginLimiter
 	secure                         bool
@@ -170,18 +189,14 @@ func main() {
 		idle: time.Duration(idleMin * float64(time.Minute)), maxAge: time.Duration(maxH * float64(time.Hour)),
 		endSession: meta.EndSession, ctx: ctx, sessions: map[string]*session{}}
 	a.origin = originOf(base)
-	if a.maxSessions, err = strconv.Atoi(env("MAX_SESSIONS", "10000")); err != nil || a.maxSessions < 1 {
-		log.Fatal("MAX_SESSIONS: must be a positive integer")
-	}
-	maxPending, err := strconv.Atoi(env("MAX_PENDING_LOGINS", "1000"))
-	if err != nil || maxPending < 1 {
+	if a.maxPending, err = strconv.Atoi(env("MAX_PENDING_LOGINS", "1000")); err != nil || a.maxPending < 1 {
 		log.Fatal("MAX_PENDING_LOGINS: must be a positive integer")
 	}
 	perIP, err := strconv.Atoi(env("LOGIN_RATE_PER_IP", "30"))
 	if err != nil || perIP < 1 {
 		log.Fatal("LOGIN_RATE_PER_IP: must be a positive integer")
 	}
-	a.limiter = &loginLimiter{starts: map[string][]time.Time{}, total: maxPending, perIP: perIP}
+	a.limiter = &loginLimiter{starts: map[string][]time.Time{}, perIP: perIP, maxN: 10 * a.maxPending}
 	a.trustProxy = env("TRUST_PROXY", "0") == "1"
 	a.cookie = "sid"
 	if a.secure {
@@ -361,24 +376,33 @@ func (a *rp) clientIP(r *http.Request) string {
 }
 
 func (a *rp) login(w http.ResponseWriter, r *http.Request) {
-	if code := a.limiter.admit(a.clientIP(r), time.Now()); code != 0 {
-		audit("login_throttled", map[string]any{"ip": a.clientIP(r), "status": code})
+	if !a.limiter.admit(a.clientIP(r), time.Now()) {
+		audit("login_throttled", map[string]any{"ip": ipBucket(a.clientIP(r))})
 		w.Header().Set("Retry-After", "60")
-		http.Error(w, "Too many sign-in attempts. Try again shortly.", code)
+		http.Error(w, "Too many sign-in attempts. Try again shortly.", http.StatusTooManyRequests)
 		return
 	}
 	s := &session{State: randString(), Nonce: randString(), Verifier: oauth2.GenerateVerifier(), LastSeen: time.Now()}
 	id := randString()
 	a.mu.Lock()
-	for k, p := range a.sessions { // drop abandoned logins
-		if p.Sub == "" && a.expired(p, time.Now()) {
+	// Logins in progress are bounded: drop expired ones, then, if still full, the oldest. Never refuse the new one,
+	// so a flood of anonymous /login requests cannot lock real users out.
+	oldest, pending := "", 0
+	for k, p := range a.sessions {
+		if p.Sub != "" {
+			continue
+		}
+		if a.expired(p, time.Now()) {
 			delete(a.sessions, k)
+			continue
+		}
+		pending++
+		if oldest == "" || p.LastSeen.Before(a.sessions[oldest].LastSeen) {
+			oldest = k
 		}
 	}
-	if len(a.sessions) >= a.maxSessions {
-		a.mu.Unlock()
-		http.Error(w, "Too many sign-ins in progress. Try again shortly.", http.StatusServiceUnavailable)
-		return
+	if pending >= a.maxPending && oldest != "" {
+		delete(a.sessions, oldest)
 	}
 	a.sessions[id] = s
 	a.mu.Unlock()
@@ -463,11 +487,6 @@ func (a *rp) callback(w http.ResponseWriter, r *http.Request) {
 		IDToken: rawID, Roles: at.ResourceAccess[a.clientID].Roles, LoginAt: now, LastSeen: now}
 	id := randString()
 	a.mu.Lock()
-	if len(a.sessions) >= a.maxSessions {
-		a.mu.Unlock()
-		http.Error(w, "Too many sessions. Try again shortly.", http.StatusServiceUnavailable)
-		return
-	}
 	a.sessions[id] = ns
 	a.mu.Unlock()
 	a.setCookie(w, id, false)

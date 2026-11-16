@@ -100,7 +100,10 @@ secret (0600, never printed). Run `validate-client-request.py --strict` on the f
 any change request with the recorded contact through a second channel (`keycloak-rp-integration/references/operator-handoff.md`).
 
 Keys only `add-client` writes: `owner`, `owner_contact` (become the client attributes `stig.owner`,
-`stig.owner-contact` and `stig.created-by=add-client`).
+`stig.owner-contact` and `stig.created-by=add-client`). They are honoured only in `clients.d/<client_id>.json` and
+dropped, with a warning, anywhere else. Each `client_id` may be defined once across the profile and clients.d: a
+second definition stops the load. `apply` refuses to change a live client whose `stig.owner` differs from the
+definition's. `--owner` is required when `add-client` creates a client.
 
 Common keys:
 

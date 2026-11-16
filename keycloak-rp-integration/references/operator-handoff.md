@@ -74,9 +74,9 @@ python3 keycloak-asd-stig/scripts/kcstig.py add-client client-request.json --pro
 **Registering a new client**
 
 1. Validate the received file with `--strict`, as above, and read every `WARNING` and `NOTE`.
-2. Assign an owner id (`--owner`, for example the team or system name in your inventory). Without one, the
-   request's contact email becomes the owner. The id is recorded on the client (`stig.owner`, with the contact in
-   `stig.owner-contact`) and in `clients.d/<client_id>.json`.
+2. Assign an owner id (`--owner`, **required** for a new client: the team or system name in your inventory). The
+   request's contact email is never used as the owner, because anyone can type it. The id is recorded on the client
+   (`stig.owner`, with the contact in `stig.owner-contact`) and in `clients.d/<client_id>.json`.
 3. Run `add-client`. A new client needs nothing more.
 
 **Changing an existing client**
@@ -87,8 +87,8 @@ python3 keycloak-asd-stig/scripts/kcstig.py add-client client-request.json --pro
    that team), not by replying to whoever sent the file. A change request that only arrived by email or chat is not
    confirmed. A copied contact email in the request proves nothing.
 3. Rerun with `--update <client_id>` and the same `--owner`. `add-client` prints a before/after diff of
-   `redirect_uris`, `post_logout_redirect_uris`, `backchannel_logout_url`, `jwks_url`, the auth method and the
-   roles. Check the redirect and logout URLs in particular: they decide where users and tokens are sent.
+   `redirect_uris`, `post_logout_redirect_uris`, `backchannel_logout_url`, `jwks_url`, `web_origins`, `root_url`,
+   `privileged`, the auth method and the roles. Check the redirect and logout URLs in particular: they decide where users and tokens are sent.
 4. Roles the request no longer lists are kept unless you add `--prune-roles`.
 5. A request from a different owner is refused even with `--update`. If ownership really moves, confirm with both
    the old and the new contact, then add `--transfer`.
@@ -106,9 +106,17 @@ that doesn't exist is an error):
 - An existing client needs `--update`. Changing another owner's client also needs `--transfer`. A client that
   `add-client` did not create (no `stig.created-by=add-client`) also needs `--adopt <client_id>`, with a warning.
 - An id that another clients.d file or the profile defines, or a `clients.d/<client_id>.json` with no live client
-  behind it, is someone else's configuration and is refused (`--adopt` overrides it).
+  behind it, is someone else's configuration and is refused. `--adopt` overrides it; when that file records a
+  different owner, `--transfer` is also needed, and the diff against the file is printed.
 - It applies the client through the admin API (idempotent) and writes `clients.d/<client_id>.json`, owner
   included, so later `apply` runs keep it.
+
+The `apply` path holds the same line. `load_profile` refuses a `client_id` defined twice across the profile and
+clients.d. `owner`/`owner_contact` are honoured only from the file named `<client_id>.json`, and are dropped with a
+warning anywhere else. `upsert_client` refuses to change a live client whose `stig.owner` differs from the
+definition's, including a definition with no owner. So clients.d (and, for the keycloak-cac image, its ConfigMap
+and `CAC_CLIENTS_JSON`) must be writable by the IdP operator only: whoever can write there can still define new
+clients.
 - With `client-secret`, it writes the secret only to `--secret-out` (created 0600, never printed). Deliver it as
   described below, then delete that file.
 

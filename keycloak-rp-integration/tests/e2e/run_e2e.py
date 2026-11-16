@@ -29,6 +29,8 @@ For each example and client authentication method:
 """
 import argparse
 import base64
+import contextlib
+import io
 import html
 import json
 import os
@@ -60,7 +62,8 @@ ISSUER = KC + "/realms/" + REALM
 HOST_FROM_KC = os.environ.get("HOST_FROM_KC", "host.docker.internal")
 CONTAINER = "kc-rp-e2e-%d" % os.getpid()
 IDLE_SECONDS = 12
-LOGIN_RATE = 10     # per-IP login starts per 10 minutes in this run; each app run uses 5 before the limit test
+LOGIN_RATE = 16     # per-IP login starts per 10 minutes in this run; each app run uses 11 before the limit test
+MAX_PENDING = 3     # logins in progress each app holds in this run, to see the oldest evicted
 
 
 def load(name, path):
@@ -75,6 +78,7 @@ if not os.path.isfile(KCSTIG):
     sys.exit("run_e2e.py is the repository's reference test: it needs %s (a full keycloak-asd-stig checkout, with "
              "keycloak-rp-integration/ beside keycloak-asd-stig/). Not found - nothing run." % KCSTIG)
 vcr = load("vcr", os.path.join(SKILL, "scripts", "validate-client-request.py"))
+kcstig = load("kcstig", KCSTIG)
 
 FAILS = []
 
@@ -203,14 +207,14 @@ def register_client(adm, op, users, port, auth, work):
     cid = "e2e-%s-%d" % (auth.split("-")[1], port)
     req = dev_request(cid, base, auth)
     secret_file = os.path.join(op.dir, cid + ".secret")
-    extra = ["--allow-dev"] + (["--secret-out", secret_file] if auth == "client-secret" else [])
+    extra = ["--allow-dev", "--owner", "e2e-apps"] + (["--secret-out", secret_file] if auth == "client-secret" else [])
     r = op.add_client(req, *extra)
     if not check(r.returncode == 0, "%s: kcstig.py add-client registers the dev request" % cid):
         print(r.stdout + r.stderr)
         raise SystemExit(1)
     with open(os.path.join(op.clients, cid + ".json")) as f:
         filed = json.load(f)
-    owner_keys = {"owner": "e2e@example.test", "owner_contact": "e2e@example.test"}
+    owner_keys = {"owner": "e2e-apps", "owner_contact": "e2e@example.test"}
     check(filed == dict(vcr.to_client(req), **owner_keys),
           "%s: add-client wrote clients.d/%s.json = the request's client + its owner" % (cid, cid))
     c = get_client(adm, cid)
@@ -317,15 +321,26 @@ def operator_checks(adm, op):
     check(r.returncode == 0 and names() == ["viewer"], "--prune-roles deletes them")
 
     # 7. a clients.d file for a client that is not live is someone's configuration
+    r = op.add_client(dict(dev_request("brand-new-app", base, "client-jwt")), "--allow-dev")
+    check(r.returncode != 0 and "needs --owner" in r.stderr + r.stdout and get_client(adm, "brand-new-app") is None,
+          "a new client needs --owner")
     ghost = os.path.join(op.clients, "ghost-app.json")
     with open(ghost, "w") as f:
-        json.dump({"client_id": "ghost-app", "type": "oidc-confidential", "redirect_uris": ["https://ghost.example.test/cb"]}, f)
-    r = op.add_client(dict(dev_request("ghost-app", base, "client-jwt"), contact=other_team), "--allow-dev")
+        json.dump({"client_id": "ghost-app", "type": "oidc-confidential", "redirect_uris": ["https://ghost.example.test/cb"],
+                   "owner": "team-ghost", "owner_contact": "ghost@example.test"}, f)
+    greq = dict(dev_request("ghost-app", base, "client-jwt"), contact=other_team)
+    r = op.add_client(greq, "--allow-dev", "--owner", "team-beta")
     with open(ghost) as f:
         unchanged = json.load(f)["redirect_uris"] == ["https://ghost.example.test/cb"]
     check(r.returncode != 0 and "already exists although" in r.stderr + r.stdout and unchanged
           and get_client(adm, "ghost-app") is None, "a clients.d file without a live client is not silently replaced")
-    os.unlink(ghost)
+    r = op.add_client(greq, "--allow-dev", "--owner", "team-beta", "--adopt", "ghost-app")
+    check(r.returncode != 0 and "without --transfer" in r.stderr + r.stdout and get_client(adm, "ghost-app") is None,
+          "--adopt of a clients.d file recording another owner needs --transfer")
+    r = op.add_client(greq, "--allow-dev", "--owner", "team-beta", "--adopt", "ghost-app", "--transfer")
+    check(r.returncode == 0 and "changes to apply:" in r.stdout and "https://ghost.example.test/cb" in r.stdout
+          and get_client(adm, "ghost-app")["attributes"].get("stig.owner") == "team-beta",
+          "... with --transfer it is adopted, showing the diff against the file")
 
     # 8. reserved ids, the strict default, dev requests
     r = op.add_client(dict(req, client_id="admin-cli"), "--allow-dev")
@@ -344,11 +359,12 @@ def operator_checks(adm, op):
     wild = dict(dev_request("wild-app", base, "client-jwt"), dev_request=False, root_url="https://wild.127.0.0.1.nip.io",
                 redirect_uris=["https://wild.127.0.0.1.nip.io/cb"], post_logout_redirect_uris=["https://wild.127.0.0.1.nip.io/out"],
                 backchannel_logout_url="https://wild.127.0.0.1.nip.io/bcl", jwks_url="https://wild.127.0.0.1.nip.io/jwks")
-    r = op.add_client(wild)
+    r = op.add_client(wild, "--owner", "team-wild")
     check(r.returncode != 0 and "nip.io" in r.stderr and get_client(adm, "wild-app") is None,
           "a wildcard-DNS host is refused by default (strict)")
-    r = op.add_client(wild, "--no-strict")
+    r = op.add_client(wild, "--no-strict", "--owner", "team-wild")
     check(r.returncode == 0 and get_client(adm, "wild-app") is not None, "... and accepted only with --no-strict")
+    apply_bypass_checks(adm, op)
 
 
 def app_command(name):
@@ -386,6 +402,61 @@ def login(s, base, user):
     return final, q, hops + [r] + more
 
 
+def apply_bypass_checks(adm, op):
+    """The apply path (load_profile + upsert_client) cannot override an owned client either."""
+    print("== apply path: ownership", flush=True)
+    d = os.path.join(op.dir, "apply-path")
+    cdir = os.path.join(d, "clients.d")
+    os.makedirs(cdir)
+    prof = os.path.join(d, "profile.json")
+    owned = {"client_id": "owned-app", "type": "oidc-confidential", "redirect_uris": ["https://evil.example.test/cb"]}
+    # a duplicate client_id across the profile and clients.d
+    with open(prof, "w") as f:
+        json.dump({"keycloak": {"url": KC}, "realm": {"name": REALM}, "clients": [owned]}, f)
+    with open(os.path.join(cdir, "owned-app.json"), "w") as f:
+        json.dump(dict(owned, owner="team-alpha"), f)
+    r = subprocess.run([sys.executable, KCSTIG, "render", "--profile", prof, "--clients-dir", cdir, "--out", d],
+                       capture_output=True, text=True, timeout=60)
+    check(r.returncode != 0 and "defined twice" in r.stderr + r.stdout, "load_profile refuses a client_id defined twice")
+    os.unlink(os.path.join(cdir, "owned-app.json"))
+    # owner keys outside clients.d/<client_id>.json are ignored (with a warning)
+    with open(prof, "w") as f:
+        json.dump({"keycloak": {"url": KC}, "realm": {"name": REALM}}, f)
+    with open(os.path.join(cdir, "zz-other.json"), "w") as f:
+        json.dump(dict(owned, owner="team-alpha", owner_contact="team-a@example.test"), f)
+    old = dict(os.environ)
+    os.environ.update({k: v for k, v in op.env.items() if k.startswith("KC_")})
+    try:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            p = kcstig.load_profile(prof, cdir)
+        (c,) = [c for c in p["clients"] if c["client_id"] == "owned-app"]
+        check("owner" not in c and "owner/owner_contact ignored" in err.getvalue(),
+              "owner in a file not named <client_id>.json is ignored, with a warning")
+        kc = kcstig.KC(KC, "master", op.env["KC_CACERT"])
+        before = get_client(adm, "owned-app")
+        for label, rep in (("carrying no owner", kcstig.client_rep(c, p)),
+                           ("naming another owner", kcstig.client_rep(dict(c, owner="team-mallory"), p))):
+            try:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    kcstig.upsert_client(kc, REALM, rep)
+                refused = False
+            except SystemExit as e:
+                refused = "belongs to" in str(e.code)
+            after = get_client(adm, "owned-app")
+            check(refused and after["redirectUris"] == before["redirectUris"]
+                  and after["attributes"].get("stig.owner") == "team-alpha",
+                  "upsert_client (the apply path) refuses a definition %s for an owned client" % label)
+        rep = kcstig.client_rep(dict(c, owner="team-alpha", redirect_uris=before["redirectUris"]), p)
+        with contextlib.redirect_stdout(io.StringIO()):
+            kcstig.upsert_client(kc, REALM, rep)
+        check(get_client(adm, "owned-app")["attributes"].get("stig.owner") == "team-alpha",
+              "... and accepts one from the same owner")
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
+
+
 def cookie_payload(value):
     """Flask's signed cookie: base64 JSON (zlib-compressed when it starts with '.'), then timestamp and signature."""
     comp = value.startswith(".")
@@ -410,7 +481,7 @@ def run_app(name, auth, adm, op, users, ca, work):
     print("== %s (client %s)" % (tag, cid), flush=True)
     envv = dict(os.environ, OIDC_ISSUER=ISSUER, OIDC_CLIENT_ID=cid, APP_BASE_URL=base, PORT=str(port),
                 HOST="0.0.0.0", SESSION_IDLE_MINUTES=str(IDLE_SECONDS / 60),   # short, to test the idle limit
-                LOGIN_RATE_PER_IP=str(LOGIN_RATE),
+                LOGIN_RATE_PER_IP=str(LOGIN_RATE), MAX_PENDING_LOGINS=str(MAX_PENDING),
                 NODE_EXTRA_CA_CERTS=ca, REQUESTS_CA_BUNDLE=ca, SSL_CERT_FILE=ca, OIDC_CA_FILE=ca)
     sf = os.path.join(work, cid + "-session-secret")
     with open(sf, "w") as f:
@@ -506,12 +577,28 @@ def run_app(name, auth, adm, op, users, ca, work):
         time.sleep(IDLE_SECONDS + 2)
         check(not logged_in(s3), "%s: idle session ends after %d s" % (tag, IDLE_SECONDS))
 
-        # per-IP limit on login starts
+        # a full pending-login store drops its oldest entry; it never refuses a new login
+        s_old = requests.Session()
+        s_old.verify = ca
+        page, _ = follow(s_old, base + "/login")
+        form = re.search(r'<form[^>]*id="kc-form-login"[^>]*action="([^"]+)"', page.text)
+        fresh = [requests.get(base + "/login", allow_redirects=False).status_code for _ in range(MAX_PENDING + 1)]
+        check(fresh == [302] * (MAX_PENDING + 1), "%s: a full pending-login store never refuses a new login (%s)" % (tag, fresh))
+        if form:
+            r = s_old.post(html.unescape(form.group(1)), data={"username": "alice", "password": "pw-alice-e2e-test"},
+                           allow_redirects=False, timeout=15)
+            follow(s_old, urljoin(r.url, r.headers.get("Location", "/")))
+        check(form is not None and not logged_in(s_old), "%s: ... the oldest unfinished login was evicted" % tag)
+        s_new = requests.Session()
+        s_new.verify = ca
+        login(s_new, base, "bob")
+        check(logged_in(s_new), "%s: ... and a new login still completes" % tag)
+
+        # per-IP limit on login starts (IPv4 here; IPv6 is counted per /64)
         codes = [requests.get(base + "/login", allow_redirects=False).status_code for _ in range(LOGIN_RATE + 2)]
-        throttled = [c for c in codes if c == 429]
         r429 = requests.get(base + "/login", allow_redirects=False)
-        check(throttled and codes.count(302) <= LOGIN_RATE and r429.status_code == 429 and r429.headers.get("Retry-After"),
-              "%s: /login is limited per client IP (429 + Retry-After after %d starts)" % (tag, codes.count(302) + 5))
+        check(429 in codes and 503 not in codes and r429.status_code == 429 and r429.headers.get("Retry-After"),
+              "%s: /login is limited per client IP (429 + Retry-After)" % tag)
     finally:
         proc.terminate()
         proc.wait(10)

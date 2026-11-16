@@ -7,6 +7,7 @@ state (PKCE verifier, nonce) stay on the server.
 Configuration (env): see ../README.md. Run: python app.py   (or any WSGI server)
 """
 import base64
+import ipaddress
 import json
 import os
 import secrets
@@ -28,10 +29,9 @@ BASE = os.environ["APP_BASE_URL"].rstrip("/")   # public base URL, = root_url in
 APP_ORIGIN = "%s://%s" % urlsplit(BASE)[:2]
 IDLE = float(os.environ.get("SESSION_IDLE_MINUTES", "15")) * 60     # <= the IdP's idle (10 for admin apps)
 MAX_AGE = float(os.environ.get("SESSION_MAX_HOURS", "8")) * 3600    # <= the IdP's SSO max lifespan
-MAX_SESSIONS = int(os.environ.get("MAX_SESSIONS", "10000"))         # cap on sessions and logins in progress
 PENDING_TTL = 600                                                   # an unfinished login expires after 10 minutes
-MAX_PENDING = int(os.environ.get("MAX_PENDING_LOGINS", "1000"))     # login starts allowed per 10 minutes, in total
-PER_IP = int(os.environ.get("LOGIN_RATE_PER_IP", "30"))             # ... and per client IP
+MAX_PENDING = int(os.environ.get("MAX_PENDING_LOGINS", "1000"))     # logins in progress held; beyond it the oldest is dropped
+PER_IP = int(os.environ.get("LOGIN_RATE_PER_IP", "30"))             # login starts per client IP (IPv6: per /64) per 10 minutes
 SECURE = BASE.startswith("https://")
 BCL_EVENT = "http://schemas.openid.net/event/backchannel-logout"
 ALGS = ["RS256", "PS256", "ES256"]
@@ -56,7 +56,8 @@ if os.environ.get("TRUST_PROXY") == "1":     # only behind your own TLS-terminat
 
 class TTLCache:
     """Server-side store for Authlib's login-in-progress state, so the cookie holds only a marker. Bounded and
-    expiring. Use Redis or a database when running more than one replica."""
+    expiring: when full, the oldest unfinished login is dropped (never a refusal, so a flood of anonymous /login
+    requests cannot lock real users out). Use Redis or a database when running more than one replica."""
     def __init__(self, cap):
         self.cap, self.d, self.lock = cap, {}, threading.Lock()
 
@@ -73,8 +74,9 @@ class TTLCache:
         now = time.time()
         with self.lock:
             self._sweep(now)
-            if len(self.d) >= self.cap:
-                raise OverflowError("too many logins in progress")
+            self.d.pop(key, None)
+            while len(self.d) >= self.cap:                  # dicts keep insertion order: the first is the oldest
+                del self.d[next(iter(self.d))]
             self.d[key] = (value, now + min(expires or PENDING_TTL, PENDING_TTL))
 
     def delete(self, key):
@@ -83,7 +85,7 @@ class TTLCache:
 
 
 # --- client authentication: private_key_jwt (preferred) or a secret from a file ----------------------------
-oauth = OAuth(app, cache=TTLCache(MAX_SESSIONS))
+oauth = OAuth(app, cache=TTLCache(MAX_PENDING))
 kwargs = {"scope": "openid", "code_challenge_method": "S256"}
 common = dict(client_id=CLIENT_ID, server_metadata_url=ISSUER + "/.well-known/openid-configuration")
 if os.environ.get("OIDC_PRIVATE_KEY_FILE"):
@@ -179,41 +181,43 @@ def same_origin():
     return src != "null" and "%s://%s" % urlsplit(src)[:2] == APP_ORIGIN
 
 
-# Anonymous /login creates server-side state: limit how fast it can be created, overall and per client IP
-# (request.remote_addr honours TRUST_PROXY through ProxyFix).
-LOGIN_STARTS = {}            # ip -> timestamps within PENDING_TTL
+# Per-client limit on login starts: 429 beyond LOGIN_RATE_PER_IP in 10 minutes. request.remote_addr honours
+# TRUST_PROXY through ProxyFix. IPv6 clients are counted per /64, so rotating addresses inside one prefix does not
+# reset the count. The table itself is bounded (oldest bucket dropped).
+LOGIN_STARTS = {}            # bucket -> timestamps within PENDING_TTL, least recently used first
+MAX_BUCKETS = 10 * MAX_PENDING
+
+
+def ip_bucket(ip):
+    try:
+        a = ipaddress.ip_address((ip or "").split("%")[0])
+    except ValueError:
+        return ip or "?"
+    if a.version == 6 and a.ipv4_mapped:
+        return str(a.ipv4_mapped)
+    return str(ipaddress.ip_network("%s/64" % a, strict=False)) if a.version == 6 else str(a)
 
 
 def admit_login(ip, now):
+    key = ip_bucket(ip)
     with LOCK:
-        total = 0
-        for k in list(LOGIN_STARTS):
-            live = [t for t in LOGIN_STARTS[k] if now - t < PENDING_TTL]
-            if live:
-                LOGIN_STARTS[k] = live
-                total += len(live)
-            else:
-                del LOGIN_STARTS[k]
-        mine = LOGIN_STARTS.get(ip, [])
+        mine = [t for t in LOGIN_STARTS.pop(key, []) if now - t < PENDING_TTL]
         if len(mine) >= PER_IP:
-            return 429
-        if total >= MAX_PENDING:
-            return 503
-        LOGIN_STARTS[ip] = mine + [now]
-        return 0
+            LOGIN_STARTS[key] = mine
+            return False
+        LOGIN_STARTS[key] = mine + [now]
+        while len(LOGIN_STARTS) > MAX_BUCKETS:
+            del LOGIN_STARTS[next(iter(LOGIN_STARTS))]
+        return True
 
 
 @app.get("/login")
 def login():
-    refuse = admit_login(request.remote_addr or "?", time.time())
-    if refuse:
-        audit("login_throttled", ip=request.remote_addr, status=refuse)
-        return "Too many sign-in attempts. Try again shortly.", refuse, {"Retry-After": "60"}
+    if not admit_login(request.remote_addr, time.time()):
+        audit("login_throttled", ip=ip_bucket(request.remote_addr))
+        return "Too many sign-in attempts. Try again shortly.", 429, {"Retry-After": "60"}
     # Authlib adds state, nonce and the PKCE S256 challenge; the verifier and nonce go to the server-side cache.
-    try:
-        return idp.authorize_redirect(BASE + "/oauth2/callback")
-    except OverflowError:
-        return "Too many sign-ins in progress. Try again shortly.", 503
+    return idp.authorize_redirect(BASE + "/oauth2/callback")
 
 
 @app.get("/oauth2/callback")
@@ -227,8 +231,6 @@ def callback():
     lsid, now = secrets.token_urlsafe(32), time.time()
     with LOCK:
         sweep(now)
-        if len(LIVE) >= MAX_SESSIONS:
-            return "Too many sessions. Try again shortly.", 503
         LIVE[lsid] = {"sid": claims.get("sid"), "login_at": now, "last_seen": now, "id_token": token["id_token"],
                       "user": {"sub": claims["sub"], "sid": claims.get("sid"), "roles": roles,
                                "username": claims.get("preferred_username"),

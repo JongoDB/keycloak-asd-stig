@@ -7,11 +7,11 @@ name: keycloak-rp-integration
 on:
   pull_request:
     paths: ["keycloak-rp-integration/**", "keycloak-asd-stig/scripts/kcstig.py", "keycloak-asd-stig/references/**",
-            ".github/workflows/keycloak-rp-integration.yml"]
+            "keycloak-asd-stig.skill", ".github/workflows/keycloak-rp-integration.yml"]
   push:
     branches: [main]
     paths: ["keycloak-rp-integration/**", "keycloak-asd-stig/scripts/kcstig.py", "keycloak-asd-stig/references/**",
-            ".github/workflows/keycloak-rp-integration.yml"]
+            "keycloak-asd-stig.skill", ".github/workflows/keycloak-rp-integration.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -49,6 +49,14 @@ jobs:
         run: REQUIRE_JSONSCHEMA=1 python3 tests/test_client_request.py
       - name: STIG inheritance note matches the control map
         run: python3 scripts/stig_note.py --check
+      - name: The packaged IdP skill carries the tree's kcstig.py (add-client and its guards), byte for byte
+        working-directory: .
+        run: |
+          set -euo pipefail
+          for f in scripts/kcstig.py SKILL.md references/profile.md; do
+            unzip -p keycloak-asd-stig.skill "keycloak-asd-stig/$f" | cmp - "keycloak-asd-stig/$f" \
+              || { echo "::error::keycloak-asd-stig.skill has a stale keycloak-asd-stig/$f - refresh the zip"; exit 1; }
+          done
 
   e2e:
     needs: request

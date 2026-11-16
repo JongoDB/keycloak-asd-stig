@@ -288,6 +288,57 @@ class OperatorSide(unittest.TestCase):
                     self.kc.load_profile(prof, cdir)
                 self.assertIn("reserved", str(cm.exception.code))
 
+    def test_load_profile_refuses_duplicate_client_ids(self):
+        c = {"client_id": "myapp-web", "redirect_uris": ["https://a.example.mil/cb"]}
+        with tempfile.TemporaryDirectory() as d:
+            prof, cdir = self._profile_dir(d, {"a.json": c, "b.json": c})
+            with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()):
+                self.kc.load_profile(prof, cdir)
+            self.assertIn("defined twice", str(cm.exception.code))
+
+    def test_owner_only_from_its_own_file(self):
+        c = {"client_id": "myapp-web", "redirect_uris": ["https://a.example.mil/cb"], "owner": "team-a",
+             "owner_contact": "a@example.mil"}
+        for fname, kept in (("myapp-web.json", True), ("other-name.json", False)):
+            with self.subTest(fname=fname), tempfile.TemporaryDirectory() as d:
+                prof, cdir = self._profile_dir(d, {fname: c})
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    p = self.kc.load_profile(prof, cdir)
+                (got,) = p["clients"]
+                self.assertEqual("owner" in got, kept)
+                self.assertEqual("owner/owner_contact ignored" in err.getvalue(), not kept)
+                self.assertEqual(self.kc.client_rep(got, p)["attributes"].get("stig.owner"), "team-a" if kept else None)
+
+    def test_upsert_client_refuses_another_owner(self):
+        class FakeKC:
+            def __init__(self, owner):
+                self.owner, self.writes = owner, []
+            def api(self, method, path, obj=None, ok404=False):
+                if method == "GET" and "clients?clientId=" in path:
+                    return [{"id": "u1", "clientId": "myapp-web", "attributes": {"stig.owner": self.owner}}]
+                if method != "GET":
+                    self.writes.append((method, path))
+                return []
+        for want, allowed in ((None, False), ("team-b", False), ("team-a", True)):
+            with self.subTest(want=want):
+                kc = FakeKC("team-a")
+                rep = {"clientId": "myapp-web", "protocol": "openid-connect",
+                       "attributes": {"stig.owner": want} if want else {}}
+                if allowed:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.kc.upsert_client(kc, "apps", rep)
+                    self.assertTrue(kc.writes)
+                else:
+                    with self.assertRaises(SystemExit):
+                        self.kc.upsert_client(kc, "apps", rep)
+                    self.assertEqual(kc.writes, [])
+        kc = FakeKC("team-a")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.kc.upsert_client(kc, "apps", {"clientId": "myapp-web", "protocol": "openid-connect",
+                                               "attributes": {"stig.owner": "team-b"}}, allow_owner_change=True)
+        self.assertTrue(kc.writes)
+
     def test_upsert_client_refuses_reserved_ids(self):
         class NoCalls:
             def api(self, *a, **k):

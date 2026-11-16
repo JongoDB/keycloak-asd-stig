@@ -17,10 +17,9 @@ const BASE = env('APP_BASE_URL').replace(/\/$/, '');    // public base URL, = ro
 const APP_ORIGIN = new URL(BASE).origin;
 const IDLE_MS = Number(env('SESSION_IDLE_MINUTES', '15')) * 60_000;   // <= the IdP's idle (10 for admin apps)
 const MAX_MS = Number(env('SESSION_MAX_HOURS', '8')) * 3_600_000;     // <= the IdP's SSO max lifespan
-const MAX_SESSIONS = Number(env('MAX_SESSIONS', '10000'));            // cap on sessions and logins in progress
 const PENDING_MS = 10 * 60_000;                                       // an unfinished login expires after 10 minutes
-const MAX_PENDING = Number(env('MAX_PENDING_LOGINS', '1000'));        // login starts allowed per 10 minutes, in total
-const PER_IP = Number(env('LOGIN_RATE_PER_IP', '30'));                // ... and per client IP
+const MAX_PENDING = Number(env('MAX_PENDING_LOGINS', '1000'));        // logins in progress held; beyond it the oldest is dropped
+const PER_IP = Number(env('LOGIN_RATE_PER_IP', '30'));                // login starts per client IP (IPv6: per /64) per 10 minutes
 const SECURE = BASE.startsWith('https://');             // always true outside a localhost dev setup
 const COOKIE = SECURE ? '__Host-sid' : 'sid';
 const REDIRECT_URI = `${BASE}/oauth2/callback`;
@@ -56,7 +55,10 @@ const forget = (s, id) => {
     const set = map.get(key); set?.delete(id); if (set && !set.size) map.delete(key);
   }
 };
-const destroy = (id, s) => new Promise((r) => { forget(s, id); store.destroy(id, r); });
+const destroy = (id, s) => new Promise((r) => { forget(s, id); pending.delete(id); store.destroy(id, r); });
+// Logins in progress, oldest first. A full store never refuses a login: the oldest unfinished one is dropped
+// instead, so a flood of anonymous /login requests cannot lock real users out.
+const pending = new Map();                                            // session id -> started at
 
 // Expire abandoned logins and sessions nobody returns to (the per-request check below only sees active users).
 const expired = (s, now) => (s.user ? now - s.lastSeen > IDLE_MS || now - s.loginAt > MAX_MS
@@ -97,19 +99,27 @@ const requireRole = (role) => (req, res, next) => {
   audit('forbidden', { user: req.session.user?.sub, role, path: req.path });
   res.status(403).json({ error: `role ${role} required` });
 };
-// Anonymous /login creates server-side state: limit how fast it can be created, overall and per client IP
-// (req.ip honours TRUST_PROXY). Returns 0 to admit, else the HTTP status to answer with.
-const loginStarts = new Map();                                        // ip -> timestamps within PENDING_MS
+// The client a login start is counted against: an IPv4 address, or an IPv6 /64 (one subscriber's prefix, so
+// rotating addresses inside it does not reset the count). req.ip honours TRUST_PROXY.
+const ipBucket = (ip) => {
+  const a = String(ip ?? '?').split('%')[0];
+  if (/^::ffff:\d+\.\d+\.\d+\.\d+$/i.test(a)) return a.slice(7);
+  if (!a.includes(':')) return a;
+  const [h, t] = a.split('::');
+  const head = h ? h.split(':') : [], tail = t ? t.split(':') : [];
+  const full = a.includes('::') ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill('0'), ...tail] : head;
+  return full.slice(0, 4).map((x) => parseInt(x || '0', 16).toString(16)).join(':') + '::/64';
+};
+// Per-client limit on login starts: 429 beyond LOGIN_RATE_PER_IP in 10 minutes. The table itself is bounded.
+const loginStarts = new Map();                                        // bucket -> timestamps within PENDING_MS
+const MAX_BUCKETS = 10 * MAX_PENDING;
 const admitLogin = (ip, now) => {
-  let total = 0;
-  for (const [k, ts] of loginStarts) {
-    const live = ts.filter((t) => now - t < PENDING_MS);
-    if (live.length) { loginStarts.set(k, live); total += live.length; } else loginStarts.delete(k);
-  }
-  const mine = loginStarts.get(ip) ?? [];
+  const key = ipBucket(ip);
+  const mine = (loginStarts.get(key) ?? []).filter((t) => now - t < PENDING_MS);
   if (mine.length >= PER_IP) return 429;
-  if (total >= MAX_PENDING) return 503;
-  loginStarts.set(ip, [...mine, now]);
+  loginStarts.delete(key);
+  loginStarts.set(key, [...mine, now]);                               // re-insert: most recent last
+  while (loginStarts.size > MAX_BUCKETS) loginStarts.delete(loginStarts.keys().next().value);
   return 0;
 };
 
@@ -119,17 +129,22 @@ const sameOrigin = (req) => {
   try { return !!src && src !== 'null' && new URL(src).origin === APP_ORIGIN; } catch { return false; }
 };
 
-app.get('/login', (req, res, next) => store.length(async (err, n) => {
+app.get('/login', async (req, res, next) => {
   try {
-    if (err) throw err;
-    if (n >= MAX_SESSIONS) return res.status(503).send('Too many sign-ins in progress. Try again shortly.');
-    const refuse = admitLogin(req.ip, Date.now());
-    if (refuse) {
-      audit('login_throttled', { ip: req.ip, status: refuse });
-      return res.status(refuse).set('Retry-After', '60').send('Too many sign-in attempts. Try again shortly.');
+    const now = Date.now();
+    if (admitLogin(req.ip, now)) {
+      audit('login_throttled', { ip: ipBucket(req.ip) });
+      return res.status(429).set('Retry-After', '60').send('Too many sign-in attempts. Try again shortly.');
+    }
+    pending.delete(req.sessionID);
+    pending.set(req.sessionID, now);
+    while (pending.size > MAX_PENDING) {                              // drop the oldest unfinished login
+      const [oldest] = pending.keys();
+      pending.delete(oldest);
+      if (oldest !== req.sessionID) store.destroy(oldest, () => {});
     }
     const verifier = client.randomPKCECodeVerifier();
-    req.session.startedAt = Date.now();
+    req.session.startedAt = now;
     req.session.oidc = { verifier, nonce: client.randomNonce(), state: client.randomState() };
     const url = client.buildAuthorizationUrl(config, {
       redirect_uri: REDIRECT_URI, scope: 'openid', state: req.session.oidc.state, nonce: req.session.oidc.nonce,
@@ -137,7 +152,7 @@ app.get('/login', (req, res, next) => store.length(async (err, n) => {
     });
     res.redirect(url.href);
   } catch (e) { next(e); }
-}));
+});
 
 app.get('/oauth2/callback', async (req, res, next) => {
   try {
@@ -152,6 +167,7 @@ app.get('/oauth2/callback', async (req, res, next) => {
     const { payload: at } = await jose.jwtVerify(tokens.access_token, jwks, { issuer: meta.issuer });
     if (at.azp !== CLIENT_ID || at.sub !== claims.sub) throw new Error('access token not issued to this client');
     const roles = at.resource_access?.[CLIENT_ID]?.roles ?? [];
+    pending.delete(req.sessionID);
     req.session.regenerate((err) => {                    // new session id after login (fixation)
       if (err) return next(err);
       const now = Date.now();

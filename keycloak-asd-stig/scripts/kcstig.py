@@ -91,6 +91,8 @@ RESERVED_CLIENT_IDS = {"account", "account-console", "admin-cli", "broker", "rea
 # add-client marks the clients it creates; it modifies no client without this marker (unless --adopt).
 OWNER_ATTR, OWNER_VALUE = "stig.created-by", "add-client"
 
+OWNER_KEYS = ("owner", "owner_contact")
+
 def reserved_client_id(cid):
     c = str(cid).strip().lower()
     return c in RESERVED_CLIENT_IDS or c.endswith("-realm")
@@ -136,15 +138,33 @@ def load_profile(path, clients_dir=None):
     with open(path) as f:
         raw = json.load(f)
     # Per-service client registration: every *.json in the clients dir is one client object or a list of them.
-    # Services ship these next to their own manifests; later files override earlier ones with the same client_id.
+    # Each client_id may be defined exactly once across the profile and clients.d: a second definition would
+    # silently replace another team's client, so it stops the load. Ownership (owner, owner_contact, written by
+    # add-client) is honoured only from the file named <client_id>.json; anywhere else it is dropped with a warning,
+    # and upsert_client then refuses to touch a live client that has an owner.
     clients_dir = clients_dir or os.environ.get("STIG_CLIENTS_DIR")
+    seen, clients = {}, []
+    def take(c, source, fname=None):
+        cid = c.get("client_id")
+        if cid in seen:
+            sys.exit("clients: %r is defined twice (%s and %s) - each client_id may be defined once across the profile "
+                     "and clients.d; refusing to let one definition replace another" % (cid, seen[cid], source))
+        seen[cid] = source
+        if any(k in c for k in OWNER_KEYS) and fname != "%s.json" % cid:
+            print("WARNING profile: clients[%s]: owner/owner_contact ignored in %s - ownership is honoured only from "
+                  "clients.d/%s.json, which kcstig.py add-client writes" % (cid, source, cid), file=sys.stderr)
+            c = {k: v for k, v in c.items() if k not in OWNER_KEYS}
+        clients.append(c)
+    for c in raw.get("clients", []):
+        take(c, "profile %s" % path)
     if clients_dir:
-        byid = {c["client_id"]: c for c in raw.get("clients", [])}
         for f in sorted(glob.glob(os.path.join(clients_dir, "*.json"))):
-            obj = json.load(open(f))
+            with open(f) as fh:
+                obj = json.load(fh)
             for c in (obj if isinstance(obj, list) else [obj]):
-                byid[c["client_id"]] = c
-        raw["clients"] = list(byid.values())
+                take(c, f, os.path.basename(f) if not isinstance(obj, list) else None)
+    if "clients" in raw or clients_dir:
+        raw["clients"] = clients
     for c in raw.get("clients", []):
         if reserved_client_id(c.get("client_id", "")):
             sys.exit("clients: %r is reserved for Keycloak's own clients (%s and any *-realm) - refusing to load a profile "
@@ -745,13 +765,21 @@ def ensure_stig_claims_scope(kc, realm):
     log("client scope stig-claims ensured")
     return sid
 
-def upsert_client(kc, realm, rep, stig_scope_id=None):
+def upsert_client(kc, realm, rep, stig_scope_id=None, allow_owner_change=False):
     if reserved_client_id(rep.get("clientId", "")):
         sys.exit("client %r is reserved for Keycloak's own clients - refusing to create or update it" % rep.get("clientId"))
     rr = "/realms/%s" % q(realm)
     rep = dict(rep); roles = rep.pop("_roles", [])
-    found = kc.api("GET", rr + "/clients?clientId=%s" % q(rep["clientId"]))
+    found = [c for c in (kc.api("GET", rr + "/clients?clientId=%s" % q(rep["clientId"])) or []) if c.get("clientId") == rep["clientId"]]
     if found:
+        # A client with a recorded owner is changed only by a definition carrying the same owner (add-client's
+        # clients.d/<client_id>.json); a transfer goes through add-client --transfer.
+        have = (found[0].get("attributes") or {}).get("stig.owner")
+        want = (rep.get("attributes") or {}).get("stig.owner")
+        if have and have != want and not allow_owner_change:
+            sys.exit("client %r belongs to %r; this definition %s - refusing to change it (use kcstig.py add-client "
+                     "--update, with --transfer if ownership really moves)" % (
+                         rep["clientId"], have, "names owner %r" % want if want else "carries no owner"))
         cid = found[0]["id"]
         cur = found[0]; cur.update(rep); cur["attributes"] = dict(found[0].get("attributes", {}), **rep.get("attributes", {}))
         kc.api("PUT", rr + "/clients/%s" % cid, cur)
@@ -1012,18 +1040,26 @@ def live_endpoints(c):
             "post_logout_redirect_uris": sorted(u for u in (at.get("post.logout.redirect.uris") or "").split("##") if u),
             "backchannel_logout_url": at.get("backchannel.logout.url") or None,
             "jwks_url": at.get("jwks.url") or None,
+            "web_origins": sorted(c.get("webOrigins") or []),
+            "root_url": c.get("rootUrl") or None,
+            "privileged": bool(at.get("client.session.idle.timeout")),
             "auth": c.get("clientAuthenticatorType")}
 
 def request_endpoints(client):
     return {"redirect_uris": sorted(client.get("redirect_uris") or []),
             "post_logout_redirect_uris": sorted(client.get("post_logout_redirect_uris") or []),
             "backchannel_logout_url": client.get("backchannel_logout_url"),
-            "jwks_url": client.get("jwks_url"), "auth": client.get("auth")}
+            "jwks_url": client.get("jwks_url"),
+            "web_origins": sorted(client.get("web_origins") or []),
+            "root_url": client.get("root_url") or None,
+            "privileged": bool(client.get("privileged")),
+            "auth": client.get("auth")}
 
 def print_update_diff(before, after, roles_before, roles_after, prune):
     print("changes to apply:")
     changed = False
-    for k in ("redirect_uris", "post_logout_redirect_uris", "backchannel_logout_url", "jwks_url", "auth"):
+    for k in ("redirect_uris", "post_logout_redirect_uris", "backchannel_logout_url", "jwks_url", "web_origins",
+              "root_url", "privileged", "auth"):
         if before[k] != after[k]:
             changed = True
             print("  %s:\n    - %s\n    + %s" % (k, before[k], after[k]))
@@ -1036,7 +1072,7 @@ def print_update_diff(before, after, roles_before, roles_after, prune):
         print("  roles %s: %s" % ("removed (--prune-roles)" if prune else "no longer requested, kept (no --prune-roles)",
                                  ", ".join(drop)))
     if not changed:
-        print("  (no change to redirect URIs, logout URLs, JWKS URL, auth or roles)")
+        print("  (no change to redirect URIs, logout URLs, JWKS URL, web origins, root URL, privileged, auth or roles)")
 
 def cmd_add_client(a):
     v = load_rp_validator(a.validator)
@@ -1067,7 +1103,7 @@ def cmd_add_client(a):
             sys.exit("add-client: --%s %r does not match the request's client_id %r - nothing changed" % (flag, getattr(a, flag), cid))
     # Who the client belongs to: the operator's owner id, else the requesting contact. Recorded on the client.
     contact = req["contact"]["email"].strip().lower()
-    owner = a.owner or contact
+    owner = a.owner or contact      # --owner is required for a new client (checked once the live state is known)
     if not OWNER_RE.fullmatch(owner):
         sys.exit("add-client: --owner %r: use letters, digits and . _ @ + - (at most 128) - nothing changed" % owner)
     client["owner"], client["owner_contact"] = owner, contact
@@ -1100,10 +1136,26 @@ def cmd_add_client(a):
     if live is None:
         if a.update:
             sys.exit("add-client: --update %s: no such client in realm %s - omit --update to create it" % (cid, realm))
-        if os.path.exists(target) and a.adopt != cid:
-            sys.exit("add-client: %s already exists although client %r is not in realm %s. It is someone's configuration "
-                     "(a later apply would create the client from it) - refusing to replace it. Remove it, or use "
-                     "--adopt %s if this request replaces it - nothing changed" % (target, cid, realm, cid))
+        if not a.owner:
+            sys.exit("add-client: a new client needs --owner <owner id> (the team or system it belongs to, from your "
+                     "inventory). The request's contact email is not an owner: anyone can type it - nothing changed")
+        if os.path.exists(target):
+            if a.adopt != cid:
+                sys.exit("add-client: %s already exists although client %r is not in realm %s. It is someone's "
+                         "configuration (a later apply would create the client from it) - refusing to replace it. "
+                         "Remove it, or use --adopt %s if this request replaces it - nothing changed" % (target, cid, realm, cid))
+            with open(target) as fh:
+                prev = json.load(fh)
+            prev = prev if isinstance(prev, dict) else {}
+            if prev.get("owner") and prev["owner"] != owner and not a.transfer:
+                sys.exit("add-client: %s records owner %r (contact %r); this request is for %r. Refusing to adopt "
+                         "another owner's definition without --transfer - nothing changed" % (
+                             target, prev["owner"], prev.get("owner_contact"), owner))
+            if prev.get("owner") and prev["owner"] != owner:
+                print("WARNING add-client: transferring %s from %r to %r" % (target, prev["owner"], owner), file=sys.stderr)
+            print("WARNING add-client: adopting %s (no live client behind it)" % target, file=sys.stderr)
+            print_update_diff(request_endpoints(prev), request_endpoints(client), prev.get("roles") or [],
+                              client.get("roles") or [], a.prune_roles)
         print("client %s does not exist in realm %s: creating it for owner %s" % (cid, realm, owner))
     else:
         at = live.get("attributes") or {}
@@ -1135,7 +1187,7 @@ def cmd_add_client(a):
     rep = client_rep(client, p)
     rep["attributes"][OWNER_ATTR] = OWNER_VALUE
     sid = ensure_stig_claims_scope(kc, realm)
-    uuid_ = upsert_client(kc, realm, rep, sid)
+    uuid_ = upsert_client(kc, realm, rep, sid, allow_owner_change=a.transfer)
     if a.prune_roles:
         keep = set(client.get("roles") or [])
         for role in kc.api("GET", rr + "/clients/%s/roles" % uuid_) or []:
@@ -2376,8 +2428,8 @@ def main():
     ac.add_argument("request", help="client-request.json from the app team")
     ac.add_argument("--profile", required=True); ac.add_argument("--url")
     ac.add_argument("--clients-dir", help="clients.d directory to write <client_id>.json into (or STIG_CLIENTS_DIR)")
-    ac.add_argument("--owner", help="operator-assigned owner id for this client (default: the request's contact email); "
-                    "recorded as stig.owner")
+    ac.add_argument("--owner", help="operator-assigned owner id for this client; required for a new client, recorded "
+                    "as stig.owner (an update without it is checked against the request's contact email)")
     ac.add_argument("--update", metavar="CLIENT_ID", help="required to change an existing client; prints the before/after diff")
     ac.add_argument("--transfer", action="store_true", help="with --update: let a different owner take the client over")
     ac.add_argument("--adopt", metavar="CLIENT_ID", help="take over a client add-client did not create (with --update), "
