@@ -211,6 +211,32 @@ public final class IssuerCrlCheckTest {
         IssuerCrlCheck.prewarm(List.of("a.crl", "root.crl"), ts);
         expectEq("pre-warm evicts b.crl, which no realm lists any more", 2, IssuerCrlCheck.cachedForTests());
 
+        // the keycloak-cac layout: conf/cac is a SYMLINK to data/cac (a tmpfs on a hardened host), and in online mode the
+        // realm lists the CRLs before crl-fetch has put them there (the first minutes after every start)
+        Path base = Files.createTempDirectory("issuer-crl-layout");
+        Path dataCrl = Files.createDirectories(base.resolve("data/cac/crl"));
+        Files.createDirectories(base.resolve("conf"));
+        Files.createSymbolicLink(base.resolve("conf/cac"), base.resolve("data/cac"));
+        System.setProperty("jboss.server.config.dir", base.resolve("conf").toString());
+        List<String> rels = List.of("cac/crl/a.crl", "cac/crl/b.crl", "cac/crl/root.crl");
+        List<Path> viaLink = IssuerCrlCheck.resolve(rels);
+        IssuerCrlCheck.clearForTests();
+        expect("start-up window: listed CRLs not installed yet (symlinked conf dir): card refused", false,
+                () -> IssuerCrlCheck.check(goodOnly, viaLink, ts, true, NOW));
+        IssuerCrlCheck.prewarm(rels, ts);   // the background job meets the same missing files and must not get stuck
+        write(dataCrl, "a.crl", CRL_A_REVOKES_ONE); write(dataCrl, "b.crl", CRL_B); write(dataCrl, "root.crl", CRL_ROOT);
+        expect("after crl-fetch installs them behind the symlink: the same card signs in (no restart, no cache clear)", true,
+                () -> IssuerCrlCheck.check(goodOnly, viaLink, ts, true, NOW));
+        expect("... and a revoked card is still refused", false, () -> IssuerCrlCheck.check(new X509Certificate[] {revoked}, viaLink, ts, true, NOW));
+        long v3 = IssuerCrlCheck.VERIFICATIONS.get();
+        IssuerCrlCheck.prewarm(rels, ts);
+        expectEq("pre-warm through the symlink verifies the remaining CRL (CA B's)", 1, IssuerCrlCheck.VERIFICATIONS.get() - v3);
+        expectEq("describe() names the exception class", 1,
+                IssuerCrlCheck.describe(new java.nio.file.NoSuchFileException("/x")).startsWith("java.nio.file.NoSuchFileException: /x") ? 1 : 0);
+        expectEq("describe() follows the cause", 1,
+                IssuerCrlCheck.describe(new java.io.IOException("outer", new java.nio.file.AccessDeniedException("/y"))).contains("caused by java.nio.file.AccessDeniedException: /y") ? 1 : 0);
+        System.setProperty("jboss.server.config.dir", dir.toString());
+
         // the structure parser on its own
         X509CRL plain = (X509CRL) CertificateFactory.getInstance("X.509").generateCRL(new ByteArrayInputStream(der(CRL_A_REVOKES_ONE)));
         boolean[] s = IssuerCrlCheck.structure(plain, plain.getIssuerX500Principal());

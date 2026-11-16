@@ -86,6 +86,9 @@ jobs:
       - name: Issuer-scoped CRL check drives sign-in (refresh without cache clear, root CRL revokes the issuing CA)
         if: matrix.variant.name != 'edge'
         run: keycloak-cac/tests/crl-issuer-check.sh "keycloak-cac:ci${{ matrix.variant.suffix }}"
+      - name: Start-up window of a hardened online deployment (tmpfs data, CRLs listed before they are downloaded)
+        if: matrix.variant.name != 'edge'
+        run: keycloak-cac/tests/crl-startup-window.sh "keycloak-cac:ci${{ matrix.variant.suffix }}"
       - name: Edge mode requires the proxy's client certificate (CA and pinned)
         if: matrix.variant.name == 'edge'
         run: keycloak-cac/tests/edge-mtls.sh keycloak-cac:ci-edge-test

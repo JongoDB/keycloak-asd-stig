@@ -96,16 +96,53 @@ final class IssuerCrlCheck {
     /** A file's identity on disk: replaced, rewritten or touched files all differ. */
     private record Version(Object fileKey, long size, FileTime mtime, Object ctime) {
         static Version of(Path f) throws IOException {
-            BasicFileAttributes a = Files.readAttributes(f, BasicFileAttributes.class);
+            BasicFileAttributes a;
+            try {
+                a = Files.readAttributes(f, BasicFileAttributes.class);
+            } catch (java.nio.file.NoSuchFileException e) {
+                throw e;                                       // not installed (yet): reported as STIG-CRL-MISSING
+            } catch (IOException e) {
+                return viaJavaIo(f, e);
+            }
             if (!a.isRegularFile()) throw new IOException("not a regular file");
             Object ctime = null;
             try {
                 ctime = Files.getAttribute(f, "unix:ctime");
-            } catch (UnsupportedOperationException | IllegalArgumentException e) {
-                // no unix view (not Linux/macOS): fileKey, size and mtime still identify the version
+            } catch (UnsupportedOperationException | IllegalArgumentException | IOException e) {
+                // no usable unix view: fileKey, size and mtime still identify the version
+                noteDegraded(f, e);
             }
             return new Version(a.fileKey(), a.size(), a.lastModifiedTime(), ctime);
         }
+
+        /** NIO could not stat a file that java.io (what Keycloak's own CRL loader uses) may still read. */
+        private static Version viaJavaIo(Path f, IOException nio) throws IOException {
+            File file = f.toFile();
+            if (!file.isFile()) throw nio;
+            noteDegraded(f, nio);
+            return new Version(null, file.length(), FileTime.fromMillis(file.lastModified()), null);
+        }
+    }
+
+    private static volatile boolean degradedNoted;
+
+    private static void noteDegraded(Path f, Exception e) {
+        if (degradedNoted) return;
+        degradedNoted = true;
+        log.warnf("STIG-CRL-VERSION-DEGRADED file identity of \"%s\" uses size and mtime only (%s): an in-place rewrite that keeps both is not noticed",
+                f, describe(e));
+    }
+
+    /** Exception class, message and cause chain, for log lines that must say WHY a CRL could not be used. */
+    static String describe(Throwable e) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable t = e; t != null && sb.length() < 600; t = t.getCause()) {
+            if (sb.length() > 0) sb.append(" <- caused by ");
+            sb.append(t.getClass().getName());
+            if (t.getMessage() != null) sb.append(": ").append(t.getMessage());
+            if (t.getCause() == t) break;
+        }
+        return sb.toString();
     }
 
     /**
@@ -223,8 +260,8 @@ final class IssuerCrlCheck {
             } catch (GeneralSecurityException | IOException e) {
                 Loaded previous = CACHE.get(f);
                 X500Principal iss = e instanceof RejectedCrl rc ? rc.issuer : previous == null ? null : previous.issuer;
-                failed.add(new Failure(f, iss, e.getMessage()));
-                alarm(f, iss, e.getMessage());
+                failed.add(new Failure(f, iss, describe(e)));
+                alarm(f, iss, e);
             }
         }
         X509Certificate leaf = certs[0];
@@ -298,7 +335,7 @@ final class IssuerCrlCheck {
             try {
                 ensureVerified(l, truststore);
             } catch (GeneralSecurityException e) {
-                alarm(findPath(l), issuer, e.getMessage());
+                alarm(findPath(l), issuer, e);
                 throw new GeneralSecurityException("CRL of the certificate's issuer is not usable");
             }
             if (l.crl.getThisUpdate() != null && l.crl.getThisUpdate().getTime() > now + CLOCK_SKEW_MS) {
@@ -321,13 +358,21 @@ final class IssuerCrlCheck {
         }
     }
 
-    private static void alarm(Path f, X500Principal issuer, String reason) {
+    private static void alarm(Path f, X500Principal issuer, Exception e) {
         long now = System.currentTimeMillis();
         Long last = ALARMED.get(f);
         if (last != null && now - last < 60_000L) return;             // once a minute per file, not once per sign-in
         ALARMED.put(f, now);
+        String who = issuer == null ? "" : " (issuer \"" + issuer.getName() + "\")";
+        if (e instanceof java.nio.file.NoSuchFileException) {
+            // expected right after a start in online mode: Keycloak (and the realm's CRL list) is up before crl-fetch
+            // has downloaded the files into the fresh data directory. That CA's cards fail closed until it arrives.
+            log.warnf("STIG-CRL-MISSING \"%s\"%s is not installed (yet): cards of that CA are refused until it is; other cards are not affected.",
+                    f, who);
+            return;
+        }
         log.errorf("STIG-CRL-UNREADABLE \"%s\"%s: %s. Cards of that CA are refused until it is fixed; other cards are not affected.",
-                f, issuer == null ? "" : " (issuer \"" + issuer.getName() + "\")", reason);
+                f, who, describe(e));
     }
 
     // ------------------------------------------------------------------ loading
@@ -392,7 +437,10 @@ final class IssuerCrlCheck {
     }
 
     private static Loaded read(Path f, Version v) throws GeneralSecurityException, IOException {
-        byte[] der = Files.readAllBytes(f);
+        byte[] der;
+        try (java.io.InputStream in = new java.io.FileInputStream(f.toFile())) {   // java.io, as Keycloak's CRL loader
+            der = in.readAllBytes();
+        }
         X509CRL crl;
         try {
             crl = (X509CRL) CertificateFactory.getInstance("X.509").generateCRL(new ByteArrayInputStream(der));
@@ -517,9 +565,9 @@ final class IssuerCrlCheck {
                 ensureVerified(load(f, true, System.currentTimeMillis()), signers);
             } catch (GeneralSecurityException | IOException e) {
                 Loaded previous = CACHE.get(f);
-                alarm(f, e instanceof RejectedCrl rc ? rc.issuer : previous == null ? null : previous.issuer, e.getMessage());
+                alarm(f, e instanceof RejectedCrl rc ? rc.issuer : previous == null ? null : previous.issuer, e);
             } catch (RuntimeException e) {
-                log.errorf(e, "STIG-CRL-UNREADABLE \"%s\": %s", f, e.getMessage());
+                log.errorf(e, "STIG-CRL-UNREADABLE \"%s\": %s", f, describe(e));
             }
         }
     }
@@ -539,8 +587,9 @@ final class IssuerCrlCheck {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     KeycloakModelUtils.runJobInTransaction(factory, s -> prewarm(configuredPaths(s), truststore(s)));
-                } catch (RuntimeException e) {
-                    log.warnf("CRL pre-warm failed: %s", e.getMessage());
+                } catch (Throwable e) {   // incl. Error (e.g. OutOfMemoryError on a large CRL): the thread must keep running
+                    log.errorf(e, "STIG-CRL-PREWARM-FAILED %s (sign-ins still re-read changed CRLs themselves)", describe(e));
+                    if (e instanceof InterruptedException || Thread.currentThread().isInterrupted()) return;
                 }
                 try {
                     WAKE.tryAcquire(period, java.util.concurrent.TimeUnit.MILLISECONDS);   // every period, or when a sign-in saw a change
