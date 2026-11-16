@@ -20,9 +20,26 @@
       "type": "string"
     },
     "client_id": {
-      "description": "OIDC client ID. Lowercase letters, digits and hyphens; starts with a letter; 3-64 characters.",
+      "description": "OIDC client ID. Lowercase letters, digits and hyphens; starts with a letter; 3-64 characters. Keycloak's built-in client ids and any *-realm are reserved.",
       "type": "string",
-      "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$"
+      "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$",
+      "not": {
+        "anyOf": [
+          {
+            "enum": [
+              "account",
+              "account-console",
+              "admin-cli",
+              "broker",
+              "realm-management",
+              "security-admin-console"
+            ]
+          },
+          {
+            "pattern": "-realm$"
+          }
+        ]
+      }
     },
     "name": {
       "description": "Display name. Defaults to client_id.",

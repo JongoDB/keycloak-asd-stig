@@ -1,0 +1,24 @@
+{
+ "client_id": "myapp-web",
+ "name": "My App",
+ "root_url": "https://myapp.example.mil",
+ "redirect_uris": [
+  "https://myapp．example.mil/oauth2/callback"
+ ],
+ "post_logout_redirect_uris": [
+  "https://myapp.example.mil/logged-out"
+ ],
+ "backchannel_logout_url": "https://myapp.example.mil/oauth2/backchannel-logout",
+ "auth": "client-jwt",
+ "jwks_url": "https://myapp.example.mil/.well-known/jwks.json",
+ "roles": [
+  "viewer",
+  "editor",
+  "approver"
+ ],
+ "contact": {
+  "name": "Jane Doe",
+  "email": "jane.doe@example.mil",
+  "organization": "My App development team"
+ }
+}

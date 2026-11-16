@@ -14,6 +14,9 @@ here and registers cleanly or is fixed by the app team first:
   - client-jwt needs jwks_url; client-secret must not send one; no secret, key or password in the file, ever
   - role names: lowercase, start with a letter, [a-z0-9] runs separated by - _ or . , <= 64 chars, not a
     Keycloak built-in role name
+  - client_id: not one of Keycloak's built-in clients (account, account-console, admin-cli, broker,
+    realm-management, security-admin-console) and not *-realm
+  - hosts are ASCII; internationalized names arrive as punycode
   - unknown keys are errors (the operator side would silently ignore them)
 
 Stdlib only. Exit status: 0 valid (warnings allowed), 1 invalid (or warnings with --strict), 2 usage error.
@@ -36,9 +39,13 @@ REQUIRED = ("client_id", "root_url", "redirect_uris", "post_logout_redirect_uris
             "auth", "roles", "contact")
 CONTACT_FIELDS = {"name", "email", "organization", "phone"}
 
-CLIENT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
-ROLE_RE = re.compile(r"^[a-z][a-z0-9]*([-_.][a-z0-9]+)*$")
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+CLIENT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$", re.ASCII)
+# Keycloak's built-in clients, and the per-realm admin clients in the master realm (<realm>-realm). A request with one
+# of these ids would ask the operator to overwrite part of the IdP itself; the operator side refuses them too.
+RESERVED_CLIENT_IDS = {"account", "account-console", "admin-cli", "broker", "realm-management",
+                       "security-admin-console"}
+ROLE_RE = re.compile(r"^[a-z][a-z0-9]*([-_.][a-z0-9]+)*$", re.ASCII)
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", re.ASCII)
 # Keycloak's own role names (realm defaults, realm-management, account). As app roles they confuse every reviewer
 # and any code that checks a role name without its client.
 RESERVED_ROLES = {"offline_access", "uma_authorization", "uma_protection", "realm-admin", "create-client",
@@ -62,8 +69,8 @@ class Result:
 
 # A DNS name: letters, digits and hyphens in dot-separated labels (punycode for IDNs), optional trailing dot.
 DNS_NAME_RE = re.compile(r"^(?=.{1,253}\.?$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.?$",
-                         re.I)
-NUMERIC_LABEL_RE = re.compile(r"^(0x[0-9a-f]*|[0-9]+)$", re.I)
+                         re.I | re.ASCII)
+NUMERIC_LABEL_RE = re.compile(r"^(0x[0-9a-f]*|[0-9]+)$", re.I | re.ASCII)
 DEV_HOST = "localhost"   # the one non-public host name a dev request may use
 
 
@@ -81,6 +88,10 @@ def host_problem(host):
     0177.0.0.1 all reach 127.0.0.1 in browsers and HTTP clients."""
     if not host:
         return "has no host"
+    # Checked first, before any pattern: a non-ASCII host can case-fold or IDNA-map onto another name
+    # ("loca\u017fhost" -> localhost, U+212A KELVIN SIGN -> k, Unicode digits -> an IPv4 label).
+    if not host.isascii():
+        return "contains non-ASCII characters - write internationalized names in punycode (xn--...)"
     if host.startswith("[") or ":" in host:
         return "uses an IPv6 literal"
     if not DNS_NAME_RE.match(host):
@@ -176,6 +187,9 @@ def validate(req):
     cid = req.get("client_id")
     if cid is not None and (not isinstance(cid, str) or not CLIENT_ID_RE.match(cid)):
         r.err("client_id", "%r: use 3-64 lowercase letters, digits and hyphens, starting with a letter" % (cid,))
+    elif isinstance(cid, str) and (cid in RESERVED_CLIENT_IDS or cid.endswith("-realm")):
+        r.err("client_id", "%r is reserved for Keycloak's own clients (%s, and any *-realm) - choose an app-specific id"
+              % (cid, ", ".join(sorted(RESERVED_CLIENT_IDS))))
 
     if "name" in req and (not isinstance(req["name"], str) or not req["name"].strip() or len(req["name"]) > 100):
         r.err("name", "must be a non-empty string of at most 100 characters")
@@ -296,7 +310,7 @@ def main(argv=None):
     ap.add_argument("--quiet", action="store_true", help="print only problems")
     a = ap.parse_args(argv)
     try:
-        with open(a.request) as f:
+        with open(a.request, encoding="utf-8") as f:
             req = json.load(f)
     except (OSError, ValueError) as e:
         print("ERROR (file): cannot read %s: %s" % (a.request, e), file=sys.stderr)

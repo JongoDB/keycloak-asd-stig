@@ -15,7 +15,7 @@ Validate before sending, so the request registers on the first try.
 
    | Field | Example | Notes |
    |---|---|---|
-   | `client_id` | `myapp-web` | Lowercase letters, digits and hyphens. Use `-dev` / `-test` suffixes per environment |
+   | `client_id` | `myapp-web` | Lowercase letters, digits and hyphens. Use `-dev` / `-test` suffixes per environment. Keycloak's own ids are refused (see below) |
    | `name` | `My App` | Optional display name |
    | `root_url` | `https://myapp.example.mil` | The app's public base URL; same as `APP_BASE_URL` |
    | `redirect_uris` | `["https://myapp.example.mil/oauth2/callback"]` | Exact. No `*`, no fragments |
@@ -34,8 +34,14 @@ Validate before sending, so the request registers on the first try.
    operator's client file (`keycloak-asd-stig/references/profile.md`, `clients[]`).
    `validate-client-request.py --emit-client -` prints exactly what the operator will register.
 
+   **Reserved client ids.** `account`, `account-console`, `admin-cli`, `broker`, `realm-management`,
+   `security-admin-console` and any id ending in `-realm` belong to Keycloak itself. Both this validator and the
+   operator's `add-client` refuse them. `add-client` also refuses to modify a client it did not create, so an id that
+   collides with an existing hand-made client is rejected. Pick a new, app-specific id.
+
    Every URL must use a **DNS name**. IP addresses are refused in every spelling, because certificates, redirects
-   and audit trails are bound to names. `localhost` is accepted only in a request marked `"dev_request": true`,
+   and audit trails are bound to names. Hosts must be ASCII: write internationalized names in punycode (`xn--...`).
+   Unicode look-alikes, such as `ſ` for `s` or the Kelvin sign for `k`, are refused rather than normalized. `localhost` is accepted only in a request marked `"dev_request": true`,
    which the operator registers in a non-production realm.
 
 2. **Who needs which role**: a list of people (or the group or process that approves access) for each role.
@@ -85,4 +91,4 @@ A client secret is a password for your application. Treat it like one:
 2. Log in as a test user with each role; check the 403 path, log off, back-channel logout (ask the operator to
    sign the test user out at the IdP) and the idle timeout. `tests/e2e/run_e2e.py` shows these checks in code.
 3. Any change (new redirect URI, new role, key move) is a new, validated `client-request.json` with the same
-   `client_id`. The operator replaces the registration with it.
+   `client_id`. The operator replaces the registration with it. `add-client` updates only clients it created.

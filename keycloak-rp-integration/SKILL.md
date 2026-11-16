@@ -83,7 +83,10 @@ python3 <skill>/scripts/validate-client-request.py deploy/idp/client-request.pro
 ```
 Fix every `ERROR`. With `--strict`, warnings fail too (placeholder hosts, a URL on another origin, the use of
 `client-secret`): fix them or explain them in `notes`. Every URL needs a DNS name; IP addresses are refused in
-every form. `localhost` is accepted only with `"dev_request": true`. Never put a secret or private key in the
+every form, and must be ASCII (punycode for IDNs). `localhost` is accepted only with `"dev_request": true`.
+Keycloak's own client ids (`account`, `account-console`, `admin-cli`, `broker`, `realm-management`,
+`security-admin-console`, any `*-realm`) are refused here and by the operator's `add-client`. `add-client` also
+will not modify a client it did not create. Never put a secret or private key in the
 file. The validator refuses fields that look like one.
 
 ### 5. Report back to the human

@@ -31,7 +31,7 @@ KCSTIG = os.path.join(REPO, "keycloak-asd-stig", "scripts", "kcstig.py")
 
 
 def jload(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -116,6 +116,26 @@ class HostRules(unittest.TestCase):
                     with self.subTest(host=host, field=field, request=name):
                         r = vcr.validate(self._with(base, field, "%s://%s/x" % (scheme, host)))
                         self.assertTrue(any(e.startswith(field) for e in r.errors), r.errors)
+
+    def test_non_ascii_hosts_refused(self):
+        # Look-alikes that case-fold or IDNA-map onto other names, Unicode digits and dots, and plain IDNs.
+        for host in ("loca\u017fhost", "app.\u212aloc.mil", "m\u00fcnchen.example.mil", "127.\u0661", "\u0661\u0662\u0667.1",
+                     "myapp\uff0eexample.mil", "myapp.example.mi\u217c", "xn--mnchen-3ya.example.mil\u200b"):
+            with self.subTest(host=host):
+                self.assertIsNotNone(vcr.host_problem(host))
+                r = vcr.validate(self._with(jload(EXAMPLE), "redirect_uris", "https://%s/x" % host))
+                self.assertTrue(any("non-ASCII" in e for e in r.errors), r.errors)
+        self.assertIsNone(vcr.host_problem("xn--mnchen-3ya.example.mil"))   # punycode is fine
+
+    def test_reserved_client_ids_refused(self):
+        for cid in sorted(vcr.RESERVED_CLIENT_IDS) + ["master-realm", "apps-realm"]:
+            with self.subTest(cid=cid):
+                r = vcr.validate(dict(jload(EXAMPLE), client_id=cid))
+                self.assertTrue(any(e.startswith("client_id") and "reserved" in e for e in r.errors), r.errors)
+        for cid in ("myapp-web", "realm-viewer", "accounts-web", "broker-ui"):
+            with self.subTest(cid=cid):
+                self.assertFalse([e for e in vcr.validate(dict(jload(EXAMPLE), client_id=cid)).errors
+                                  if e.startswith("client_id")])
 
     def test_dns_names_with_digits_are_fine(self):
         for host in ("app1.example.mil", "10-1.example.mil", "127.example.mil", "xn--bcher-kva.example.mil",
