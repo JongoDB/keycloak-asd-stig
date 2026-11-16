@@ -63,24 +63,53 @@ one they say they sent:
 ```bash
 python3 keycloak-rp-integration/scripts/validate-client-request.py --strict client-request.json   # read every line
 python3 keycloak-rp-integration/scripts/validate-client-request.py client-request.json --emit-client -   # what will be registered
-python3 keycloak-asd-stig/scripts/kcstig.py add-client client-request.json \
-    --profile profile.json --clients-dir clients.d [--strict] [--secret-out /secure/path/<client_id>.secret]
+# a new client
+python3 keycloak-asd-stig/scripts/kcstig.py add-client client-request.json --profile profile.json \
+    --clients-dir clients.d --owner <owner id> [--secret-out /secure/path/<client_id>.secret]
+# a change to an existing client (after step 2 below)
+python3 keycloak-asd-stig/scripts/kcstig.py add-client client-request.json --profile profile.json \
+    --clients-dir clients.d --owner <owner id> --update <client_id> [--prune-roles]
 ```
 
-`add-client`, from a checkout of this repository (it finds the validator in `keycloak-rp-integration/` beside the
-IdP skill, or `--validator` / `KCSTIG_RP_VALIDATOR`):
+**Registering a new client**
 
-- refuses the request on any validator error (or warning, with `--strict`), and refuses a `dev_request` unless you
-  pass `--allow-dev` (non-production realms only);
-- refuses reserved ids (`account`, `account-console`, `admin-cli`, `broker`, `realm-management`,
-  `security-admin-console`, `*-realm`). `kcstig.py apply`, `render` and `verify` also refuse a profile or clients.d
-  file that defines one;
-- refuses to modify a client that it did not create (the client attribute `stig.created-by=add-client` marks its
-  own), and refuses an id another clients.d file or the profile already defines. `--adopt <client_id>` takes over a
-  client you already manage, with a warning;
-- applies the client through the admin API (idempotent: rerun it for a changed request) and writes
-  `clients.d/<client_id>.json`, so later `apply` runs keep it;
-- with `client-secret`, writes the secret only to `--secret-out` (created 0600, never printed). Deliver it as
+1. Validate the received file with `--strict`, as above, and read every `WARNING` and `NOTE`.
+2. Assign an owner id (`--owner`, for example the team or system name in your inventory). Without one, the
+   request's contact email becomes the owner. The id is recorded on the client (`stig.owner`, with the contact in
+   `stig.owner-contact`) and in `clients.d/<client_id>.json`.
+3. Run `add-client`. A new client needs nothing more.
+
+**Changing an existing client**
+
+1. Look up the recorded owner and contact: the client attributes `stig.owner` and `stig.owner-contact`, or
+   `clients.d/<client_id>.json`.
+2. **Confirm the change with that recorded contact through a second channel** (a phone call, or a ticket raised by
+   that team), not by replying to whoever sent the file. A change request that only arrived by email or chat is not
+   confirmed. A copied contact email in the request proves nothing.
+3. Rerun with `--update <client_id>` and the same `--owner`. `add-client` prints a before/after diff of
+   `redirect_uris`, `post_logout_redirect_uris`, `backchannel_logout_url`, `jwks_url`, the auth method and the
+   roles. Check the redirect and logout URLs in particular: they decide where users and tokens are sent.
+4. Roles the request no longer lists are kept unless you add `--prune-roles`.
+5. A request from a different owner is refused even with `--update`. If ownership really moves, confirm with both
+   the old and the new contact, then add `--transfer`.
+
+What `add-client` enforces (run it from a checkout of this repository; it finds the validator in
+`keycloak-rp-integration/` beside the IdP skill, or at `--validator` / `KCSTIG_RP_VALIDATOR`, and an explicit path
+that doesn't exist is an error):
+
+- Validator **errors and warnings** both refuse the request by default (wildcard-DNS services such as nip.io,
+  single-label hosts, URLs on another origin, placeholder domains). `--no-strict` overrides warnings, for when you
+  have checked each one. A `dev_request` also needs `--allow-dev` (non-production realms only).
+- Reserved ids (`account`, `account-console`, `admin-cli`, `broker`, `realm-management`, `security-admin-console`,
+  `*-realm`) are refused. `kcstig.py apply`, `render` and `verify` also refuse a profile or clients.d file that
+  defines one.
+- An existing client needs `--update`. Changing another owner's client also needs `--transfer`. A client that
+  `add-client` did not create (no `stig.created-by=add-client`) also needs `--adopt <client_id>`, with a warning.
+- An id that another clients.d file or the profile defines, or a `clients.d/<client_id>.json` with no live client
+  behind it, is someone else's configuration and is refused (`--adopt` overrides it).
+- It applies the client through the admin API (idempotent) and writes `clients.d/<client_id>.json`, owner
+  included, so later `apply` runs keep it.
+- With `client-secret`, it writes the secret only to `--secret-out` (created 0600, never printed). Deliver it as
   described below, then delete that file.
 
 ## Receive
@@ -120,5 +149,6 @@ A client secret is a password for your application. Treat it like one:
 2. Log in as a test user with each role; check the 403 path, log off, back-channel logout (ask the operator to
    sign the test user out at the IdP) and the idle timeout. `tests/e2e/run_e2e.py` shows these checks in code.
 3. Any change (new redirect URI, new role, key move) is a new, validated `client-request.json` with the same
-   `client_id`. The operator reruns `add-client` with it. `add-client` updates only clients it created. Roles you drop from the
-   request are not deleted automatically; ask the operator to remove them.
+   `client_id`, from the same contact. The operator confirms it with you through a second channel before applying
+   it with `--update`, so expect that call. Roles you drop from the request are kept unless you ask the operator to
+   prune them.

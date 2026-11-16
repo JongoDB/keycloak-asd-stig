@@ -13,7 +13,7 @@ app's repository:
 3. Tell the human what to send and what they will get back.
 
 The operator registers the client from that file with the IdP skill's `kcstig.py add-client` (which validates it
-with this skill's validator, refuses reserved ids and clients it did not create) and returns the issuer URL, plus
+with this skill's validator, refuses reserved ids and records your team as the owner) and returns the issuer URL, plus
 a client secret if one was chosen. CAC/PIV, MFA, the DoD banner, lockout and password rules all happen at the IdP.
 The app sees ordinary OIDC users.
 
@@ -92,12 +92,15 @@ it from step 2: exact URIs built from the base URL and the routes you implemente
 python3 <skill>/scripts/validate-client-request.py deploy/idp/client-request.prod.json --strict
 python3 <skill>/scripts/validate-client-request.py deploy/idp/client-request.prod.json --emit-client -   # what gets registered
 ```
-Fix every `ERROR`. With `--strict`, warnings fail too (placeholder hosts, a URL on another origin, the use of
-`client-secret`): fix them or explain them in `notes`. Every URL needs a DNS name; IP addresses are refused in
+Fix every `ERROR`. With `--strict`, warnings fail too (placeholder hosts, a URL on another origin, wildcard-DNS
+services such as nip.io, single-label hosts): fix them. The operator's `add-client` treats warnings as errors by
+default, so a request that passes `--strict` is what registers cleanly. `NOTE` lines (choosing `client-secret`, a
+dev request) are advice and never fail. Every URL needs a DNS name; IP addresses are refused in
 every form, and must be ASCII (punycode for IDNs). `localhost` is accepted only with `"dev_request": true`.
 Keycloak's own client ids (`account`, `account-console`, `admin-cli`, `broker`, `realm-management`,
-`security-admin-console`, any `*-realm`) are refused here and by the operator's `kcstig.py add-client`, which
-also will not modify a client it did not create. Never put a secret or private key in the file: fields named like
+`security-admin-console`, any `*-realm`) are refused here and by the operator's `kcstig.py add-client`. The
+operator records your team as the client's owner. A later change is a new request with the same `client_id` from
+the same contact, which the operator confirms with you through a second channel and applies with `--update`. Never put a secret or private key in the file: fields named like
 secrets are refused, and `notes`, `name` and `contact` are scanned for credential-looking values (PEM blocks, JWTs,
 tokens, `password: ...`, long random strings). The scan catches common shapes, not every secret.
 

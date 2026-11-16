@@ -14,8 +14,11 @@ dev client request (validated with scripts/validate-client-request.py's rules, r
 add-client did not create, applied through the admin API, written to clients.d). This is NOT the hardened realm: it
 proves the app side of the contract and add-client's guards, not the IdP's STIG settings.
 
-add-client: refuses a hand-made client, adopts it only with --adopt (and warns), is idempotent, refuses a reserved
-id and a clients.d file that overrides one, writes the client secret to a 0600 file and never prints it.
+add-client: an existing client needs --update; a hand-made one also --adopt (with a warning); another owner's
+client is refused even with --update unless --transfer; updates print a before/after diff; --owner records the
+operator's owner id; --prune-roles; a clients.d file with no live client is not replaced; reserved ids and a
+clients.d file overriding one are refused; warnings refuse by default (--no-strict); the client secret goes to a
+0600 file and is never printed.
 
 For each example and client authentication method:
   login with PKCE + nonce; roles from resource_access; role-gated route (200 for alice, 403 for bob);
@@ -57,6 +60,7 @@ ISSUER = KC + "/realms/" + REALM
 HOST_FROM_KC = os.environ.get("HOST_FROM_KC", "host.docker.internal")
 CONTAINER = "kc-rp-e2e-%d" % os.getpid()
 IDLE_SECONDS = 12
+LOGIN_RATE = 10     # per-IP login starts per 10 minutes in this run; each app run uses 5 before the limit test
 
 
 def load(name, path):
@@ -205,7 +209,10 @@ def register_client(adm, op, users, port, auth, work):
         print(r.stdout + r.stderr)
         raise SystemExit(1)
     with open(os.path.join(op.clients, cid + ".json")) as f:
-        check(json.load(f) == vcr.to_client(req), "%s: add-client wrote clients.d/%s.json = the request's client" % (cid, cid))
+        filed = json.load(f)
+    owner_keys = {"owner": "e2e@example.test", "owner_contact": "e2e@example.test"}
+    check(filed == dict(vcr.to_client(req), **owner_keys),
+          "%s: add-client wrote clients.d/%s.json = the request's client + its owner" % (cid, cid))
     c = get_client(adm, cid)
     check(c["attributes"].get("stig.created-by") == "add-client", "%s: client carries the add-client ownership marker" % cid)
     check(c["attributes"].get("pkce.code.challenge.method") == "S256" and not c["implicitFlowEnabled"]
@@ -238,37 +245,110 @@ def operator_checks(adm, op):
     """add-client's guards against the live Keycloak."""
     print("== kcstig.py add-client guards", flush=True)
     base = "http://localhost:3999"
-    # a client the operator made by hand
+    alice_team = {"name": "Team A", "email": "team-a@example.test"}
+    other_team = {"name": "Team B", "email": "team-b@example.test"}
+
+    def redirects(cid):
+        return get_client(adm, cid)["redirectUris"]
+
+    # 1. a client the operator made by hand: needs --update, and --adopt
     adm.call("POST", "/%s/clients" % REALM, {"clientId": "handmade-app", "protocol": "openid-connect",
                                              "redirectUris": ["https://handmade.example.test/cb"]})
-    req = dev_request("handmade-app", base, "client-jwt")
+    req = dict(dev_request("handmade-app", base, "client-jwt"), contact=alice_team)
     r = op.add_client(req, "--allow-dev")
+    check(r.returncode != 0 and "--update handmade-app" in r.stderr + r.stdout,
+          "an existing client needs --update")
+    r = op.add_client(req, "--allow-dev", "--update", "handmade-app")
     check(r.returncode != 0 and "not created by add-client" in r.stderr + r.stdout,
-          "add-client refuses to modify a client it did not create")
-    check(get_client(adm, "handmade-app")["redirectUris"] == ["https://handmade.example.test/cb"]
-          and not os.path.exists(os.path.join(op.clients, "handmade-app.json")), "... and changed nothing")
-    r = op.add_client(req, "--allow-dev", "--adopt", "handmade-app")
-    check(r.returncode == 0 and "WARNING add-client: adopting" in r.stderr, "--adopt takes it over, with a warning")
+          "--update alone does not modify a client add-client did not create")
+    check(redirects("handmade-app") == ["https://handmade.example.test/cb"]
+          and not os.path.exists(os.path.join(op.clients, "handmade-app.json")), "... and nothing changed")
+    r = op.add_client(req, "--allow-dev", "--update", "handmade-app", "--adopt", "handmade-app")
+    check(r.returncode == 0 and "WARNING add-client: adopting" in r.stderr, "--update --adopt takes it over, with a warning")
     c = get_client(adm, "handmade-app")
-    check(c["attributes"].get("stig.created-by") == "add-client" and c["redirectUris"] == req["redirect_uris"],
-          "... marks it and applies the request")
-    r = op.add_client(req, "--allow-dev")
-    check(r.returncode == 0 and "updating" in r.stdout, "add-client is idempotent for its own client")
-    r = op.add_client(dict(req, client_id="handmade-app", dev_request=False), "--allow-dev")
-    check(r.returncode != 0, "a dev URL without dev_request is refused by the shared validator")
+    check(c["attributes"].get("stig.created-by") == "add-client" and c["attributes"].get("stig.owner") == alice_team["email"]
+          and c["attributes"].get("stig.owner-contact") == alice_team["email"] and c["redirectUris"] == req["redirect_uris"],
+          "... marks it, records owner and contact, and applies the request")
+    with open(os.path.join(op.clients, "handmade-app.json")) as f:
+        filed = json.load(f)
+    check(filed.get("owner") == alice_team["email"] and filed.get("owner_contact") == alice_team["email"],
+          "the clients.d file records the owner too")
+
+    # 2. a second request for the same id without --update: refused, nothing changes
+    before = redirects("handmade-app")
+    req2 = dict(req, redirect_uris=req["redirect_uris"] + [base + "/oauth2/callback2"])
+    r = op.add_client(req2, "--allow-dev")
+    check(r.returncode != 0 and redirects("handmade-app") == before, "a second request without --update is refused, nothing changes")
+
+    # 3. the same owner with --update: applied, with a before/after diff
+    r = op.add_client(req2, "--allow-dev", "--update", "handmade-app")
+    check(r.returncode == 0 and "changes to apply:" in r.stdout and "redirect_uris:" in r.stdout
+          and base + "/oauth2/callback2" in r.stdout, "the owner's --update prints the before/after diff")
+    check(sorted(redirects("handmade-app")) == sorted(req2["redirect_uris"]), "... and applies it")
+
+    # 4. a request from a different owner: refused even with --update; --transfer moves it
+    req3 = dict(req2, contact=other_team, redirect_uris=[base + "/hijack"])
+    before = redirects("handmade-app")
+    r = op.add_client(req3, "--allow-dev", "--update", "handmade-app")
+    check(r.returncode != 0 and "belongs to" in r.stderr + r.stdout and redirects("handmade-app") == before,
+          "another owner's request is refused even with --update, nothing changes")
+    r = op.add_client(req3, "--allow-dev", "--update", "handmade-app", "--transfer")
+    c = get_client(adm, "handmade-app")
+    check(r.returncode == 0 and "WARNING add-client: transferring" in r.stderr
+          and c["attributes"].get("stig.owner") == other_team["email"], "--transfer moves the client to the new owner")
+
+    # 5. an operator-assigned --owner decides, not the contact email
+    reqo = dict(dev_request("owned-app", base, "client-jwt"), contact=alice_team)
+    r = op.add_client(reqo, "--allow-dev", "--owner", "team-alpha")
+    check(r.returncode == 0 and get_client(adm, "owned-app")["attributes"].get("stig.owner") == "team-alpha",
+          "--owner records the operator's owner id")
+    r = op.add_client(reqo, "--allow-dev", "--update", "owned-app")
+    check(r.returncode != 0 and "belongs to" in r.stderr + r.stdout, "the same contact without the owner id is refused")
+    r = op.add_client(dict(reqo, contact=other_team), "--allow-dev", "--update", "owned-app", "--owner", "team-alpha")
+    check(r.returncode == 0, "the owner id with --update is accepted")
+
+    # 6. --prune-roles
+    r = op.add_client(dict(reqo, roles=["viewer"]), "--allow-dev", "--update", "owned-app", "--owner", "team-alpha")
+    names = lambda: sorted(x["name"] for x in adm.call("GET", "/%s/clients/%s/roles" % (REALM, get_client(adm, "owned-app")["id"])))
+    check(r.returncode == 0 and "no longer requested, kept" in r.stdout and names() == ["approver", "viewer"],
+          "roles dropped from a request are kept without --prune-roles")
+    r = op.add_client(dict(reqo, roles=["viewer"]), "--allow-dev", "--update", "owned-app", "--owner", "team-alpha",
+                      "--prune-roles")
+    check(r.returncode == 0 and names() == ["viewer"], "--prune-roles deletes them")
+
+    # 7. a clients.d file for a client that is not live is someone's configuration
+    ghost = os.path.join(op.clients, "ghost-app.json")
+    with open(ghost, "w") as f:
+        json.dump({"client_id": "ghost-app", "type": "oidc-confidential", "redirect_uris": ["https://ghost.example.test/cb"]}, f)
+    r = op.add_client(dict(dev_request("ghost-app", base, "client-jwt"), contact=other_team), "--allow-dev")
+    with open(ghost) as f:
+        unchanged = json.load(f)["redirect_uris"] == ["https://ghost.example.test/cb"]
+    check(r.returncode != 0 and "already exists although" in r.stderr + r.stdout and unchanged
+          and get_client(adm, "ghost-app") is None, "a clients.d file without a live client is not silently replaced")
+    os.unlink(ghost)
+
+    # 8. reserved ids, the strict default, dev requests
     r = op.add_client(dict(req, client_id="admin-cli"), "--allow-dev")
     check(r.returncode != 0 and "reserved" in r.stderr + r.stdout, "a reserved client_id is refused")
     evil = os.path.join(op.clients, "zz-evil.json")
     with open(evil, "w") as f:
         json.dump({"client_id": "realm-management", "redirect_uris": ["https://x.example.test/cb"]}, f)
-    r = op.add_client(req, "--allow-dev")
+    r = op.add_client(dict(dev_request("new-app", base, "client-jwt")), "--allow-dev")
     check(r.returncode != 0 and "reserved" in r.stderr + r.stdout, "a clients.d file overriding a reserved id stops add-client")
     r = subprocess.run([sys.executable, KCSTIG, "apply", "--profile", op.profile, "--clients-dir", op.clients],
                        capture_output=True, text=True, env=op.env, timeout=120)
     check(r.returncode != 0 and "reserved" in r.stderr + r.stdout, "... and stops kcstig.py apply")
     os.unlink(evil)
-    r = op.add_client(dict(req, client_id="dev-only-app"))
+    r = op.add_client(dict(dev_request("dev-only-app", base, "client-jwt")))
     check(r.returncode != 0 and "--allow-dev" in r.stderr + r.stdout, "a dev_request needs --allow-dev")
+    wild = dict(dev_request("wild-app", base, "client-jwt"), dev_request=False, root_url="https://wild.127.0.0.1.nip.io",
+                redirect_uris=["https://wild.127.0.0.1.nip.io/cb"], post_logout_redirect_uris=["https://wild.127.0.0.1.nip.io/out"],
+                backchannel_logout_url="https://wild.127.0.0.1.nip.io/bcl", jwks_url="https://wild.127.0.0.1.nip.io/jwks")
+    r = op.add_client(wild)
+    check(r.returncode != 0 and "nip.io" in r.stderr and get_client(adm, "wild-app") is None,
+          "a wildcard-DNS host is refused by default (strict)")
+    r = op.add_client(wild, "--no-strict")
+    check(r.returncode == 0 and get_client(adm, "wild-app") is not None, "... and accepted only with --no-strict")
 
 
 def app_command(name):
@@ -330,6 +410,7 @@ def run_app(name, auth, adm, op, users, ca, work):
     print("== %s (client %s)" % (tag, cid), flush=True)
     envv = dict(os.environ, OIDC_ISSUER=ISSUER, OIDC_CLIENT_ID=cid, APP_BASE_URL=base, PORT=str(port),
                 HOST="0.0.0.0", SESSION_IDLE_MINUTES=str(IDLE_SECONDS / 60),   # short, to test the idle limit
+                LOGIN_RATE_PER_IP=str(LOGIN_RATE),
                 NODE_EXTRA_CA_CERTS=ca, REQUESTS_CA_BUNDLE=ca, SSL_CERT_FILE=ca, OIDC_CA_FILE=ca)
     sf = os.path.join(work, cid + "-session-secret")
     with open(sf, "w") as f:
@@ -424,6 +505,13 @@ def run_app(name, auth, adm, op, users, ca, work):
         check(logged_in(s3), "%s: bob logs in again" % tag)
         time.sleep(IDLE_SECONDS + 2)
         check(not logged_in(s3), "%s: idle session ends after %d s" % (tag, IDLE_SECONDS))
+
+        # per-IP limit on login starts
+        codes = [requests.get(base + "/login", allow_redirects=False).status_code for _ in range(LOGIN_RATE + 2)]
+        throttled = [c for c in codes if c == 429]
+        r429 = requests.get(base + "/login", allow_redirects=False)
+        check(throttled and codes.count(302) <= LOGIN_RATE and r429.status_code == 429 and r429.headers.get("Retry-After"),
+              "%s: /login is limited per client IP (429 + Retry-After after %d starts)" % (tag, codes.count(302) + 5))
     finally:
         proc.terminate()
         proc.wait(10)

@@ -30,6 +30,8 @@ IDLE = float(os.environ.get("SESSION_IDLE_MINUTES", "15")) * 60     # <= the IdP
 MAX_AGE = float(os.environ.get("SESSION_MAX_HOURS", "8")) * 3600    # <= the IdP's SSO max lifespan
 MAX_SESSIONS = int(os.environ.get("MAX_SESSIONS", "10000"))         # cap on sessions and logins in progress
 PENDING_TTL = 600                                                   # an unfinished login expires after 10 minutes
+MAX_PENDING = int(os.environ.get("MAX_PENDING_LOGINS", "1000"))     # login starts allowed per 10 minutes, in total
+PER_IP = int(os.environ.get("LOGIN_RATE_PER_IP", "30"))             # ... and per client IP
 SECURE = BASE.startswith("https://")
 BCL_EVENT = "http://schemas.openid.net/event/backchannel-logout"
 ALGS = ["RS256", "PS256", "ES256"]
@@ -177,8 +179,36 @@ def same_origin():
     return src != "null" and "%s://%s" % urlsplit(src)[:2] == APP_ORIGIN
 
 
+# Anonymous /login creates server-side state: limit how fast it can be created, overall and per client IP
+# (request.remote_addr honours TRUST_PROXY through ProxyFix).
+LOGIN_STARTS = {}            # ip -> timestamps within PENDING_TTL
+
+
+def admit_login(ip, now):
+    with LOCK:
+        total = 0
+        for k in list(LOGIN_STARTS):
+            live = [t for t in LOGIN_STARTS[k] if now - t < PENDING_TTL]
+            if live:
+                LOGIN_STARTS[k] = live
+                total += len(live)
+            else:
+                del LOGIN_STARTS[k]
+        mine = LOGIN_STARTS.get(ip, [])
+        if len(mine) >= PER_IP:
+            return 429
+        if total >= MAX_PENDING:
+            return 503
+        LOGIN_STARTS[ip] = mine + [now]
+        return 0
+
+
 @app.get("/login")
 def login():
+    refuse = admit_login(request.remote_addr or "?", time.time())
+    if refuse:
+        audit("login_throttled", ip=request.remote_addr, status=refuse)
+        return "Too many sign-in attempts. Try again shortly.", refuse, {"Retry-After": "60"}
     # Authlib adds state, nonce and the PKCE S256 challenge; the verifier and nonce go to the server-side cache.
     try:
         return idp.authorize_redirect(BASE + "/oauth2/callback")

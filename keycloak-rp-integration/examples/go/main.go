@@ -16,6 +16,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -36,10 +37,45 @@ const (
 	pendingTTL = 10 * time.Minute // an unfinished login expires after 10 minutes
 )
 
+// loginLimiter bounds how fast anonymous /login requests can create server-side state: in total and per client IP.
+type loginLimiter struct {
+	mu           sync.Mutex
+	starts       map[string][]time.Time
+	total, perIP int
+}
+
+func (l *loginLimiter) admit(ip string, now time.Time) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for k, ts := range l.starts {
+		live := ts[:0]
+		for _, t := range ts {
+			if now.Sub(t) < pendingTTL {
+				live = append(live, t)
+			}
+		}
+		if len(live) == 0 {
+			delete(l.starts, k)
+		} else {
+			l.starts[k] = live
+			n += len(live)
+		}
+	}
+	if len(l.starts[ip]) >= l.perIP {
+		return http.StatusTooManyRequests
+	}
+	if n >= l.total {
+		return http.StatusServiceUnavailable
+	}
+	l.starts[ip] = append(l.starts[ip], now)
+	return 0
+}
+
 type session struct {
 	Sub, Sid, Username, PreviousLogin, IDToken string
-	Roles                                    []string
-	LoginAt, LastSeen                        time.Time
+	Roles                                      []string
+	LoginAt, LastSeen                          time.Time
 	// login in progress
 	State, Nonce, Verifier string
 }
@@ -47,15 +83,17 @@ type session struct {
 type rp struct {
 	clientID, base, cookie, origin string
 	maxSessions                    int
-	secure                 bool
-	idle, maxAge           time.Duration
-	oauth                  oauth2.Config
-	idVerifier, atVerifier *oidc.IDTokenVerifier
-	logoutVerifier         *oidc.IDTokenVerifier
-	endSession             string
-	signer                 jose.Signer // nil with a client secret
-	jwks                   jose.JSONWebKeySet
-	ctx                    context.Context
+	trustProxy                     bool
+	limiter                        *loginLimiter
+	secure                         bool
+	idle, maxAge                   time.Duration
+	oauth                          oauth2.Config
+	idVerifier, atVerifier         *oidc.IDTokenVerifier
+	logoutVerifier                 *oidc.IDTokenVerifier
+	endSession                     string
+	signer                         jose.Signer // nil with a client secret
+	jwks                           jose.JSONWebKeySet
+	ctx                            context.Context
 
 	mu       sync.Mutex
 	sessions map[string]*session // server-side; use Redis or a DB with replicas
@@ -92,7 +130,7 @@ func audit(event string, kv map[string]any) {
 
 func main() {
 	issuer, clientID := os.Getenv("OIDC_ISSUER"), os.Getenv("OIDC_CLIENT_ID") // issuer: from the operator
-	base := strings.TrimSuffix(os.Getenv("APP_BASE_URL"), "/")                  // = root_url in the request
+	base := strings.TrimSuffix(os.Getenv("APP_BASE_URL"), "/")                // = root_url in the request
 	idleMin, err := strconv.ParseFloat(env("SESSION_IDLE_MINUTES", "15"), 64) // <= the IdP's idle
 	if err != nil {
 		log.Fatal("SESSION_IDLE_MINUTES: ", err)
@@ -135,6 +173,16 @@ func main() {
 	if a.maxSessions, err = strconv.Atoi(env("MAX_SESSIONS", "10000")); err != nil || a.maxSessions < 1 {
 		log.Fatal("MAX_SESSIONS: must be a positive integer")
 	}
+	maxPending, err := strconv.Atoi(env("MAX_PENDING_LOGINS", "1000"))
+	if err != nil || maxPending < 1 {
+		log.Fatal("MAX_PENDING_LOGINS: must be a positive integer")
+	}
+	perIP, err := strconv.Atoi(env("LOGIN_RATE_PER_IP", "30"))
+	if err != nil || perIP < 1 {
+		log.Fatal("LOGIN_RATE_PER_IP: must be a positive integer")
+	}
+	a.limiter = &loginLimiter{starts: map[string][]time.Time{}, total: maxPending, perIP: perIP}
+	a.trustProxy = env("TRUST_PROXY", "0") == "1"
 	a.cookie = "sid"
 	if a.secure {
 		a.cookie = "__Host-sid"
@@ -203,8 +251,8 @@ func main() {
 	mux.HandleFunc("GET /.well-known/jwks.json", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, a.jwks) // public keys only
 	})
-	// TRUST_PROXY: this app builds every URL from APP_BASE_URL, so forwarded headers are never read. Behind a
-	// proxy, set APP_BASE_URL to the public URL; use X-Forwarded-For for audit only when TRUST_PROXY=1.
+	// URLs are built from APP_BASE_URL only. TRUST_PROXY=1 makes the login limiter use X-Forwarded-For, which only
+	// your own overwriting proxy may set.
 	go func() { // expire abandoned logins and sessions nobody returns to
 		for range time.Tick(time.Minute) {
 			a.mu.Lock()
@@ -297,7 +345,28 @@ func (a *rp) require(role string, h func(http.ResponseWriter, *http.Request, *se
 	}
 }
 
+// clientIP is the TCP peer, or with TRUST_PROXY=1 the last X-Forwarded-For entry (the one your own proxy wrote).
+func (a *rp) clientIP(r *http.Request) string {
+	if a.trustProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			return strings.TrimSpace(parts[len(parts)-1])
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 func (a *rp) login(w http.ResponseWriter, r *http.Request) {
+	if code := a.limiter.admit(a.clientIP(r), time.Now()); code != 0 {
+		audit("login_throttled", map[string]any{"ip": a.clientIP(r), "status": code})
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, "Too many sign-in attempts. Try again shortly.", code)
+		return
+	}
 	s := &session{State: randString(), Nonce: randString(), Verifier: oauth2.GenerateVerifier(), LastSeen: time.Now()}
 	id := randString()
 	a.mu.Lock()
@@ -382,7 +451,7 @@ func (a *rp) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var at struct {
-		Azp            string                         `json:"azp"`
+		Azp            string                              `json:"azp"`
 		ResourceAccess map[string]struct{ Roles []string } `json:"resource_access"`
 	}
 	if err := att.Claims(&at); err != nil || at.Azp != a.clientID || att.Subject != idt.Subject {

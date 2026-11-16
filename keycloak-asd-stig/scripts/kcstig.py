@@ -97,7 +97,8 @@ def reserved_client_id(cid):
 
 CLIENT_KEYS = {"client_id", "type", "name", "root_url", "redirect_uris", "privileged", "post_logout_redirect_uris",
                "backchannel_logout_url", "web_origins", "auth", "jwks_url", "subject_dn", "service_account",
-               "standard_flow", "par", "acs_url", "slo_url", "signing_cert", "encryption_cert", "roles"}
+               "standard_flow", "par", "acs_url", "slo_url", "signing_cert", "encryption_cert", "roles",
+               "owner", "owner_contact"}   # owner*: recorded by add-client, kept on the client as stig.owner*
 USER_KEYS = {"username", "email", "firstName", "lastName", "temporary_password", "account_type", "client_roles"}
 
 def check_profile(raw, p):
@@ -449,6 +450,11 @@ def client_rep(c, p):
             attrs["use.jwks.url"] = "true"; attrs["jwks.url"] = c["jwks_url"]
         if c.get("auth") == "client-x509" and c.get("subject_dn"):
             attrs["x509.subjectdn"] = c["subject_dn"]
+    if c.get("owner"):          # written by add-client; kept on the client so later apply runs preserve it
+        attrs[OWNER_ATTR] = OWNER_VALUE
+        attrs["stig.owner"] = c["owner"]
+        if c.get("owner_contact"):
+            attrs["stig.owner-contact"] = c["owner_contact"]
     if c.get("roles"):
         rep["_roles"] = list(c["roles"])
     for u in rep["redirectUris"]:
@@ -960,10 +966,18 @@ def cmd_apply(a):
 # --------------------------------------------------------------------------------------------
 def load_rp_validator(path=None):
     """Import (never copy) the relying-party validator, so the app side and this side apply the same rules."""
-    cands = [path, os.environ.get("KCSTIG_RP_VALIDATOR"),
-             os.path.join(os.path.dirname(SKILL), "keycloak-rp-integration", "scripts", "validate-client-request.py")]
+    if path:                                # an explicit path must exist: never fall back to another copy
+        if not os.path.isfile(path):
+            sys.exit("add-client: --validator %s does not exist - nothing changed" % path)
+        cands = [path]
+    elif os.environ.get("KCSTIG_RP_VALIDATOR"):
+        if not os.path.isfile(os.environ["KCSTIG_RP_VALIDATOR"]):
+            sys.exit("add-client: KCSTIG_RP_VALIDATOR=%s does not exist - nothing changed" % os.environ["KCSTIG_RP_VALIDATOR"])
+        cands = [os.environ["KCSTIG_RP_VALIDATOR"]]
+    else:
+        cands = [os.path.join(os.path.dirname(SKILL), "keycloak-rp-integration", "scripts", "validate-client-request.py")]
     for c in cands:
-        if c and os.path.isfile(c):
+        if os.path.isfile(c):
             import importlib.util
             spec = importlib.util.spec_from_file_location("validate_client_request", c)
             mod = importlib.util.module_from_spec(spec)
@@ -989,6 +1003,41 @@ def write_private(path, text):
         if os.path.exists(tmp):
             os.unlink(tmp)
 
+OWNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}", re.ASCII)
+
+def live_endpoints(c):
+    """The registration fields an update can redirect: from a live Keycloak client representation."""
+    at = c.get("attributes") or {}
+    return {"redirect_uris": sorted(c.get("redirectUris") or []),
+            "post_logout_redirect_uris": sorted(u for u in (at.get("post.logout.redirect.uris") or "").split("##") if u),
+            "backchannel_logout_url": at.get("backchannel.logout.url") or None,
+            "jwks_url": at.get("jwks.url") or None,
+            "auth": c.get("clientAuthenticatorType")}
+
+def request_endpoints(client):
+    return {"redirect_uris": sorted(client.get("redirect_uris") or []),
+            "post_logout_redirect_uris": sorted(client.get("post_logout_redirect_uris") or []),
+            "backchannel_logout_url": client.get("backchannel_logout_url"),
+            "jwks_url": client.get("jwks_url"), "auth": client.get("auth")}
+
+def print_update_diff(before, after, roles_before, roles_after, prune):
+    print("changes to apply:")
+    changed = False
+    for k in ("redirect_uris", "post_logout_redirect_uris", "backchannel_logout_url", "jwks_url", "auth"):
+        if before[k] != after[k]:
+            changed = True
+            print("  %s:\n    - %s\n    + %s" % (k, before[k], after[k]))
+    add, drop = sorted(set(roles_after) - set(roles_before)), sorted(set(roles_before) - set(roles_after))
+    if add:
+        changed = True
+        print("  roles added: %s" % ", ".join(add))
+    if drop:
+        changed = True
+        print("  roles %s: %s" % ("removed (--prune-roles)" if prune else "no longer requested, kept (no --prune-roles)",
+                                 ", ".join(drop)))
+    if not changed:
+        print("  (no change to redirect URIs, logout URLs, JWKS URL, auth or roles)")
+
 def cmd_add_client(a):
     v = load_rp_validator(a.validator)
     try:
@@ -998,11 +1047,14 @@ def cmd_add_client(a):
     res = v.validate(req)
     for w in res.warnings:
         print("WARNING request: " + w, file=sys.stderr)
+    for n in getattr(res, "notes", []):
+        print("NOTE request: " + n, file=sys.stderr)
     for e in res.errors:
         print("ERROR request: " + e, file=sys.stderr)
     if res.errors or (a.strict and res.warnings):
         sys.exit("add-client: request refused (%d error(s), %d warning(s)%s) - nothing changed" % (
-            len(res.errors), len(res.warnings), ", --strict" if a.strict else ""))
+            len(res.errors), len(res.warnings),
+            "; warnings are errors by default - --no-strict only after checking each one" if a.strict and res.warnings else ""))
     if req.get("dev_request") and not a.allow_dev:
         sys.exit("add-client: this is a dev_request (localhost URLs). Register it only in a non-production realm, "
                  "and say so with --allow-dev - nothing changed")
@@ -1010,8 +1062,15 @@ def cmd_add_client(a):
     cid = client["client_id"]
     if reserved_client_id(cid):      # the validator refuses these too; checked again on this side on purpose
         sys.exit("add-client: %r is reserved for Keycloak's own clients - nothing changed" % cid)
-    if a.adopt and a.adopt != cid:
-        sys.exit("add-client: --adopt %r does not match the request's client_id %r - nothing changed" % (a.adopt, cid))
+    for flag in ("adopt", "update"):
+        if getattr(a, flag) and getattr(a, flag) != cid:
+            sys.exit("add-client: --%s %r does not match the request's client_id %r - nothing changed" % (flag, getattr(a, flag), cid))
+    # Who the client belongs to: the operator's owner id, else the requesting contact. Recorded on the client.
+    contact = req["contact"]["email"].strip().lower()
+    owner = a.owner or contact
+    if not OWNER_RE.fullmatch(owner):
+        sys.exit("add-client: --owner %r: use letters, digits and . _ @ + - (at most 128) - nothing changed" % owner)
+    client["owner"], client["owner_contact"] = owner, contact
     clients_dir = a.clients_dir or os.environ.get("STIG_CLIENTS_DIR")
     if not clients_dir or not os.path.isdir(clients_dir):
         sys.exit("add-client: --clients-dir (or STIG_CLIENTS_DIR) must name the existing clients.d directory")
@@ -1022,7 +1081,7 @@ def cmd_add_client(a):
     others = ["profile %s" % a.profile] if any(c.get("client_id") == cid for c in raw.get("clients", [])) else []
     for fpath in sorted(glob.glob(os.path.join(clients_dir, "*.json"))):
         if os.path.abspath(fpath) == os.path.abspath(target):
-            continue
+            continue                 # judged below, against the live client
         with open(fpath) as f:
             obj = json.load(f)
         if any(c.get("client_id") == cid for c in (obj if isinstance(obj, list) else [obj])):
@@ -1036,24 +1095,53 @@ def cmd_add_client(a):
     rr = "/realms/%s" % q(realm)
     if kc.api("GET", rr, ok404=True) is None:
         sys.exit("add-client: realm %s does not exist - run kcstig.py apply first" % realm)
-    found = kc.api("GET", rr + "/clients?clientId=%s" % q(cid)) or []
-    found = [c for c in found if c.get("clientId") == cid]
-    if found:
-        owner = (found[0].get("attributes") or {}).get(OWNER_ATTR)
-        if owner == OWNER_VALUE:
-            print("client %s exists and was created by add-client: updating" % cid)
-        elif a.adopt == cid:
+    found = [c for c in (kc.api("GET", rr + "/clients?clientId=%s" % q(cid)) or []) if c.get("clientId") == cid]
+    live = found[0] if found else None
+    if live is None:
+        if a.update:
+            sys.exit("add-client: --update %s: no such client in realm %s - omit --update to create it" % (cid, realm))
+        if os.path.exists(target) and a.adopt != cid:
+            sys.exit("add-client: %s already exists although client %r is not in realm %s. It is someone's configuration "
+                     "(a later apply would create the client from it) - refusing to replace it. Remove it, or use "
+                     "--adopt %s if this request replaces it - nothing changed" % (target, cid, realm, cid))
+        print("client %s does not exist in realm %s: creating it for owner %s" % (cid, realm, owner))
+    else:
+        at = live.get("attributes") or {}
+        if a.update != cid:
+            sys.exit("add-client: client %r already exists in realm %s (owner %r, contact %r). Changing it needs "
+                     "--update %s - confirm the change with the recorded contact through a second channel first. "
+                     "Nothing changed." % (cid, realm, at.get("stig.owner"), at.get("stig.owner-contact"), cid))
+        if at.get(OWNER_ATTR) != OWNER_VALUE:
+            if a.adopt != cid:
+                sys.exit("add-client: client %r already exists in realm %s and was not created by add-client (%s=%r). "
+                         "Refusing to modify it. If the operator manages it and this request is meant to replace its "
+                         "settings, rerun with --update %s --adopt %s - nothing changed"
+                         % (cid, realm, OWNER_ATTR, at.get(OWNER_ATTR), cid, cid))
             print("WARNING add-client: adopting existing client %s, which add-client did not create (%s=%r). Its "
-                  "settings are replaced by this request and it is marked as add-client's from now on." % (
-                      cid, OWNER_ATTR, owner), file=sys.stderr)
-        else:
-            sys.exit("add-client: client %r already exists in realm %s and was not created by add-client (%s=%r). "
-                     "Refusing to modify it. If the operator manages it and this request is meant to replace its "
-                     "settings, rerun with --adopt %s - nothing changed" % (cid, realm, OWNER_ATTR, owner, cid))
+                  "settings are replaced by this request and it now belongs to %s." % (
+                      cid, OWNER_ATTR, at.get(OWNER_ATTR), owner), file=sys.stderr)
+        elif at.get("stig.owner") != owner:
+            if not a.transfer:
+                sys.exit("add-client: client %r belongs to %r (contact %r); this request is from %r. Refusing to change "
+                         "another owner's client. If ownership really moves, confirm with the recorded contact and "
+                         "rerun with --transfer - nothing changed" % (
+                             cid, at.get("stig.owner"), at.get("stig.owner-contact"), owner))
+            print("WARNING add-client: transferring client %s from %r (contact %r) to %r (contact %r)" % (
+                cid, at.get("stig.owner"), at.get("stig.owner-contact"), owner, contact), file=sys.stderr)
+        roles_before = sorted(r["name"] for r in kc.api("GET", rr + "/clients/%s/roles" % live["id"]) or [])
+        print("updating client %s (owner %s)" % (cid, owner))
+        print_update_diff(live_endpoints(live), request_endpoints(client), roles_before, client.get("roles") or [],
+                          a.prune_roles)
     rep = client_rep(client, p)
     rep["attributes"][OWNER_ATTR] = OWNER_VALUE
     sid = ensure_stig_claims_scope(kc, realm)
     uuid_ = upsert_client(kc, realm, rep, sid)
+    if a.prune_roles:
+        keep = set(client.get("roles") or [])
+        for role in kc.api("GET", rr + "/clients/%s/roles" % uuid_) or []:
+            if role["name"] not in keep:
+                kc.api("DELETE", rr + "/clients/%s/roles/%s" % (uuid_, q(role["name"])))
+                log("client %s role %s deleted (--prune-roles)" % (cid, role["name"]))
     os.makedirs(clients_dir, exist_ok=True)
     tmp = target + ".tmp"
     with open(tmp, "w") as f:
@@ -2283,15 +2371,26 @@ def main():
     i = sub.add_parser("inherit"); i.add_argument("--profile", required=True); i.add_argument("--app"); i.add_argument("--out", default="reports")
     i.add_argument("--clients-dir", help="directory of per-service client *.json files (or STIG_CLIENTS_DIR)"); i.set_defaults(fn=cmd_inherit)
     ac = sub.add_parser("add-client", help="register one relying party from its client-request.json (validated with "
-                        "keycloak-rp-integration's rules; refuses reserved ids and clients it did not create)")
+                        "keycloak-rp-integration's rules; refuses reserved ids, other owners' clients and clients it did "
+                        "not create)")
     ac.add_argument("request", help="client-request.json from the app team")
     ac.add_argument("--profile", required=True); ac.add_argument("--url")
     ac.add_argument("--clients-dir", help="clients.d directory to write <client_id>.json into (or STIG_CLIENTS_DIR)")
-    ac.add_argument("--adopt", metavar="CLIENT_ID", help="take over an existing client that add-client did not create")
+    ac.add_argument("--owner", help="operator-assigned owner id for this client (default: the request's contact email); "
+                    "recorded as stig.owner")
+    ac.add_argument("--update", metavar="CLIENT_ID", help="required to change an existing client; prints the before/after diff")
+    ac.add_argument("--transfer", action="store_true", help="with --update: let a different owner take the client over")
+    ac.add_argument("--adopt", metavar="CLIENT_ID", help="take over a client add-client did not create (with --update), "
+                    "or a clients.d definition of it")
+    ac.add_argument("--prune-roles", action="store_true", help="delete client roles the request no longer lists")
     ac.add_argument("--allow-dev", action="store_true", help="accept a dev_request (localhost URLs): non-production realms only")
-    ac.add_argument("--strict", action="store_true", help="refuse on validator warnings too")
+    ac.add_argument("--no-strict", dest="strict", action="store_false",
+                    help="accept a request with validator warnings (wildcard-DNS or single-label hosts, other origins); "
+                         "default: warnings are errors")
+    ac.add_argument("--strict", dest="strict", action="store_true", help=argparse.SUPPRESS)   # the default; kept for scripts
     ac.add_argument("--secret-out", metavar="FILE", help="client-secret only: write the secret here (mode 0600); it is never printed")
     ac.add_argument("--validator", help="path to validate-client-request.py (default: keycloak-rp-integration/ beside this skill)")
+    ac.set_defaults(strict=True)
     ac.set_defaults(fn=cmd_add_client)
     asx = sub.add_parser("assess", help="offline: run the verify checks against realm export JSON")
     asx.add_argument("--export", required=True, help="realm export (Admin console > Realm settings > Partial export, or kc.sh export)")

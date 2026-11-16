@@ -312,10 +312,16 @@ class OperatorSide(unittest.TestCase):
             "invalid request": (dict(ex, redirect_uris=["https://myapp.example.mil/*"]), [], None, "request refused"),
             "reserved id": (dict(ex, client_id="admin-cli"), [], None, "request refused"),
             "trailing newline id": (dict(ex, client_id="account\n"), [], None, "request refused"),
-            "strict warnings": (ex, ["--strict"], None, "request refused"),
-            "dev without --allow-dev": (dev, [], None, "--allow-dev"),
-            "defined by another clients.d file": (ex, [], {"other.json": {"client_id": "myapp-web"}}, "already defined"),
-            "adopt mismatch": (ex, ["--adopt", "other-app"], None, "does not match"),
+            "warnings are errors by default": (ex, [], None, "warnings are errors by default"),
+            "wildcard-DNS host refused by default": (
+                dict(ex, redirect_uris=["https://myapp.127.0.0.1.nip.io/oauth2/callback"]), [], None, "nip.io"),
+            "dev without --allow-dev": (dev, ["--no-strict"], None, "--allow-dev"),
+            "defined by another clients.d file": (ex, ["--no-strict"], {"other.json": {"client_id": "myapp-web"}},
+                                                  "already defined"),
+            "adopt mismatch": (ex, ["--no-strict", "--adopt", "other-app"], None, "does not match"),
+            "update mismatch": (ex, ["--no-strict", "--update", "other-app"], None, "does not match"),
+            "bad owner id": (ex, ["--no-strict", "--owner", "team a; rm"], None, "--owner"),
+            "missing --validator path": (ex, ["--validator", "/nonexistent/validate.py"], None, "does not exist"),
             "duplicate keys": ('{"client_id": "myapp-web", "client_id": "admin-cli"}', [], None, "duplicate key"),
         }
         for name, (req, extra, clients, expect) in cases.items():

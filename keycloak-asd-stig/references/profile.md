@@ -90,11 +90,17 @@ clients.d file, and `upsert_client` refuses them, so no clients.d file can overw
 
 Registering an application team's client: take their `client-request.json` (format and validator in
 `keycloak-rp-integration/`) and run `kcstig.py add-client client-request.json --profile p.json --clients-dir
-clients.d`. It validates the request with the relying-party validator's rules, refuses reserved ids, refuses to
-modify any client it did not create (client attribute `stig.created-by=add-client`; `--adopt <id>` to take one
-over), applies the client live and writes `clients.d/<client_id>.json`. With `auth: client-secret`,
-`--secret-out FILE` writes the secret (0600, never printed). Run `validate-client-request.py --strict` on the file
-you received first, and read its output.
+clients.d --owner <owner id>`. It validates the request with the relying-party validator's rules (warnings refuse
+too unless `--no-strict`) and refuses reserved ids. It records the owner (`stig.owner`, `stig.owner-contact`, and
+`owner`/`owner_contact` in the clients.d file), applies the client live and writes `clients.d/<client_id>.json`.
+Changing an existing client needs `--update <id>` and prints a before/after diff of the redirect, logout and JWKS
+URLs. Another owner's client also needs `--transfer`, a client add-client did not create also needs `--adopt <id>`,
+and `--prune-roles` deletes roles the request dropped. With `auth: client-secret`, `--secret-out FILE` writes the
+secret (0600, never printed). Run `validate-client-request.py --strict` on the file you received first, and confirm
+any change request with the recorded contact through a second channel (`keycloak-rp-integration/references/operator-handoff.md`).
+
+Keys only `add-client` writes: `owner`, `owner_contact` (become the client attributes `stig.owner`,
+`stig.owner-contact` and `stig.created-by=add-client`).
 
 Common keys:
 

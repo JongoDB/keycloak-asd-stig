@@ -81,13 +81,18 @@ MAX_URL = 2048
 
 class Result:
     def __init__(self):
-        self.errors, self.warnings = [], []
+        # errors refuse; warnings refuse under --strict (and in the operator's add-client, which is strict by
+        # default); notes are advice that never refuses (client-secret chosen, a dev request).
+        self.errors, self.warnings, self.notes = [], [], []
 
     def err(self, field, msg):
         self.errors.append("%s: %s" % (field, msg))
 
     def warn(self, field, msg):
         self.warnings.append("%s: %s" % (field, msg))
+
+    def note(self, field, msg):
+        self.notes.append("%s: %s" % (field, msg))
 
 
 # A DNS name: letters, digits and hyphens in dot-separated labels (punycode for IDNs), optional trailing dot.
@@ -245,7 +250,7 @@ def validate(req):
         r.err("dev_request", "must be true or false")
         dev = False
     if dev:
-        r.warn("dev_request", "development request: the operator registers it in a non-production realm only")
+        r.note("dev_request", "development request: the operator registers it in a non-production realm only")
 
     cid = req.get("client_id")
     if cid is not None and (not isinstance(cid, str) or not CLIENT_ID_RE.fullmatch(cid)):
@@ -305,7 +310,7 @@ def validate(req):
             if j is not None:
                 parsed["jwks_url"] = [j]
     elif auth == "client-secret":
-        r.warn("auth", "client-secret is a shared secret the operator must deliver out of band; "
+        r.note("auth", "client-secret is a shared secret the operator must deliver out of band; "
                        "client-jwt (private_key_jwt) is preferred")
         if "jwks_url" in req:
             r.err("jwks_url", "only valid with auth client-jwt")
@@ -402,6 +407,8 @@ def main(argv=None):
         print("ERROR " + e, file=sys.stderr)
     for w in r.warnings:
         print("WARNING " + w, file=sys.stderr)
+    for n in r.notes:
+        print("NOTE " + n, file=sys.stderr)
     bad = bool(r.errors) or (a.strict and bool(r.warnings))
     if bad:
         print("%s: INVALID (%d error(s), %d warning(s))" % (a.request, len(r.errors), len(r.warnings)), file=sys.stderr)

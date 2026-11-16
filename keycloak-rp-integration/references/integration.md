@@ -161,7 +161,10 @@ The IdP's limits are a ceiling for the app, never a floor. Its sessions must not
 - **Bound what an anonymous visitor can create.** Every `/login` stores state (PKCE verifier, nonce) before anyone
   is authenticated. Expire it (the examples use 10 minutes), sweep sessions that idled out but were never revisited,
   and cap the total (`MAX_SESSIONS`, answered with 503), or a script that requests `/login` in a loop fills memory.
-  A shared store needs the same TTLs.
+  Give logins in progress their own, much smaller budget (`MAX_PENDING_LOGINS` starts per 10 minutes, 503) and a
+  per-client-IP limit (`LOGIN_RATE_PER_IP`, 429 with `Retry-After`), so one client cannot use up the budget for
+  everyone. Behind a proxy, the per-IP limit needs the real client IP (section 9), or every user shares one
+  budget. A shared store needs the same TTLs and counters.
 - **Return-to-page after login without an open redirect.** If you send users back to the page they asked for,
   store that path **server-side** in the login-in-progress state, never in a query parameter you echo back
   unchecked. Accept only a relative path that starts with exactly one `/`: reject `//host`, `/\host`, anything

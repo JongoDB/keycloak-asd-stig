@@ -46,6 +46,8 @@ when you run more than one replica.
 | `TRUST_PROXY` | `1` only behind your own proxy that overwrites `X-Forwarded-*` (Node/Python; Go relies on `APP_BASE_URL` only) |
 | `OIDC_CA_FILE` (Go), `NODE_EXTRA_CA_CERTS` (Node), `REQUESTS_CA_BUNDLE` (Python) | The IdP's CA bundle, when it chains to a private or DoD root |
 | `MAX_SESSIONS` | Default 10000: cap on sessions plus logins in progress (503 beyond it). Unfinished logins expire after 10 minutes |
+| `MAX_PENDING_LOGINS` | Default 1000: `/login` starts allowed per 10 minutes in total, far below `MAX_SESSIONS` (503 beyond it) |
+| `LOGIN_RATE_PER_IP` | Default 30: `/login` starts per client IP per 10 minutes (429 beyond it). The client IP is the TCP peer, or the forwarded one with `TRUST_PROXY=1`, so set that behind a proxy or every user shares one budget |
 | `HOST` / `PORT` | Listen address. Default `127.0.0.1:3000`; put a TLS proxy in front |
 
 ```bash

@@ -19,6 +19,8 @@ const IDLE_MS = Number(env('SESSION_IDLE_MINUTES', '15')) * 60_000;   // <= the 
 const MAX_MS = Number(env('SESSION_MAX_HOURS', '8')) * 3_600_000;     // <= the IdP's SSO max lifespan
 const MAX_SESSIONS = Number(env('MAX_SESSIONS', '10000'));            // cap on sessions and logins in progress
 const PENDING_MS = 10 * 60_000;                                       // an unfinished login expires after 10 minutes
+const MAX_PENDING = Number(env('MAX_PENDING_LOGINS', '1000'));        // login starts allowed per 10 minutes, in total
+const PER_IP = Number(env('LOGIN_RATE_PER_IP', '30'));                // ... and per client IP
 const SECURE = BASE.startsWith('https://');             // always true outside a localhost dev setup
 const COOKIE = SECURE ? '__Host-sid' : 'sid';
 const REDIRECT_URI = `${BASE}/oauth2/callback`;
@@ -95,6 +97,22 @@ const requireRole = (role) => (req, res, next) => {
   audit('forbidden', { user: req.session.user?.sub, role, path: req.path });
   res.status(403).json({ error: `role ${role} required` });
 };
+// Anonymous /login creates server-side state: limit how fast it can be created, overall and per client IP
+// (req.ip honours TRUST_PROXY). Returns 0 to admit, else the HTTP status to answer with.
+const loginStarts = new Map();                                        // ip -> timestamps within PENDING_MS
+const admitLogin = (ip, now) => {
+  let total = 0;
+  for (const [k, ts] of loginStarts) {
+    const live = ts.filter((t) => now - t < PENDING_MS);
+    if (live.length) { loginStarts.set(k, live); total += live.length; } else loginStarts.delete(k);
+  }
+  const mine = loginStarts.get(ip) ?? [];
+  if (mine.length >= PER_IP) return 429;
+  if (total >= MAX_PENDING) return 503;
+  loginStarts.set(ip, [...mine, now]);
+  return 0;
+};
+
 // CSRF check for state-changing requests: the browser's Origin (or Referer) must be this app's origin.
 const sameOrigin = (req) => {
   const src = req.get('origin') ?? req.get('referer');
@@ -105,6 +123,11 @@ app.get('/login', (req, res, next) => store.length(async (err, n) => {
   try {
     if (err) throw err;
     if (n >= MAX_SESSIONS) return res.status(503).send('Too many sign-ins in progress. Try again shortly.');
+    const refuse = admitLogin(req.ip, Date.now());
+    if (refuse) {
+      audit('login_throttled', { ip: req.ip, status: refuse });
+      return res.status(refuse).set('Retry-After', '60').send('Too many sign-in attempts. Try again shortly.');
+    }
     const verifier = client.randomPKCECodeVerifier();
     req.session.startedAt = Date.now();
     req.session.oidc = { verifier, nonce: client.randomNonce(), state: client.randomState() };
