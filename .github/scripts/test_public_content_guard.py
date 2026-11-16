@@ -78,6 +78,16 @@ BYPASSES = {
     "path-only.txt": b"nothing here",
     "b64-in-zip.zip": zipped("cfg.json", b'{"x": "' + base64.b64encode(NAME.encode()) + b'"}'),
     "doc.pdf": b"%PDF-1.4\n1 0 obj << /Length 9 /Filter /FlateDecode >> stream\nxxxxxxxxx\nendstream\nendobj\n",
+    # containers that do not start at offset 0
+    "sfx.exe": b"MZ\x90\x00" + hashlib.sha256(b"stub").digest() * 64 + zipped("a.txt", NAME.encode()),
+    "junk-then-zip.bin": b"#!/bin/sh\nexit 0\n" + zipped("payload/readme", NAME.encode()),
+    "junk-then-gzip.bin": b"some header text\n" + gzip.compress(NAME.encode()),
+    "junk-then-pdf.pdf": b"x" * 600 + b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n",
+    # base64 glued to other base64-alphabet characters, at each misalignment
+    "b64-off1.txt": b"Q" + base64.b64encode(NAME_AI.encode()),
+    "b64-off2.txt": b"Qz" + base64.b64encode(NAME_AI.encode()),
+    "b64-off3.txt": b"QzA" + base64.b64encode(NAME_AI.encode()),
+    "b64-urlsafe-off2.txt": b"ab" + base64.urlsafe_b64encode(("??" + NAME + "??").encode()),
 }
 CLEAN = {
     "python.py": b"def configure(self):\n    return self.connect()\n\ndef control(): pass\n",
