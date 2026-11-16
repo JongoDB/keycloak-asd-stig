@@ -26,12 +26,20 @@ Rules (reported by number only, so the CI log of this public repository never re
   6    a GUID within 100 characters of a tenant/directory keyword that is not an obvious placeholder (fewer than 8
        distinct hex digits, e.g. 00000000-0000-4000-8000-000000000001). Use a placeholder in docs and tests.
 
+Threat model and limits. This is a safety net against ACCIDENTAL leaks: a name pasted into a comment, test,
+default value, commit message, generated report or packaged archive, including in the encodings that tooling
+produces on its own (archives, base64 payloads, UTF-16, HTML entities, wrapped lines). It is not a control against
+a determined insider: anyone who means to publish a name can encrypt it, split it across files or commits, spell
+it phonetically, put it in an image, or use an encoding not listed here, and no scanner of this kind can rule that
+out. It also sees only what is committed - not issues, PR comments, CI logs, release assets or anything already in
+history (see `git log` for that). Matching is deliberately broad, so an innocent hit is possible; reword it rather
+than weaken a pattern. Treat a green run as "nothing accidental found", never as proof that nothing is there.
+
 The patterns are written so that this file does not match itself; keep it that way when adding one.
 """
 import argparse
 import base64
 import binascii
-import bisect
 import bz2
 import hashlib
 import html
@@ -79,6 +87,9 @@ CHUNK = 1 << 20
 DEFAULT_BUDGET = 512 * 1024 * 1024
 MAX_EMBEDDED = 64
 MAX_LOCAL_ENTRIES = 100000
+# Everything zipfile can raise on hostile or damaged input.
+ZIP_ERRORS = (zipfile.BadZipFile, zlib.error, EOFError, OSError, ValueError, struct.error, KeyError,
+              NotImplementedError, RuntimeError, OverflowError)
 
 
 class BudgetExceeded(Exception):
@@ -118,8 +129,8 @@ class Scanner:
     def __init__(self, budget):
         self.budget = budget
         self.hits = []
-        self.broken_seen = 0    # broken-container findings so far (including suppressed ones)
-        self.quiet = 0          # >0 while scanning the per-line fragments of a base64 block that decoded cleanly
+        self.broken_seen = 0    # broken-container findings so far (including the one suppressed kind)
+        self.first_line_of_clean_block = False   # see broken()
 
     # ---- bookkeeping -------------------------------------------------------------------------------------
     def hit(self, where, what):
@@ -127,13 +138,15 @@ class Scanner:
         if h not in self.hits:
             self.hits.append(h)
 
-    def broken(self, where, what):
-        """A container that cannot be read completely: a finding (fail closed), except for the single lines of a
-        line-wrapped base64 block whose joined decode was clean - the first line of a wrapped gzip payload is a
-        truncated stream on its own. Name and identifier findings are never suppressed."""
+    def broken(self, where, what, truncated_gzip=False):
+        """A container that cannot be read completely: a finding (fail closed). One exception: a truncated gzip
+        decoded from the FIRST line of a line-wrapped base64 block whose joined decode opened completely - the
+        first line of a wrapped gzip payload is necessarily a truncated stream on its own. Nothing else is
+        suppressed, and name and identifier findings never are."""
         self.broken_seen += 1
-        if not self.quiet:
-            self.hit(where, what)
+        if truncated_gzip and self.first_line_of_clean_block:
+            return
+        self.hit(where, what)
 
     def spend(self, n):
         self.budget -= n
@@ -236,21 +249,19 @@ class Scanner:
         """Open with zipfile; if the archive or a member is damaged, recover what the local headers allow."""
         try:
             z = zipfile.ZipFile(io.BytesIO(data))
-        except zipfile.BadZipFile:
+        except ZIP_ERRORS:
             z = None
             first = data.find(ZIP_LOCAL)
             if first > 0:
                 try:
                     z = zipfile.ZipFile(io.BytesIO(data[first:]))
-                except zipfile.BadZipFile:
+                except ZIP_ERRORS:
                     z = None
         if z is None:
             self.broken(where, "an unreadable zip archive - refused rather than skipped")
             self.scan_zip_local_headers(where, data, depth)
             return
-        known = set()
         for info in z.infolist():
-            known.add((info.filename, info.CRC))
             name = "%s!%s" % (where, info.filename)
             self.check_text(name, info.filename)
             if info.file_size > self.budget:
@@ -264,34 +275,35 @@ class Scanner:
                             break
                         member += piece
                         self.spend(len(piece))
-            except (zipfile.BadZipFile, zlib.error, EOFError, OSError, NotImplementedError, RuntimeError):
+            except ZIP_ERRORS:
                 self.broken(name, "an unreadable zip member - refused; its readable part was scanned")
             self.scan(name, bytes(member), depth + 1)
         # Every local header too: a prepended or appended zip, or entries left out of the central directory, are
-        # invisible to zipfile but still on disk.
-        self.scan_zip_local_headers(where, data, depth, known)
+        # invisible to zipfile but still on disk. Nothing is skipped on the strength of what a header claims
+        # (name, CRC, flags); findings are deduplicated by their label instead.
+        self.scan_zip_local_headers(where, data, depth)
 
-    def scan_zip_local_headers(self, where, data, depth, known=frozenset()):
-        """Scan every valid local file header's entry, except those the central directory already covered
-        (same name and CRC - same content)."""
+    def scan_zip_local_headers(self, where, data, depth):
+        """Scan the entry behind every valid local file header."""
         pos, n = data.find(ZIP_LOCAL), 0
-        names = {k[0] for k in known}
         while pos >= 0 and n < MAX_LOCAL_ENTRIES:
             n += 1
             if zip_local_header_ok(data, pos):
                 flags, method = struct.unpack_from("<HH", data, pos + 6)
-                crc, csize = struct.unpack_from("<II", data, pos + 14)
+                csize = struct.unpack_from("<I", data, pos + 18)[0]
                 name_len, extra_len = struct.unpack_from("<HH", data, pos + 26)
                 raw_name = data[pos + 30:pos + 30 + name_len]
                 name = raw_name.decode("utf-8" if flags & 0x800 else "cp437", "replace")
-                if (name, crc) in known or (flags & 0x8 and crc == 0 and name in names):
-                    pos = data.find(ZIP_LOCAL, pos + 4)
-                    continue
                 body = data[pos + 30 + name_len + extra_len:]
                 label = "%s!(local entry %s)" % (where, name)
                 self.check_text(label, name)
                 if method == 0:
-                    self.scan(label, body[:csize] if csize else body, depth + 1)
+                    if flags & 0x8:     # size in a data descriptor after the data: up to the next local header
+                        nxt = body.find(ZIP_LOCAL)
+                        body = body if nxt < 0 else body[:nxt]
+                    else:
+                        body = body[:csize]
+                    self.scan(label, body, depth + 1)
                 elif method == 8:
                     self.scan(label, self._zlib(body, -15)[0], depth + 1)
             pos = data.find(ZIP_LOCAL, pos + 4)
@@ -313,7 +325,8 @@ class Scanner:
         else:
             inner, complete = self.decompress(kind, data)
             if not complete:
-                self.broken(where, "an unreadable or truncated %s stream - refused; its readable part was scanned" % kind)
+                self.broken(where, "an unreadable or truncated %s stream - refused; its readable part was scanned" % kind,
+                            truncated_gzip=(kind == "gzip"))
             self.scan("%s!(%s)" % (where, kind), inner, depth + 1)
 
     def scan_embedded(self, where, data, depth):
@@ -338,20 +351,19 @@ class Scanner:
         """Line-wrapped blocks are joined and decoded as one; every single run is decoded on its own as well (also
         inside a block: a line can be a stream of its own). A block's lines are quiet about broken containers only
         when the joined decode was clean."""
-        blocks = []
+        clean_first_lines = set()           # start offsets of the first line of each block that decoded cleanly
         for m in B64_BLOCK.finditer(data):
             before = self.broken_seen
-            decoded = self.decode_run(where, m.start(), re.sub(rb"\s+", b"", m.group(0)), depth)
-            blocks.append((m.start(), m.end(), decoded and self.broken_seen == before))
-        starts = [b[0] for b in blocks]
+            if self.decode_run(where, m.start(), re.sub(rb"\s+", b"", m.group(0)), depth) and self.broken_seen == before:
+                first = re.match(rb"[ \t]*", m.group(0)).end()
+                clean_first_lines.add(m.start() + first)
         for m in B64_RUN.finditer(data):
-            k = bisect.bisect_right(starts, m.start()) - 1
-            quiet = k >= 0 and m.start() < blocks[k][1] and blocks[k][2]
-            self.quiet += quiet
+            saved = self.first_line_of_clean_block
+            self.first_line_of_clean_block = m.start() in clean_first_lines
             try:
                 self.decode_run(where, m.start(), m.group(0), depth)
             finally:
-                self.quiet -= quiet
+                self.first_line_of_clean_block = saved
 
     def decode_run(self, where, start, run, depth):
         """Decode one run at all four alignments and scan what comes out. True if any alignment decoded."""

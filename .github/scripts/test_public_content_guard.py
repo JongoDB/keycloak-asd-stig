@@ -10,6 +10,7 @@ joiner, UTF-16 with and without BOM, separators, gzip, gzip'd tar, nested zip, z
 a commit message - plus PDF refusal, the decompression budget, and the GUID rules. Ordinary code must not trip it.
 """
 import base64
+import bz2
 import gzip
 import hashlib
 import importlib.util
@@ -51,6 +52,19 @@ def tgz(name, data):
         info.size = len(data)
         t.addfile(info, io.BytesIO(data))
     return b.getvalue()
+
+
+def spoofed_local_entry():
+    """A zip whose local entry claims the name and CRC of the visible entry of the zip appended after it."""
+    hidden = bytearray(zipped("visible.txt", NAME.encode()))
+    struct_crc = zipfile.crc32(b"nothing here").to_bytes(4, "little")
+    hidden[14:18] = struct_crc                         # local header CRC field
+    return bytes(hidden) + zipped("visible.txt", b"nothing here")
+
+
+def wrapped_b64(data, width=76):
+    enc = base64.b64encode(data)
+    return b"PAYLOAD='\n" + b"\n".join(enc[i:i + width] for i in range(0, len(enc), width)) + b"\n'\n"
 
 
 def nested_zip(data, levels):
@@ -105,6 +119,8 @@ BYPASSES = {
     "b64-wrapped.sh": b"PAYLOAD='\n" + b"\n".join(
         base64.b64encode(gzip.compress(hashlib.sha512(b"w").digest() * 30 + NAME.encode()))[i:i + 64]
         for i in range(0, 400, 64)) + b"\n'\n",
+    # a local entry claiming another entry's name and CRC is still scanned (no skipping on header claims)
+    "spoofed-local-crc.zip": spoofed_local_entry(),
     # two zips back to back: zipfile reads only the last central directory; the first zip's entry hides
     "concat.zip": zipped("hidden.txt", NAME.encode()) + zipped("visible.txt", b"nothing here"),
     "junk-concat.bin": b"header\n" + zipped("hidden.txt", NAME.encode()) + zipped("visible.txt", b"clean"),
@@ -125,6 +141,12 @@ BYPASSES = {
     "b64-urlsafe-off2.txt": b"ab" + base64.urlsafe_b64encode(("??" + NAME + "??").encode()),
 }
 BROKEN_WITHOUT_NAME = {
+    # the first line of a wrapped block on its own is a truncated bzip2: only a truncated GZIP first line of a
+    # cleanly decoding block is tolerated, so this fails closed although the joined block decodes completely
+    "b64-wrapped-bzip2.sh": wrapped_b64(bz2.compress(hashlib.sha512(b"z").digest() * 60)),
+    # a wrapped gzip that is itself truncated: the block is not clean, so its first line fails closed too
+    "b64-wrapped-truncated-gzip.sh": wrapped_b64(
+        gzip.compress(b"".join(hashlib.sha512(bytes([i])).digest() for i in range(60)))[:300]),   # incompressible
     "b64-of-broken-gzip.txt": base64.b64encode(b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\xff" * 40),
     "broken.gz": b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\xff" * 40,
 }
