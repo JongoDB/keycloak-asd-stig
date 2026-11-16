@@ -21,8 +21,10 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import struct
 import uuid
 import zipfile
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GUARD = os.path.join(HERE, "public-content-guard.py")
@@ -65,6 +67,14 @@ def spoofed_local_entry():
 def wrapped_b64(data, width=76):
     enc = base64.b64encode(data)
     return b"PAYLOAD='\n" + b"\n".join(enc[i:i + width] for i in range(0, len(enc), width)) + b"\n'\n"
+
+
+def png_with_ztxt(text):
+    def chunk(t, body):
+        return struct.pack(">I", len(body)) + t + body + struct.pack(">I", zlib.crc32(t + body))
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"zTXt", b"Comment\0\0" + zlib.compress(text))
+            + chunk(b"IDAT", zlib.compress(b"\0\0")) + chunk(b"IEND", b""))
 
 
 def nested_zip(data, levels):
@@ -119,6 +129,24 @@ BYPASSES = {
     "b64-wrapped.sh": b"PAYLOAD='\n" + b"\n".join(
         base64.b64encode(gzip.compress(hashlib.sha512(b"w").digest() * 30 + NAME.encode()))[i:i + 64]
         for i in range(0, 400, 64)) + b"\n'\n",
+    # Office / ODF: the name split across runs, spans and proofing marks
+    "split-runs.docx": zipped("word/document.xml", ("<w:p><w:r><w:t>%s</w:t></w:r><w:r w:rsidR=\"00A1\"><w:t>%s AI</w:t>"
+                                                     "</w:r></w:p>" % (NAME[:3], NAME[3:])).encode()),
+    "proof-run.docx": zipped("word/document.xml", ("<w:r><w:t xml:space=\"preserve\">%s</w:t></w:r><w:proofErr w:type="
+                                                     "\"spellStart\"/><w:r><w:t>%s</w:t></w:r>" % (NAME[:3], NAME[3:])).encode()),
+    "shared.xlsx": zipped("xl/sharedStrings.xml", ("<sst><si><r><t>%s</t></r><r><t>%s</t></r></si></sst>"
+                                                  % (NAME[:2], NAME[2:])).encode()),
+    "slide.odp": zipped("content.xml", ("<text:p>%s<text:span text:style-name=\"T1\">%s</text:span></text:p>"
+                                       % (NAME[:4], NAME[4:])).encode()),
+    # e-mail in quoted-printable: a soft line break, and an =XX escape, inside the name
+    "mail.eml": ("Subject: review\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n%s=\r\n%s AI\r\n"
+                 % (NAME[:3], NAME[3:])).encode(),
+    "mail-escape.eml": ("Content-Transfer-Encoding: Quoted-Printable\r\n\r\n%s=%02X%s\r\n"
+                        % (NAME[:1], ord(NAME[1]), NAME[2:])).encode(),
+    # tool-produced escapes: JSON \u, RTF \'hh; and a PNG compressed text chunk
+    "export.json": ('{"org":"%s"}' % "".join("\\u%04x" % ord(c) for c in NAME)).encode(),
+    "export.rtf": ("{\\rtf1 \\'%02x%s AI}" % (ord(NAME[0]), NAME[1:])).encode(),
+    "shot.png": png_with_ztxt((NAME + " AI").encode()),
     # a local entry claiming another entry's name and CRC is still scanned (no skipping on header claims)
     "spoofed-local-crc.zip": spoofed_local_entry(),
     # two zips back to back: zipfile reads only the last central directory; the first zip's entry hides
@@ -139,6 +167,14 @@ BYPASSES = {
     "b64-off2.txt": b"Qz" + base64.b64encode(NAME_AI.encode()),
     "b64-off3.txt": b"QzA" + base64.b64encode(NAME_AI.encode()),
     "b64-urlsafe-off2.txt": b"ab" + base64.urlsafe_b64encode(("??" + NAME + "??").encode()),
+}
+REFUSED_FORMATS = {         # refused by signature whatever they contain
+    "legacy.xls": b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\0" * 504,
+    "legacy-after-junk.doc": b"junk" * 10 + b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\0" * 504,
+    "evidence.7z": b"7z\xbc\xaf\x27\x1c\x00\x04" + b"\0" * 24,
+    "logs.tar.zst": b"\x28\xb5\x2f\xfd" + b"\0" * 24,
+    "backup.rar": b"Rar!\x1a\x07\x01\x00" + b"\0" * 24,
+    "dump.lz4": b"\x04\x22\x4d\x18" + b"\0" * 24,
 }
 BROKEN_WITHOUT_NAME = {
     # the first line of a wrapped block on its own is a truncated bzip2: only a truncated GZIP first line of a
@@ -199,6 +235,16 @@ class Guard(unittest.TestCase):
         guard.loader.exec_module(g)
         printed = out.replace(self.dir, "")
         self.assertFalse(any(rx.search(printed) for rx in g.TERMS), "the guard printed what it caught")
+
+    def test_unopenable_formats_refused(self):
+        for name, data in REFUSED_FORMATS.items():
+            with self.subTest(fixture=name):
+                p = os.path.join(self.dir, name)
+                with open(p, "wb") as f:
+                    f.write(data)
+                rc, out = run("--no-tree", "--files", p)
+                self.assertEqual(rc, 1, out)
+                self.assertIn("refused", out)
 
     def test_broken_containers_fail_closed(self):
         for name, data in BROKEN_WITHOUT_NAME.items():

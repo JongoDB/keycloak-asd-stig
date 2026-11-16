@@ -13,10 +13,16 @@ What is looked at:
   (--budget); exceeding it fails the run. Decompression runs chunk by chunk, so a stream that breaks part-way still
   has everything before the break scanned, and a container that cannot be read completely is itself a finding
   (fail closed), also when it was found inside decoded base64;
-- PDFs are refused outright: a PDF header in the first 1 KB, or PDF object and cross-reference structure anywhere;
+- refused outright, by signature: PDFs (a header in the first 1 KB, or object and cross-reference structure
+  anywhere), OLE2 compound files (.doc, .xls, .ppt, .msg), and archives this script cannot open (7z, zstd, RAR,
+  LZ4) - their content cannot be checked, so they must not be committed;
+- Office and ODF documents (XML inside a zip): each XML member is also checked with its tags removed and its text
+  joined, so a name split across runs (<w:t>Def</w:t><w:t>...) is still seen; PNG text chunks (tEXt, zTXt, iTXt,
+  compressed or not); e-mail bodies in quoted-printable (soft line breaks removed);
 - text: UTF-8, Latin-1 (every byte as a character, so nothing is skipped as "binary") and UTF-16 (BOM or NUL
   pattern) decodings; NFKC-normalised (full-width letters become ASCII); invisible format characters (zero-width
-  space/joiner, soft hyphen, BOM) removed; and again after HTML-entity, percent and base64 decoding. Base64 is
+  space/joiner, soft hyphen, BOM) removed; and again after HTML-entity, percent, JSON \\u and RTF \\'hh escapes
+  and base64 decoding. Base64 is
   decoded per run at all four alignments, and line-wrapped base64 blocks are joined and decoded as one.
 
 Rules (reported by number only, so the CI log of this public repository never repeats what it caught):
@@ -32,8 +38,9 @@ produces on its own (archives, base64 payloads, UTF-16, HTML entities, wrapped l
 a determined insider: anyone who means to publish a name can encrypt it, split it across files or commits, spell
 it phonetically, put it in an image, or use an encoding not listed here, and no scanner of this kind can rule that
 out. It also sees only what is committed - not issues, PR comments, CI logs, release assets or anything already in
-history (see `git log` for that). Matching is deliberately broad, so an innocent hit is possible; reword it rather
-than weaken a pattern. Treat a green run as "nothing accidental found", never as proof that nothing is there.
+history (see `git log` for that). Matching is deliberately broad, so innocent hits are expected and accepted -
+for example a Python definition of a function named `con`, a C undefine of a macro named `CON`, the name of a
+well-known security conference, or the textbook stock-price problem; reword the text rather than weaken a pattern. Treat a green run as "nothing accidental found", never as proof that nothing is there.
 
 The patterns are written so that this file does not match itself; keep it that way when adding one.
 """
@@ -45,6 +52,7 @@ import hashlib
 import html
 import io
 import lzma
+import quopri
 import re
 import struct
 import subprocess
@@ -82,6 +90,19 @@ GZIP_MAGIC = b"\x1f\x8b\x08"
 XZ_MAGIC = b"\xfd7zXZ\x00"
 BZ2_MAGIC = re.compile(rb"BZh[1-9]")
 ZIP_LOCAL, ZIP_END = b"PK\x03\x04", b"PK\x05\x06"
+# Formats refused by signature: their content is not checked here. (label, signature, search window)
+REFUSED = (
+    ("an OLE2 compound file (.doc/.xls/.ppt/.msg)", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", 1024),
+    ("a 7z archive", b"7z\xbc\xaf\x27\x1c", 1024),
+    ("a RAR archive", b"Rar!\x1a\x07", 1024),
+    ("a zstd stream", b"\x28\xb5\x2f\xfd", 4),
+    ("an LZ4 frame", b"\x04\x22\x4d\x18", 4),
+)
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+QP_HEADER = re.compile(rb"content-transfer-encoding:[ \t]*quoted-printable", re.I)
+JSON_U = re.compile(r"\\u([0-9a-fA-F]{4})")
+RTF_HEX = re.compile(r"\\'([0-9a-fA-F]{2})")
+TAG = re.compile(rb"<[^<>]{0,4096}>")
 ZIP_METHODS = {0, 8, 9, 12, 14, 93, 95, 98}
 CHUNK = 1 << 20
 DEFAULT_BUDGET = 512 * 1024 * 1024
@@ -182,6 +203,10 @@ class Scanner:
         cands = [text]
         if "&" in text or "%" in text:
             cands += [html.unescape(text), unquote(text), unquote(html.unescape(text)), html.unescape(unquote(text))]
+        if "\\u" in text:                     # JSON / JavaScript \uXXXX escapes
+            cands.append(JSON_U.sub(lambda m: chr(int(m.group(1), 16)), text))
+        if "\\'" in text:                     # RTF \'hh escapes
+            cands.append(RTF_HEX.sub(lambda m: chr(int(m.group(1), 16)), text))
         for t in cands:
             t = self.normalise(t)
             if t not in seen:
@@ -278,6 +303,7 @@ class Scanner:
             except ZIP_ERRORS:
                 self.broken(name, "an unreadable zip member - refused; its readable part was scanned")
             self.scan(name, bytes(member), depth + 1)
+            self.check_markup(name, info.filename, member)
         # Every local header too: a prepended or appended zip, or entries left out of the central directory, are
         # invisible to zipfile but still on disk. Nothing is skipped on the strength of what a header claims
         # (name, CRC, flags); findings are deduplicated by their label instead.
@@ -304,9 +330,43 @@ class Scanner:
                     else:
                         body = body[:csize]
                     self.scan(label, body, depth + 1)
+                    self.check_markup(label, name, body)
                 elif method == 8:
-                    self.scan(label, self._zlib(body, -15)[0], depth + 1)
+                    inflated = self._zlib(body, -15)[0]
+                    self.scan(label, inflated, depth + 1)
+                    self.check_markup(label, name, inflated)
             pos = data.find(ZIP_LOCAL, pos + 4)
+
+    def check_markup(self, where, name, data):
+        """Office/ODF XML (and other markup) inside an archive: also check the text with every tag removed and the
+        pieces joined, so a name split across runs or spans is seen whole."""
+        if name.lower().endswith((".xml", ".rels", ".xhtml", ".htm", ".html", ".svg")) or data.lstrip()[:1] == b"<":
+            joined = TAG.sub(b"", data)
+            for text in self.decodings(joined):
+                self.check_text(where + " (markup text)", text)
+
+    def scan_png_text(self, where, data):
+        """PNG text chunks: tEXt (Latin-1), zTXt (zlib), iTXt (UTF-8, optionally zlib)."""
+        pos = 8
+        while pos + 12 <= len(data):
+            length = struct.unpack_from(">I", data, pos)[0]
+            ctype = data[pos + 4:pos + 8]
+            body = data[pos + 8:pos + 8 + length]
+            if ctype == b"tEXt":
+                self.check_text(where + " (PNG tEXt)", body.decode("latin-1"))
+            elif ctype == b"zTXt" and b"\0" in body:
+                key, rest = body.split(b"\0", 1)
+                self.check_text(where + " (PNG zTXt)", key.decode("latin-1") + " " + self._zlib(rest[1:], 15)[0].decode("latin-1"))
+            elif ctype == b"iTXt" and body.count(b"\0") >= 4:
+                key, rest = body.split(b"\0", 1)
+                compressed, rest = rest[0:1] == b"\1", rest[2:]
+                _lang, _tkey, text = rest.split(b"\0", 2)
+                if compressed:
+                    text = self._zlib(text, 15)[0]
+                self.check_text(where + " (PNG iTXt)", key.decode("latin-1") + " " + text.decode("utf-8", "replace"))
+            elif ctype == b"IEND":
+                break
+            pos += 12 + length
 
     def scan_container(self, where, kind, data, depth):
         if kind == "zip":
@@ -394,12 +454,21 @@ class Scanner:
         if is_pdf(data):
             self.hit(where, "a PDF - PDFs are refused (their compressed streams cannot be checked reliably)")
             return
+        for label, sig, window in REFUSED:
+            if sig in data[:window]:
+                self.hit(where, "%s - refused (its content cannot be checked here)" % label)
+                return
         kind = container_kind(data)
         if kind:
             self.scan_container(where, kind, data, depth)
             return
         for text in self.decodings(data):
             self.check_text(where, text)
+        if data.startswith(PNG_SIG):
+            self.scan_png_text(where, data)
+        if QP_HEADER.search(data[:65536]):     # e-mail: soft line breaks and =XX escapes would split a name
+            for text in self.decodings(quopri.decodestring(data)):
+                self.check_text(where + " (quoted-printable)", text)
         self.scan_embedded(where, data, depth)
         if depth < 8 and (not derived or self.mostly_text(data)):
             self.scan_base64(where, data, depth)

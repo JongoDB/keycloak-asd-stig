@@ -101,7 +101,7 @@ inactivity clocks of existing users are preserved).
 > | Attribute unset on both client and realm | `.mil` plus one built-in non-`.mil` domain | `.mil` only |
 > | Client attribute set but blank | fell through to the realm attribute | no domain allowed for that caller |
 > | Realm attribute set but blank | fell back to the built-in default | no domain allowed |
-> | A list with one malformed entry (`*.mil`, `@x.org`, `x .org`) | the bad entry was skipped and the rest applied | no domain allowed |
+> | A list with one malformed entry (`*.mil`, `@x.org`, `x .org`, a trailing dot as in `example.org.`, an underscore as in `my_org.mil`) | the bad entry was skipped and the rest applied | no domain allowed: one bad entry disables the whole list |
 > | A well-formed list | applied | applied (unchanged) |
 The `stig-accounts` admin endpoint (in `stig-extensions.jar`) lets an IdP user manager, or an application's service
 account holding `realm-management/query-users`, create accounts. It creates them only for e-mail addresses in an
