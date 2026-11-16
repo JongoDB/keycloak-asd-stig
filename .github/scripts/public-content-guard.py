@@ -388,7 +388,12 @@ def main():
             log = subprocess.run(["git", "log", "--format=%H%x00%B%x00", a.commits], capture_output=True, check=True).stdout
             parts = log.split(b"\0")
             for sha, msg in zip(parts[0::2], parts[1::2]):
-                s.scan("commit %s message" % sha.strip().decode()[:12], msg)
+                # A message is text, never a file: the name and identifier rules apply (with every decoding,
+                # base64 included); the PDF and container rules do not, so describing them is allowed.
+                label = "commit %s message" % sha.strip().decode()[:12]
+                for text in s.decodings(msg):
+                    s.check_text(label, text)
+                s.scan_base64(label, msg, 0)
     except BudgetExceeded:
         print("::error::scan budget of %d bytes exceeded - an archive or encoding expands too far to check; "
               "refusing rather than skipping it" % a.budget)
