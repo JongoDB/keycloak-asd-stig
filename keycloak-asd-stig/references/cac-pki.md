@@ -34,9 +34,13 @@ Verified in the lab: valid card -> code; revoked card -> "Certificate revoked or
 - `scripts/fetch_dod_pki.sh <dir>` downloads the official DISA bundle
   (`unclass-certificates_pkcs7_DoD.zip`), verifies the CMS-signed SHA-256 manifest, writes one PEM per CA to
   `conf/truststore/`, prints each CA's SHA-256 fingerprint (compare DoD Root CA 3/4/5/6 against the values
-  published by DISA on first use), downloads and signature-verifies the CRL of every `DOD ID CA-nn` and
-  `DOD DERILITY CA-n` (derived PIV) and prints the `crl_files` profile fragment.
-- Size: the DoD ID CRLs total ~140 MB (one CA had 600k entries in Nov 2026). Give Keycloak >= 2 GB heap and
+  published by DISA on first use), downloads and signature-verifies the CRL of every trusted **issuing** CA (`DOD ID`, `DOD DERILITY`,
+  `DOD SW`, `DOD EMAIL CA-nn`; roots are path anchors only) and prints the `crl_files` profile fragment. Trust and
+  revocation coverage must match: `stig-x509-client-username-form` refuses a card whose issuer has no CRL, and
+  `kcstig verify` fails `pki.crl_coverage` for every trusted issuing CA without one (the keycloak-cac image also logs
+  `STIG-CRL-COVERAGE-GAP` after each refresh).
+- Size: all 41 issuing-CA CRLs total ~296 MB (Nov 2026; the 17 ID + DERILITY CRLs ~141 MB, one CA had 600k entries); only
+  the issuing CA's CRL is verified per login, so login time does not grow with the total. Give Keycloak >= 2 GB heap and
   schedule `fetch_dod_pki.sh <dir> --crl-only` daily (cron/systemd timer). Keep the previous file if a
   download fails - the script never deletes a cached CRL.
 - crl.disa.mil can be unreachable from commercial networks; inside DoD networks it is normally reachable.

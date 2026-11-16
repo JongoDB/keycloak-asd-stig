@@ -3,15 +3,15 @@
 #
 # Usage: fetch_dod_pki.sh <out-dir> [--crl-only]
 #   <out-dir>/conf/truststore/*.pem   one PEM per DoD root/intermediate (point truststore-paths here)
-#   <out-dir>/conf/crl/DODIDCA_NN.crl CRLs for the DoD ID CAs that issue CAC authentication certificates
+#   <out-dir>/conf/crl/DOD*CA_NN.crl  CRLs of EVERY trusted issuing CA (ID, DERILITY, SW, EMAIL): trust == revocation coverage
 #   prints the "crl_files" JSON fragment for the kcstig profile
 # Re-run with --crl-only from cron/systemd at least daily (V-222553); Keycloak re-reads CRL files.
-# Environment: DOD_PKI_ZIP_URL, CRL_BASE (default http://crl.disa.mil/crl), INCLUDE_CAS regex (default "DOD (ID|DERILITY) CA")
+# Environment: DOD_PKI_ZIP_URL, CRL_BASE (default http://crl.disa.mil/crl), INCLUDE_CAS regex (default "^DOD .+ CA-[0-9]+$": every DoD issuing CA; narrowing it leaves CAs whose cards are refused)
 set -euo pipefail
 OUT="${1:?out dir}"; MODE="${2:-}"
 ZIP_URL="${DOD_PKI_ZIP_URL:-https://dl.dod.cyber.mil/wp-content/uploads/pki-pke/zip/unclass-certificates_pkcs7_DoD.zip}"
 CRL_BASE="${CRL_BASE:-http://crl.disa.mil/crl}"
-INCLUDE="${INCLUDE_CAS:-DOD (ID|DERILITY) CA}"
+INCLUDE="${INCLUDE_CAS:-^DOD .+ CA-[0-9]+$}"
 TS="${TS_DIR:-$OUT/conf/truststore}"; CRLD="${CRL_DIR:-$OUT/conf/crl}"   # flat volume: TS_DIR=$OUT/truststore CRL_DIR=$OUT/crl
 PFX="${CRL_PREFIX:-crl}"   # how crl_files are written in the profile (relative to /opt/keycloak/conf), e.g. pki/crl
 mkdir -p "$TS" "$CRLD"
@@ -52,7 +52,7 @@ files=()
 for f in "$TS/"*.pem; do
   cn="$(openssl x509 -in "$f" -noout -subject -nameopt multiline | sed -n 's/^ *commonName *= *//p')"
   echo "$cn" | grep -Eq "$INCLUDE" || continue
-  name="$(echo "$cn" | sed -E 's/^DOD ([A-Z]+) CA-([0-9]+)$/DOD\1CA_\2/')"
+  [[ "$cn" =~ ^DOD\ (.+)\ CA-([0-9]+)$ ]] || continue; kind="${BASH_REMATCH[1]}"; name="DOD${kind// /}CA_${BASH_REMATCH[2]}"   # DOD SW CA-75 -> DODSWCA_75
   if curl -fsSL --retry 3 -m 120 -o "$WORK/$name.crl" "$CRL_BASE/$name.crl"; then
     # accept DER or PEM; verify the CRL signature against its issuing CA before installing it
     fmt=DER; openssl crl -inform DER -in "$WORK/$name.crl" -noout 2>/dev/null || fmt=PEM

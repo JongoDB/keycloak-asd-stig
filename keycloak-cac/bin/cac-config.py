@@ -53,7 +53,7 @@ def crl_mode():
     if m not in ("online", "file", "ocsp", "none"):
         die("CRL_MODE must be online | file (OFFLINE) | ocsp | none (got %r)" % m)
     if m == "none" and not flag("CAC_LAB_MODE"):
-        die("CRL_MODE=none disables revocation checking (V-222551/V-222553, CAT I). It is only accepted with CAC_LAB_MODE=true.")
+        die("CRL_MODE=none disables revocation checking (V-222550 CAT I path validation with status, V-222553 local revocation cache). It is only accepted with CAC_LAB_MODE=true.")
     return m
 
 def json_items(var_json, var_dir):

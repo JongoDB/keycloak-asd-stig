@@ -1587,10 +1587,11 @@
   },
   "V-222550": {
    "disposition": "KC",
-   "implementation": "Path building to DoD trust anchors (truststore-paths) with revocation status (OCSP, CRL fallback).",
+   "implementation": "Path building to DoD trust anchors (truststore-paths) with revocation status (OCSP, CRL fallback); every trusted issuing CA has its CRL listed.",
    "checks": [
     "flow.x509_revocation",
-    "deploy.truststore"
+    "deploy.truststore",
+    "pki.crl_coverage"
    ],
    "app_action": null,
    "na_condition": null,
@@ -1619,9 +1620,10 @@
   },
   "V-222553": {
    "disposition": "SHARED",
-   "implementation": "X.509 authenticator: OCSP with CRL fallback from a locally cached CRL file (x509-cert-auth.crl-relative-path); scripts/fetch_dod_pki.sh refreshes CRLs on a schedule.",
+   "implementation": "X.509 authenticator: OCSP with CRL fallback from a locally cached CRL file (x509-cert-auth.crl-relative-path); scripts/fetch_dod_pki.sh refreshes CRLs on a schedule; the CRL list covers every trusted issuing CA.",
    "checks": [
-    "flow.x509_revocation"
+    "flow.x509_revocation",
+    "pki.crl_coverage"
    ],
    "app_action": "Run the CRL refresh job (cron/systemd timer) at least daily.",
    "na_condition": null,

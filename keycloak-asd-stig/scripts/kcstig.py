@@ -1150,6 +1150,8 @@ class Checker:
             c = self.exec_config(realm, xe[0])
             ocsp = c.get("x509-cert-auth.ocsp-checking-enabled") == "true"
             crl = c.get("x509-cert-auth.crl-checking-enabled") == "true"
+            if crl:
+                self.crl_paths = [f for f in (c.get("x509-cert-auth.crl-relative-path") or "").split("##") if f.strip()]
             fo = c.get("x509-cert-auth.ocsp-fail-open") == "true"
             # a stale local CRL must refuse the sign-in (fail closed), not be used past its nextUpdate
             stale_closed = c.get("x509-cert-auth-crl-abort-if-non-updated") == "true"
@@ -1386,6 +1388,49 @@ def deploy_checks(results, deploy_dir):
       "container runs as non-root UID 1000")
     results["deploy.key_perms"] = {"status": "manual", "evidence": "Verify the TLS private key is mounted read-only, mode 0400/0440, from a secret store."}
 
+def _openssl_dn(args, path):
+    """RFC 2253 subject/issuer of a certificate or CRL (DER or PEM) via openssl, or None."""
+    import subprocess
+    for form in ("PEM", "DER"):
+        r = subprocess.run(["openssl"] + args + ["-inform", form, "-in", path, "-noout", "-nameopt", "RFC2253"],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and "=" in r.stdout:
+            return [l.split("=", 1)[1].strip() for l in r.stdout.splitlines() if "=" in l]
+    return None
+
+def crl_coverage(results, crl_paths, anchors_dir, conf_dir):
+    """pki.crl_coverage: every ISSUING CA in the trust list (an anchor that is not self-signed) has a CRL in the X.509
+    authenticator's crl-relative-path. stig-x509-client-username-form refuses a card whose issuer has no CRL
+    (STIG-CRL-NO-ISSUER-CRL), so a gap here is a sign-in outage for that CA's holders; this turns it into a finding.
+    Roots are path anchors that sign CA certificates only; they are listed but not required."""
+    import shutil
+    cid = "pki.crl_coverage"
+    if crl_paths is None:
+        results[cid] = {"status": "manual", "evidence": "no CRL checking configured on the X.509 authenticator"}
+        return
+    if not (anchors_dir and os.path.isdir(anchors_dir) and conf_dir and os.path.isdir(conf_dir)) or not shutil.which("openssl"):
+        results[cid] = {"status": "manual", "evidence": "trust anchors (--trust-anchors %s) or Keycloak conf dir (--keycloak-conf %s) not readable here, or no openssl: "
+                        "run verify where both are mounted (e.g. inside the keycloak-cac container)" % (anchors_dir, conf_dir)}
+        return
+    issuing, roots = {}, []
+    for f in sorted(glob.glob(os.path.join(anchors_dir, "*.pem")) + glob.glob(os.path.join(anchors_dir, "*.crt"))):
+        sub, iss = (_openssl_dn(["x509", "-subject"], f) or [None])[0], (_openssl_dn(["x509", "-issuer"], f) or [None])[0]
+        if not sub:
+            continue
+        (roots.append(sub) if sub == iss else issuing.setdefault(sub, os.path.basename(f)))
+    covered, unreadable = set(), []
+    for rel in crl_paths:
+        pth = os.path.normpath(os.path.join(conf_dir, rel.strip()))
+        iss = _openssl_dn(["crl", "-issuer"], pth) if os.path.isfile(pth) else None
+        (covered.add(iss[0]) if iss else unreadable.append(rel))
+    missing = sorted(set(issuing) - covered)
+    extra = sorted(covered - set(issuing) - set(roots))
+    ok = not missing and not unreadable and bool(issuing)
+    results[cid] = {"status": "pass" if ok else "fail", "evidence":
+        "%d issuing CAs trusted, %d CRLs listed; issuing CAs WITHOUT a listed CRL (their cards are refused): %s; listed CRLs not readable: %s; "
+        "CRLs of non-anchors: %s; roots (not required): %d" % (len(issuing), len(crl_paths),
+            [re.sub(r",.*", "", m) for m in missing] or "none", unreadable or "none", [re.sub(r",.*", "", e) for e in extra] or "none", len(roots))}
+
 def live_client_auth(results, live_url):
     """Ask the server which client-certificate CAs it requests (openssl s_client). Proves CAC client-auth is on
     and lists the trust anchors actually in use (V-222524, V-222584), whatever the runtime."""
@@ -1565,6 +1610,9 @@ def cmd_verify(a):
     results = ch.run()
     live_client_auth(results, a.live_url or (a.url or p["keycloak"]["url"]))
     deploy_checks(results, a.deploy_dir)
+    crl_coverage(results, getattr(ch, "crl_paths", None),
+                 a.trust_anchors or os.environ.get("KCSTIG_TRUST_ANCHORS") or "/opt/keycloak/data/cac/anchors",
+                 a.keycloak_conf or os.environ.get("KCSTIG_KEYCLOAK_CONF") or "/opt/keycloak/conf")
     rows = evaluate(results, p)
     os.makedirs(a.out, exist_ok=True)
     base = os.path.join(a.out, "%s-asd-stig" % p["realm"]["name"])
@@ -2077,6 +2125,8 @@ def main():
     ap_.add_argument("--clients-dir", help="directory of per-service client *.json files (or STIG_CLIENTS_DIR)"); ap_.set_defaults(fn=cmd_apply)
     v = sub.add_parser("verify"); v.add_argument("--profile", required=True); v.add_argument("--url")
     v.add_argument("--live-url"); v.add_argument("--deploy-dir"); v.add_argument("--out", default="reports")
+    v.add_argument("--trust-anchors", help="directory of trust-anchor PEMs, for pki.crl_coverage (default /opt/keycloak/data/cac/anchors)")
+    v.add_argument("--keycloak-conf", help="Keycloak conf dir that crl-relative-path resolves against (default /opt/keycloak/conf)")
     v.add_argument("--http-ports", default="", help="extra comma-separated ports to probe for a clear-text HTTP Keycloak listener (the HTTPS port and 8080 are always probed)")
     v.add_argument("--strict", action="store_true", help="exit 1 on any failing check (CI gate)"); v.add_argument("--clients-dir", help="directory of per-service client *.json files (or STIG_CLIENTS_DIR)"); v.set_defaults(fn=cmd_verify)
     l = sub.add_parser("lookup"); l.add_argument("ids", nargs="*"); l.add_argument("--grep"); l.add_argument("--disposition")

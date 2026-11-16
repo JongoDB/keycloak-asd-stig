@@ -190,6 +190,7 @@ crl_refresh() {
     file)   "$TOOLS/cac-pki.sh" crl-sync "$CRL_SRC" "$D/anchors" "$D/crl";;
   esac
   "$TOOLS/cac-pki.sh" crl-health "$D/crl" || true
+  "$TOOLS/cac-pki.sh" crl-coverage "$D/anchors" "$D/crl" || true   # logs STIG-CRL-COVERAGE-GAP per uncovered CA
 }
 # lab PKI's own CRL is always installed, so mock cards keep working next to real ones
 if $LAB && [ -d "$D/lab/conf/crl" ] && [ "$MODE" != file ]; then "$TOOLS/cac-pki.sh" crl-sync "$D/lab/conf/crl" "$D/anchors" "$D/crl"; fi
