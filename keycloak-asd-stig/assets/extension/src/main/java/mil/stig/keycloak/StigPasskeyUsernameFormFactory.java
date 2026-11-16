@@ -9,6 +9,7 @@ import java.util.Set;
 import org.jboss.logging.Logger;
 import org.keycloak.Config;
 import org.keycloak.authentication.AuthenticationFlowContext;
+import org.keycloak.authentication.AuthenticationFlowError;
 import org.keycloak.authentication.Authenticator;
 import org.keycloak.authentication.AuthenticatorFactory;
 import org.keycloak.authentication.authenticators.browser.UsernameForm;
@@ -25,7 +26,8 @@ import org.keycloak.provider.ProviderConfigProperty;
  * Passkey realms (kcstig auth_mode=passkey, sign_in=username): Keycloak's own username form (passkeys, conditional UI,
  * "Sign in with passkey"), except that an account holding NO passwordless passkey is answered EXACTLY as an unknown
  * username - Keycloak's own invalid-user path (testInvalidUser with no user), the same page, status and event - so
- * the response does not tell whether such an account exists, and it is never taken on to a passkey step where it
+ * the response does not tell whether such an account exists. A disabled account is answered the same way (Keycloak's
+ * own "Account is disabled" would tell it apart),, and it is never taken on to a passkey step where it
  * could be offered a set-up. A passkey is registered only through the e-mailed set-up or recovery link.
  * UsernameForm is final, so this wraps it and intercepts the flow context's success().
  * Logged as STIG-PASSKEY-NOT-ENROLLED.
@@ -45,22 +47,29 @@ public class StigPasskeyUsernameFormFactory implements AuthenticatorFactory {
         /** The context, with success() checked: an identified account without a passkey becomes an unknown user. */
         private AuthenticationFlowContext guarded(AuthenticationFlowContext ctx) {
             InvocationHandler h = (proxy, m, args) -> {
-                if (m.getName().equals("success")) {
-                    UserModel u = ctx.getUser();
-                    if (!hasPasskey(u)) {
-                        LOG.warnf("STIG-PASSKEY-NOT-ENROLLED realm=%s user=%s: no passkey; answered as an unknown username",
-                                ctx.getRealm().getName(), u == null ? "?" : u.getUsername());
-                        ctx.clearUser();
-                        // the event must not name the account either: Keycloak's brute-force protector counts a
-                        // LOGIN_ERROR that carries a user id, which would lock the account and answer differently
-                        ctx.getEvent().user((String) null);
-                        // ... and Keycloak's failure logging finds the account again by the attempted-username note
-                        // (logFailure), which an unknown username never resolves: drop it for the same reason
-                        ctx.getAuthenticationSession().removeAuthNote(
+                if (m.getName().equals("success") && !hasPasskey(ctx.getUser())) {
+                    asUnknown(ctx, "no passkey");
+                    return null;
+                }
+                // Keycloak answers a DISABLED account with "Account is disabled" (enabledUser -> forceChallenge) before
+                // success() is ever reached: that, too, would tell an existing account from an unknown username
+                boolean disabledAnswer = false;
+                if (m.getName().equals("forceChallenge")) {
+                    // enabledUser runs BEFORE the account is put in the context: find it by the attempted username
+                    UserModel cu = ctx.getUser();
+                    if (cu == null) {
+                        String tried = ctx.getAuthenticationSession().getAuthNote(
                                 org.keycloak.authentication.authenticators.browser.AbstractUsernameFormAuthenticator.ATTEMPTED_USERNAME);
-                        inner.testInvalidUser(ctx, null);            // Keycloak's own unknown-user response
-                        return null;
+                        cu = tried == null ? null : org.keycloak.models.utils.KeycloakModelUtils.findUserByNameOrEmail(
+                                ctx.getSession(), ctx.getRealm(), tried);
                     }
+                    disabledAnswer = cu != null && !cu.isEnabled();
+                }
+                boolean disabledFailure = (m.getName().equals("failureChallenge") || m.getName().equals("failure")) && args != null
+                        && args.length > 0 && (args[0] == AuthenticationFlowError.USER_DISABLED || args[0] == AuthenticationFlowError.USER_TEMPORARILY_DISABLED);
+                if (disabledAnswer || disabledFailure) {
+                    asUnknown(ctx, "disabled");
+                    return null;
                 }
                 try {
                     return m.invoke(ctx, args);
@@ -70,6 +79,20 @@ public class StigPasskeyUsernameFormFactory implements AuthenticatorFactory {
             };
             return (AuthenticationFlowContext) Proxy.newProxyInstance(AuthenticationFlowContext.class.getClassLoader(),
                     new Class<?>[] {AuthenticationFlowContext.class}, h);
+        }
+
+        /** Answer exactly as Keycloak answers an unknown username: no user in the context, the event or the auth
+         *  session (Keycloak's failure logging would otherwise find the account by the attempted-username note and
+         *  count the attempt against it - a lockout that answers differently and lets anyone lock the account). */
+        private void asUnknown(AuthenticationFlowContext ctx, String why) {
+            UserModel u = ctx.getUser();
+            LOG.warnf("STIG-PASSKEY-NOT-ENROLLED realm=%s user=%s: %s; answered as an unknown username",
+                    ctx.getRealm().getName(), u == null ? "?" : u.getUsername(), why);
+            ctx.clearUser();
+            ctx.getEvent().user((String) null);
+            ctx.getAuthenticationSession().removeAuthNote(
+                    org.keycloak.authentication.authenticators.browser.AbstractUsernameFormAuthenticator.ATTEMPTED_USERNAME);
+            inner.testInvalidUser(ctx, null);                         // Keycloak's own unknown-user response
         }
 
         @Override public void authenticate(AuthenticationFlowContext context) { inner.authenticate(guarded(context)); }

@@ -106,6 +106,16 @@ check("... the address is verified and no action is left", u.get("emailVerified"
 creds = kc.api("GET", RR + "/users/%s/credentials" % uid)
 check("... exactly one credential: a passwordless ES256 passkey", [(c["type"], K.cose_alg(c["credentialData"])) for c in creds]
       == [("webauthn-passwordless", "ES256")], [(c["type"], K.cose_alg(c["credentialData"])) for c in creds])
+# a set-up link sets up ONE passkey: once used, it is refused; a second browser that opened it in parallel cannot add one
+k_re, u_re, p_re = E.Browser(CA).go(link, None, BASE + RR + "/account")
+check("a set-up link, once used, is refused (no second set-up from it)", k_re == "error" or E.page_id(p_re) not in ("login-info", "login-terms", "login-webauthn-register"),
+      (k_re, E.page_id(p_re) if k_re == "page" else u_re[:60]))
+par_id, par_link = invite("parallel.%s" % uuid.uuid4().hex[:6])
+bA = E.Browser(CA); bA.go(par_link, None, BASE + RR + "/account")              # browser A opens it ...
+_, okB, _, _ = set_up(par_link)                                                # ... browser B completes it ...
+okA, seenA, errA = PF.set_up(bA, par_link, S.Authenticator("ES256", workdir=A.dir), BASE + RR + "/account")   # ... then A tries
+check("... and a browser that opened it before another completed cannot add a second passkey",
+      okB and not okA and len(kc.api("GET", RR + "/users/%s/credentials" % par_id)) == 1, (okB, okA, seenA))
 uid_rs, link = invite("rsa.%s" % uuid.uuid4().hex[:6])
 a_rs, ok, seen, err = set_up(link, "RS256")
 check("an RS256 passkey registers (Windows Hello)", ok, err)
@@ -192,6 +202,18 @@ check("... and the same event for both (user_not_found)", evs[:3] == ["user_not_
 bfs = [kc.api("GET", RR + "/attack-detection/brute-force/users/%s" % v)["numFailures"] for v, _ in unclaimed.values()]
 check("... and none of those attempts counts against the account (nobody can lock an unclaimed account)", bfs == [0, 0, 0], bfs)
 
+# a DISABLED account (with or without a passkey) is answered the same way: Keycloak's "Account is disabled" would tell it apart
+dis = "disabled.%s" % uuid.uuid4().hex[:6]
+dis_id = kc.api("POST", RR + "/users", {"username": dis, "email": dis + "@acme.example", "firstName": "Dis", "lastName": "Abled", "enabled": False})
+cur = kc.api("GET", RR + "/users/%s" % uid_rs)
+kc.api("PUT", RR + "/users/%s" % uid_rs, dict(cur, enabled=False))
+ans_dis = answer(dis)
+ans_dispk = answer(cur["username"])
+kc.api("PUT", RR + "/users/%s" % uid_rs, dict(kc.api("GET", RR + "/users/%s" % uid_rs), enabled=True))
+check("a disabled account, with or without a passkey, is answered exactly as an unknown username (no 'Account is disabled')",
+      ans_unknown == ans_dis == ans_dispk,
+      [x[:3] for x in (ans_unknown, ans_dis, ans_dispk)])
+
 vid, n = unclaimed["invited, not set up"]
 before = mails()
 kc.api("PUT", RR + "/users/%s/execute-actions-email?lifespan=3600" % vid, ["VERIFY_EMAIL", "TERMS_AND_CONDITIONS", "webauthn-register-passwordless"])
@@ -240,6 +262,18 @@ ch = K.Checker(kc, K.load_profile(prof, "/nonexistent"), K.server_capabilities(k
 ch.R = kc.api("GET", RR); ch.check_passkey()
 check("verify FAILS once stig-passkey-required is removed (flow.no_enrolment_at_sign_in)",
       ch.results.get("flow.no_enrolment_at_sign_in", {}).get("status") == "fail", ch.results.get("flow.no_enrolment_at_sign_in"))
+
+# ---- verify reads client browser-flow overrides too
+builtin = [f for f in kc.api("GET", RR + "/authentication/flows") if f["alias"] == "browser"][0]
+pc = kc.api("GET", RR + "/clients?clientId=%s" % A.client)[0]
+kc.api("PUT", RR + "/clients/%s" % pc["id"], dict(pc, authenticationFlowBindingOverrides={"browser": builtin["id"]}))
+ch2 = K.Checker(kc, K.load_profile(prof, "/nonexistent"), K.server_capabilities(kc), None)
+ch2.R = kc.api("GET", RR); ch2.check_passkey()
+check("verify FAILS when a client overrides the browser flow with a password flow (flow.passkey_only, flow.no_enrolment_at_sign_in)",
+      ch2.results["flow.passkey_only"]["status"] == "fail" and ch2.results["flow.no_enrolment_at_sign_in"]["status"] == "fail",
+      ch2.results["flow.passkey_only"]["evidence"][-200:])
+pc = kc.api("GET", RR + "/clients?clientId=%s" % A.client)[0]
+kc.api("PUT", RR + "/clients/%s" % pc["id"], dict(pc, authenticationFlowBindingOverrides={}))
 
 # ---- 5. a stored credential outside the policy fails verify; drift is undone by a restart
 loose = kc.api("GET", RR)

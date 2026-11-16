@@ -40,10 +40,16 @@ public class StigPasskeyRequiredAuthenticatorFactory implements Authenticator, A
         }
         LOG.warnf("STIG-PASSKEY-NOT-ENROLLED realm=%s user=%s: no passkey; refused (set-up only through the e-mailed link)",
                 context.getRealm().getName(), u == null ? "?" : u.getUsername());
-        if (u != null) context.getEvent().user(u);
-        context.getEvent().error(Errors.INVALID_USER_CREDENTIALS);
-        Response page = context.form().setError(Messages.ACCESS_DENIED).createErrorPage(Response.Status.UNAUTHORIZED);
-        context.failure(AuthenticationFlowError.INVALID_CREDENTIALS, page);
+        // A second line behind stig-passkey-username-form (which answers such an account as an unknown username, so this
+        // is reached only if that form was swapped). Name no user anywhere, as for an unknown username: an event or an
+        // attempted-username note naming the account would count the attempt against it (a lockout anyone could cause).
+        context.clearUser();
+        context.getEvent().user((String) null);
+        context.getAuthenticationSession().removeAuthNote(
+                org.keycloak.authentication.authenticators.browser.AbstractUsernameFormAuthenticator.ATTEMPTED_USERNAME);
+        context.getEvent().error(Errors.USER_NOT_FOUND);
+        Response page = context.form().setError(Messages.INVALID_USER).createErrorPage(Response.Status.UNAUTHORIZED);
+        context.failure(AuthenticationFlowError.INVALID_USER, page);
     }
 
     @Override public void action(AuthenticationFlowContext context) { authenticate(context); }

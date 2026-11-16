@@ -1352,10 +1352,17 @@ class Checker:
                     names.add(f["alias"])
         return sorted(names)
 
-    def check_passkey(self):
-        """auth_mode=passkey: the passkey is the only credential, and only FIPS-approved algorithms register or sign in."""
-        R, realm, p, rr = self.R, self.realm, self.p, "/realms/%s" % q(self.realm)
-        ex = self.flow_execs(realm, R.get("browserFlow"))
+    def browser_overrides(self):
+        """Aliases of the browser flows clients override the realm's with."""
+        rr = "/realms/%s" % q(self.realm)
+        ids = {(c.get("authenticationFlowBindingOverrides") or {}).get("browser") for c in self.kc.api("GET", rr + "/clients") or []}
+        ids.discard(None)
+        return sorted(f["alias"] for f in self.kc.api("GET", rr + "/authentication/flows") or [] if f["id"] in ids) if ids else []
+
+    def passkey_flow_shape(self, alias):
+        """(passkey_only, evidence, no_enrolment, evidence) for one browser flow of a passkey realm."""
+        realm, p = self.realm, self.p
+        ex = self.flow_execs(realm, alias)
         provs = [e.get("providerId") for e in ex if not e.get("authenticationFlow")]
         extra = sorted(set(provs) - PASSKEY_FLOW_PROVIDERS - {ALLOWLIST_GATE})
         primary = [pa for pa in self.paths(ex) if (pa - {ALLOWLIST_GATE}) != {"auth-cookie"}]
@@ -1374,14 +1381,15 @@ class Checker:
             if [(k.get("providerId"), k.get("requirement")) for k in kids] == [(PASSKEY_CONDITION, "REQUIRED"), (PASSKEY_AUTH, "REQUIRED")]:
                 cfg = self.exec_config(realm, kids[0])
                 shape = cfg.get("credentials") == "webauthn-passwordless" and str(cfg.get("included")).lower() == "false"
+        top_gate = (ALLOWLIST_GATE, "REQUIRED") in [(e.get("providerId"), e.get("requirement")) for e in ex if e.get("level") == 0]
         if p["webauthn"].get("sign_in") == "discoverable":
             shape = all(pa - {ALLOWLIST_GATE, "user-session-limits"} == {PASSKEY_AUTH} for pa in primary)
-            ok = bool(primary) and not extra and shape
+            ok = bool(primary) and not extra and shape and top_gate
         else:
-            ok = bool(primary) and not extra and shape and all(PASSKEY_AUTH in pa and PASSKEY_USERNAME_FORM in pa for pa in primary)
-        # No account without a passkey may get past the username form: stig-passkey-required REQUIRED, directly after
-        # it at the same level. Otherwise such an account reaches the passkey step, and whether it is then refused or
-        # sent to a passkey set-up depends on the Keycloak release - a takeover of every unclaimed account if it is the latter.
+            ok = bool(primary) and not extra and shape and top_gate and all(PASSKEY_AUTH in pa and PASSKEY_USERNAME_FORM in pa for pa in primary)
+        # No account without a passkey may get past a username step: stig-passkey-username-form, then
+        # stig-passkey-required REQUIRED directly after it at the same level. Otherwise such an account reaches the
+        # passkey step, and whether it is then refused or sent to a passkey set-up depends on the Keycloak release.
         top = [e for e in ex if e.get("providerId") in ("auth-username-form", PASSKEY_USERNAME_FORM, "auth-username-password-form",
                                                          "stig-username-password-form")]
         guarded = []
@@ -1390,15 +1398,26 @@ class Checker:
             nxt = next((k for k in ex[i + 1:] if k["level"] <= e["level"]), None)
             guarded.append(e.get("providerId") == PASSKEY_USERNAME_FORM and bool(nxt) and nxt["level"] == e["level"]
                            and nxt.get("providerId") == PASSKEY_REQUIRED and nxt.get("requirement") == "REQUIRED")
-        self.res("flow.no_enrolment_at_sign_in", all(guarded) and (bool(top) or p["webauthn"].get("sign_in") == "discoverable"),
+        ne = all(guarded) and (bool(top) or p["webauthn"].get("sign_in") == "discoverable")
+        how = ("discoverable passkey alone (no username step): %s" % shape if p["webauthn"].get("sign_in") == "discoverable" else
+               "username step, then a conditional passkey step: %s" % shape)
+        return ok, "'%s' paths=%s; providers outside the passkey flow: %s; allowlist gate: %s; %s" % (
+            alias, [sorted(x) for x in primary], extra or "none", top_gate, how), ne, (guarded or "no username step")
+
+    def check_passkey(self):
+        """auth_mode=passkey: the passkey is the only credential, and only FIPS-approved algorithms register or sign in."""
+        R, realm, p, rr = self.R, self.realm, self.p, "/realms/%s" % q(self.realm)
+        # the realm's browser flow AND every client's browser-flow override: a client override is a sign-in path too
+        browsers = [R.get("browserFlow")] + self.browser_overrides()
+        po_ok, ne_ok, po_ev, ne_ev = True, True, [], []
+        for alias in browsers:
+            ok, ev, guarded, gev = self.passkey_flow_shape(alias)
+            po_ok, ne_ok = po_ok and ok, ne_ok and guarded
+            po_ev.append(ev); ne_ev.append("'%s': %s" % (alias, gev))
+        self.res("flow.no_enrolment_at_sign_in", ne_ok,
                  "every username step is %s (no passkey = unknown user) followed by %s REQUIRED: an account without a "
-                 "passkey is refused, never set up at sign-in: %s" % (PASSKEY_USERNAME_FORM, PASSKEY_REQUIRED,
-                 guarded or "no username step (sign_in=discoverable)"))
-        how = ("sign-in by discoverable passkey alone (no username step): %s" % shape
-               if p["webauthn"].get("sign_in") == "discoverable" else
-               "username form, then a conditional passkey step (credential webauthn-passwordless not yet used -> %s): %s" % (PASSKEY_AUTH, shape))
-        self.res("flow.passkey_only", ok, "browserFlow='%s' paths=%s; providers outside the passkey flow: %s; %s" % (
-                 R.get("browserFlow"), [sorted(x) for x in primary], extra or "none", how))
+                 "passkey is refused, never set up at sign-in. %s" % (PASSKEY_USERNAME_FORM, PASSKEY_REQUIRED, "; ".join(ne_ev)))
+        self.res("flow.passkey_only", po_ok, " | ".join(po_ev) + ("" if len(browsers) == 1 else " (client overrides included)"))
         bad_flows = []
         for alias in self.bound_flows():
             for e in self.flow_execs(realm, alias):
