@@ -1,0 +1,13 @@
+{
+  "name": "keycloak-rp-example-node",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=20"},
+  "scripts": {"start": "node app.mjs"},
+  "dependencies": {
+    "express": "5.3.0",
+    "express-session": "1.19.0",
+    "jose": "6.2.17",
+    "openid-client": "6.9.0"
+  }
+}

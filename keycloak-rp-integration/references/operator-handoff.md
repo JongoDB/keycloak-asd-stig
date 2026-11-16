@@ -1,0 +1,88 @@
+# What to send your IdP operator, and what comes back
+
+The operator runs the STIG-hardened Keycloak. They register your client from one file, `client-request.json`,
+using the IdP skill's `add-client` step, which applies the same rules as `scripts/validate-client-request.py`.
+Validate before sending, so the request registers on the first try.
+
+## Send
+
+1. **`client-request.json`**, validated:
+   ```bash
+   python3 scripts/validate-client-request.py client-request.json            # must print "valid"
+   python3 scripts/validate-client-request.py --strict client-request.json   # no placeholder hosts, nothing to explain
+   ```
+   Fields (schema: `assets/client-request.schema.json`; example: `assets/client-request.example.json`):
+
+   | Field | Example | Notes |
+   |---|---|---|
+   | `client_id` | `myapp-web` | Lowercase letters, digits and hyphens. Use `-dev` / `-test` suffixes per environment |
+   | `name` | `My App` | Optional display name |
+   | `root_url` | `https://myapp.example.mil` | The app's public base URL; same as `APP_BASE_URL` |
+   | `redirect_uris` | `["https://myapp.example.mil/oauth2/callback"]` | Exact. No `*`, no fragments |
+   | `post_logout_redirect_uris` | `["https://myapp.example.mil/logged-out"]` | Your logged-off page |
+   | `backchannel_logout_url` | `https://myapp.example.mil/oauth2/backchannel-logout` | Must be reachable **from the IdP** |
+   | `auth` | `client-jwt` | Or `client-secret` |
+   | `jwks_url` | `https://myapp.example.mil/.well-known/jwks.json` | `client-jwt` only; reachable from the IdP |
+   | `roles` | `["viewer", "editor", "approver"]` | Client roles to create; lowercase, e.g. `report-approver` |
+   | `privileged` | `true` | Only for an admin front end: the IdP applies the 10-minute admin idle timeout |
+   | `web_origins` | `["https://myapp.example.mil"]` | Only if browser JavaScript calls the IdP directly (rare with a BFF) |
+   | `contact` | `{"name", "email", "organization", "phone"}` | Who the operator talks to about this client |
+   | `dev_request` | `true` | Development registrations only: allows the host name `localhost` |
+   | `notes` | free text | Anything the operator should know (split DNS, a proxy in front of the JWKS, and so on) |
+
+   Every field except `contact`, `dev_request`, `notes` and `$schema` has the same name and meaning as the
+   operator's client file (`keycloak-asd-stig/references/profile.md`, `clients[]`).
+   `validate-client-request.py --emit-client -` prints exactly what the operator will register.
+
+   Every URL must use a **DNS name**. IP addresses are refused in every spelling, because certificates, redirects
+   and audit trails are bound to names. `localhost` is accepted only in a request marked `"dev_request": true`,
+   which the operator registers in a non-production realm.
+
+2. **Who needs which role**: a list of people (or the group or process that approves access) for each role.
+   Send it the way your organization handles access requests, not inside the request file. The operator, or your
+   account-management process, assigns roles in the IdP.
+
+3. **Network facts the operator needs**: which egress path the IdP uses to reach your `jwks_url` and
+   `backchannel_logout_url`, and the CA that issues your app's certificate, if the IdP does not already trust it.
+
+4. **The STIG split you are claiming** (optional, but it speeds up the ATO conversation): which rules you will
+   mark as inherited (`stig-inheritance.md`). Ask the operator to confirm against their realm.
+
+## Receive
+
+| Item | How | Use it as |
+|---|---|---|
+| Issuer URL | any channel; it isn't secret | `OIDC_ISSUER`, e.g. `https://idp.example.mil/realms/<realm>` |
+| IdP CA bundle | any channel; verify its fingerprint with the operator by a second channel | the app's trust store for the IdP (`OIDC_CA_FILE` and the language equivalents) |
+| Realm limits | any channel | Idle, admin idle and max lifespan: configure the app to be equal or stricter |
+| Client secret (`client-secret` only) | **out of band**, see below | a file mounted into the app (`OIDC_CLIENT_SECRET_FILE`) |
+| IdP checklist + `kcstig.py inherit` output for your client | any channel | ATO evidence for the inherited rules |
+| Test accounts or cards for the dev realm | per your organization | the app's own end-to-end tests |
+
+## Receiving a client secret safely
+
+A client secret is a password for your application. Treat it like one:
+
+- **Never** by chat, email, ticket comment, wiki page, screenshot or verbal read-out, and never in this request.
+  These channels are logged, searchable and forwarded.
+- Use the channel your organization approves for secrets. In order of preference:
+  1. The operator writes it straight into the secret store your platform reads (Vault path, cloud secret manager,
+     Kubernetes Secret in your namespace) and grants your workload read access. Nobody handles it in between.
+  2. A one-time, expiring secret share your organization approves, or an encrypted file (for example `age`, or
+     S/MIME with a CAC-backed certificate) addressed to the named contact. The passphrase or link goes by a
+     **different** channel.
+- On receipt: put it in the secret store, mount it as a file with mode 0400, set `OIDC_CLIENT_SECRET_FILE`, and
+  delete every intermediate copy (downloads, decrypted files, clipboard history).
+- Never commit it. Add a pre-commit or CI secret scan if the repo doesn't have one.
+- If it may have been exposed, ask the operator to **regenerate** it at once. The old value stops working when they
+  do, so arrange the switch-over together.
+- `client-jwt` avoids all of this: the private key is generated and stays on your side, and only the public half
+  (the JWKS URL) goes in the request. Prefer it.
+
+## After registration
+
+1. Configure the app with the issuer, client ID, CA bundle and the key or secret file.
+2. Log in as a test user with each role; check the 403 path, log off, back-channel logout (ask the operator to
+   sign the test user out at the IdP) and the idle timeout. `tests/e2e/run_e2e.py` shows these checks in code.
+3. Any change (new redirect URI, new role, key move) is a new, validated `client-request.json` with the same
+   `client_id`. The operator replaces the registration with it.

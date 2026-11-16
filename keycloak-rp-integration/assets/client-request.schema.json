@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/JongoDB/keycloak-asd-stig/keycloak-rp-integration/assets/client-request.schema.json",
+  "title": "Keycloak relying-party client request",
+  "description": "What an application team sends the IdP operator to register one OIDC confidential client on an ASD STIG-hardened Keycloak. Every field except contact, dev_request, notes and $schema has the same name and meaning as the operator's client file (keycloak-asd-stig/references/profile.md, clients[]). scripts/validate-client-request.py is the authority: it applies these rules plus the ones JSON Schema cannot express (loopback detection, duplicate URIs, host consistency).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "client_id",
+    "root_url",
+    "redirect_uris",
+    "post_logout_redirect_uris",
+    "backchannel_logout_url",
+    "auth",
+    "roles",
+    "contact"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "client_id": {
+      "description": "OIDC client ID. Lowercase letters, digits and hyphens; starts with a letter; 3-64 characters.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$"
+    },
+    "name": {
+      "description": "Display name. Defaults to client_id.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "root_url": {
+      "description": "The application's public base URL, e.g. https://app.example.mil",
+      "$ref": "#/$defs/url"
+    },
+    "redirect_uris": {
+      "description": "Exact redirect URIs. No wildcards, no fragments.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/url"
+      }
+    },
+    "post_logout_redirect_uris": {
+      "description": "Exact targets for RP-initiated logout (your logged-off page).",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/url"
+      }
+    },
+    "backchannel_logout_url": {
+      "description": "Keycloak POSTs a logout token here when the SSO session ends.",
+      "$ref": "#/$defs/url"
+    },
+    "web_origins": {
+      "description": "CORS origins (scheme://host[:port], no path). Only needed if browser code calls Keycloak directly.",
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(?:https://(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.)*(?!(?:0[xX][0-9A-Fa-f]*|[0-9]+)\\.?(?:[:/?]|$))(?!localhost\\.?(?:[:/?]|$))[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.?(?::[0-9]{1,5})?|https?://localhost(?::[0-9]{1,5})?)$"
+      }
+    },
+    "auth": {
+      "description": "Client authentication at the token endpoint. Prefer client-jwt.",
+      "enum": [
+        "client-jwt",
+        "client-secret"
+      ]
+    },
+    "jwks_url": {
+      "description": "Where Keycloak fetches your public keys. Required with client-jwt, forbidden with client-secret.",
+      "$ref": "#/$defs/url"
+    },
+    "roles": {
+      "description": "Client roles to create. They appear in the access token under resource_access.<client_id>.roles.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 64,
+        "pattern": "^[a-z][a-z0-9]*([-_.][a-z0-9]+)*$",
+        "not": {
+          "enum": [
+            "offline_access",
+            "uma_authorization",
+            "uma_protection",
+            "realm-admin",
+            "create-client",
+            "impersonation",
+            "read-token",
+            "delete-account",
+            "manage-account",
+            "manage-account-links",
+            "manage-consent",
+            "view-profile",
+            "view-consent",
+            "view-groups",
+            "view-applications"
+          ]
+        }
+      }
+    },
+    "privileged": {
+      "description": "Admin front end: the IdP applies the 10-minute admin idle timeout to this client.",
+      "type": "boolean"
+    },
+    "contact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "email"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+        },
+        "organization": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 40
+        }
+      }
+    },
+    "dev_request": {
+      "description": "true only for a development registration: allows the host name localhost (http or https). IP literals such as 127.0.0.1 and [::1] are refused in every request. The operator registers these in a non-production realm.",
+      "type": "boolean"
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 1000
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "auth": {
+            "const": "client-jwt"
+          }
+        },
+        "required": [
+          "auth"
+        ]
+      },
+      "then": {
+        "required": [
+          "jwks_url"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "jwks_url"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "not": {
+          "properties": {
+            "dev_request": {
+              "const": true
+            }
+          },
+          "required": [
+            "dev_request"
+          ]
+        }
+      },
+      "then": {
+        "properties": {
+          "root_url": {
+            "$ref": "#/$defs/prodUrl"
+          },
+          "redirect_uris": {
+            "items": {
+              "$ref": "#/$defs/prodUrl"
+            }
+          },
+          "post_logout_redirect_uris": {
+            "items": {
+              "$ref": "#/$defs/prodUrl"
+            }
+          },
+          "backchannel_logout_url": {
+            "$ref": "#/$defs/prodUrl"
+          },
+          "jwks_url": {
+            "$ref": "#/$defs/prodUrl"
+          },
+          "web_origins": {
+            "items": {
+              "$ref": "#/$defs/prodUrl"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "url": {
+      "description": "https with a DNS-name host (IP literals in any spelling are refused: a numeric or 0x last label, or [IPv6]); or, for the dev-only allowance, http(s)://localhost. The validator is the authority.",
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^(?:https://(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.)*(?!(?:0[xX][0-9A-Fa-f]*|[0-9]+)\\.?(?:[:/?]|$))(?!localhost\\.?(?:[:/?]|$))[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.?(?::[0-9]{1,5})?(?:[/?][^\\s*#]*)?|https?://localhost(?::[0-9]{1,5})?(?:[/?][^\\s*#]*)?)$"
+    },
+    "prodUrl": {
+      "description": "Production URL: https, DNS name, not localhost.",
+      "type": "string",
+      "pattern": "^https://(?!localhost\\.?(?:[:/?]|$))"
+    }
+  }
+}

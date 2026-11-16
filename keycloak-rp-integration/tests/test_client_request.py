@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Tests for the client request format.
+
+  python3 keycloak-rp-integration/tests/test_client_request.py
+
+- the example and tests/fixtures/valid/* pass the validator; every tests/fixtures/invalid/* fails it
+- the JSON Schema agrees with the validator on every fixture (needs `pip install jsonschema`;
+  REQUIRE_JSONSCHEMA=1 makes its absence a failure, as CI sets)
+- 1:1 with the operator side: the client file emitted for each valid request loads through the IdP skill's
+  kcstig.py (keycloak-asd-stig/scripts) with no profile warnings, and renders to a Keycloak client with PKCE S256,
+  no implicit or password grant, the requested authenticator, JWKS URL, logout URLs and roles
+"""
+import contextlib
+import glob
+import importlib.util
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SKILL = os.path.dirname(HERE)
+REPO = os.path.dirname(SKILL)
+EXAMPLE = os.path.join(SKILL, "assets", "client-request.example.json")
+SCHEMA = os.path.join(SKILL, "assets", "client-request.schema.json")
+VALID = sorted(glob.glob(os.path.join(HERE, "fixtures", "valid", "*.json"))) + [EXAMPLE]
+INVALID = sorted(glob.glob(os.path.join(HERE, "fixtures", "invalid", "*.json")))
+KCSTIG = os.path.join(REPO, "keycloak-asd-stig", "scripts", "kcstig.py")
+
+
+def jload(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+vcr = load_module("vcr", os.path.join(SKILL, "scripts", "validate-client-request.py"))
+
+
+def run_cli(*args):
+    err = io.StringIO()
+    out = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+        rc = vcr.main(list(args))
+    return rc, out.getvalue(), err.getvalue()
+
+
+class Validator(unittest.TestCase):
+    def test_fixtures_exist(self):
+        self.assertGreaterEqual(len(VALID), 3)
+        self.assertGreaterEqual(len(INVALID), 15)
+
+    def test_valid_requests_pass(self):
+        for f in VALID:
+            with self.subTest(f=os.path.basename(f)):
+                rc, _, err = run_cli(f)
+                self.assertEqual(rc, 0, err)
+
+    def test_invalid_requests_fail(self):
+        for f in INVALID:
+            with self.subTest(f=os.path.basename(f)):
+                rc, _, err = run_cli(f)
+                self.assertEqual(rc, 1, "accepted: " + err)
+                self.assertIn("ERROR ", err)
+
+    def test_strict_turns_warnings_into_failure(self):
+        rc, _, _ = run_cli("--strict", EXAMPLE)   # placeholder domain warning
+        self.assertEqual(rc, 1)
+
+    def test_emit_client_is_the_operator_format(self):
+        rc, out, err = run_cli("--quiet", "--emit-client", "-", EXAMPLE)
+        self.assertEqual(rc, 0, err)
+        c = json.loads(out)
+        req = jload(EXAMPLE)
+        self.assertEqual(c["type"], "oidc-confidential")
+        for k, v in req.items():
+            if k in ("$schema", "contact", "dev_request", "notes"):
+                self.assertNotIn(k, c)
+            else:
+                self.assertEqual(c[k], v, k)
+
+    def test_no_emit_when_invalid(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "c.json")
+            rc, _, _ = run_cli("--emit-client", out, INVALID[0])
+            self.assertEqual(rc, 1)
+            self.assertFalse(os.path.exists(out))
+
+
+class HostRules(unittest.TestCase):
+    """IP literals are refused in every URL field in every spelling; only DNS names, plus `localhost` in dev."""
+    IP_FORMS = ["127.0.0.1", "127.1", "127.0.1", "2130706433", "0x7f000001", "0X7F000001", "0x7f.0.0.1",
+                "0177.0.0.1", "017700000001", "127.0.0.1.", "10.1", "192.0.2.10", "[::1]", "[::ffff:127.0.0.1]",
+                "[::ffff:7f00:1]", "[0:0:0:0:0:ffff:7f00:1]", "[fe80::1%25eth0]", "app.localhost", "x.localhost."]
+    FIELDS = ("root_url", "redirect_uris", "post_logout_redirect_uris", "backchannel_logout_url", "jwks_url")
+
+    def _with(self, req, field, url):
+        req = dict(req)
+        req[field] = [url] if field.endswith("uris") else url
+        return req
+
+    def test_ip_forms_refused_in_every_field_prod_and_dev(self):
+        prod = jload(EXAMPLE)
+        dev = jload(os.path.join(HERE, "fixtures", "valid", "dev-localhost.json"))
+        for host in self.IP_FORMS:
+            for field in self.FIELDS:
+                for name, base, scheme in (("prod", prod, "https"), ("dev", dev, "http"), ("dev-https", dev, "https")):
+                    with self.subTest(host=host, field=field, request=name):
+                        r = vcr.validate(self._with(base, field, "%s://%s/x" % (scheme, host)))
+                        self.assertTrue(any(e.startswith(field) for e in r.errors), r.errors)
+
+    def test_dns_names_with_digits_are_fine(self):
+        for host in ("app1.example.mil", "10-1.example.mil", "127.example.mil", "xn--bcher-kva.example.mil",
+                     "a0x1.example.mil"):
+            with self.subTest(host=host):
+                self.assertIsNone(vcr.host_problem(host))
+
+    def test_localhost_only_in_dev(self):
+        prod = jload(EXAMPLE)
+        dev = jload(os.path.join(HERE, "fixtures", "valid", "dev-localhost.json"))
+        for url in ("http://localhost:3000/x", "https://localhost/x", "https://LOCALHOST./x"):
+            with self.subTest(url=url):
+                self.assertTrue(vcr.validate(self._with(prod, "redirect_uris", url)).errors)
+                self.assertEqual(vcr.validate(self._with(dev, "redirect_uris", url)).errors, [])
+        # dev does not relax https for real hosts
+        self.assertTrue(vcr.validate(self._with(dev, "redirect_uris", "http://myapp.example.mil/x")).errors)
+
+
+class Schema(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import jsonschema  # noqa: F401
+        except ImportError:
+            if os.environ.get("REQUIRE_JSONSCHEMA") == "1":
+                raise
+            raise unittest.SkipTest("jsonschema not installed")
+        import jsonschema
+        schema = jload(SCHEMA)
+        jsonschema.Draft202012Validator.check_schema(schema)
+        cls.v = jsonschema.Draft202012Validator(schema)
+
+    def test_schema_accepts_valid(self):
+        for f in VALID:
+            with self.subTest(f=os.path.basename(f)):
+                errs = [e.message for e in self.v.iter_errors(jload(f))]
+                self.assertEqual(errs, [])
+
+    def test_schema_rejects_invalid(self):
+        # Every invalid fixture is something the schema can express too; the validator stays the authority.
+        for f in INVALID:
+            with self.subTest(f=os.path.basename(f)):
+                self.assertFalse(self.v.is_valid(jload(f)), "schema accepted " + f)
+
+
+@unittest.skipUnless(os.path.exists(KCSTIG), "IdP skill (keycloak-asd-stig) not beside this one")
+class OperatorSide(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.kc = load_module("kcstig", KCSTIG)
+
+    def test_emitted_clients_load_and_render_cleanly(self):
+        for f in VALID:
+            with self.subTest(f=os.path.basename(f)), tempfile.TemporaryDirectory() as d:
+                req = jload(f)
+                cdir = os.path.join(d, "clients.d")
+                os.mkdir(cdir)
+                rc, _, err = run_cli("--quiet", "--emit-client", os.path.join(cdir, "app.json"), f)
+                self.assertEqual(rc, 0, err)
+                prof = os.path.join(d, "profile.json")
+                with open(prof, "w") as pf:
+                    json.dump({"realm": {"name": "apps"}}, pf)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    p = self.kc.load_profile(prof, cdir)
+                self.assertNotIn("WARNING", err.getvalue())
+                (c,) = [c for c in p["clients"] if c["client_id"] == req["client_id"]]
+                rep = self.kc.client_rep(c, p)
+                at = rep["attributes"]
+                self.assertEqual(at["pkce.code.challenge.method"], "S256")
+                self.assertFalse(rep["implicitFlowEnabled"])
+                self.assertFalse(rep["directAccessGrantsEnabled"])
+                self.assertFalse(rep["publicClient"])
+                self.assertFalse(rep["fullScopeAllowed"])
+                self.assertEqual(rep["redirectUris"], req["redirect_uris"])
+                self.assertEqual(at["post.logout.redirect.uris"], "##".join(req["post_logout_redirect_uris"]))
+                self.assertEqual(at["backchannel.logout.url"], req["backchannel_logout_url"])
+                self.assertEqual(rep["_roles"], req["roles"])
+                self.assertEqual(rep["clientAuthenticatorType"], req["auth"])
+                if req["auth"] == "client-jwt":
+                    self.assertEqual(at["jwks.url"], req["jwks_url"])
+                if req.get("privileged"):
+                    self.assertEqual(at["client.session.idle.timeout"], str(p["sessions"]["admin_idle_minutes"] * 60))
+
+    def test_client_fields_are_operator_keys(self):
+        self.assertTrue(set(vcr.CLIENT_FIELDS) <= self.kc.CLIENT_KEYS, set(vcr.CLIENT_FIELDS) - self.kc.CLIENT_KEYS)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
