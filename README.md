@@ -11,9 +11,12 @@ application that uses this login.
 |---|---|
 | `keycloak-cac/` | **Start here (v2).** One self-configuring container image: DoD CAC/PIV login hardened to the ASD STIG and configured only through env vars. DoD anchors are baked in at build (or dropped in offline), CRLs work online or air-gapped, and it deploys to Compose, Helm/K8s or ECS. See `keycloak-cac/README.md`, and `keycloak-cac/DEPLOY.md` for each platform and registry. |
 | `keycloak-asd-stig/` | The Claude Code skill: `SKILL.md`, `scripts/kcstig.py` (render, apply, verify, assess, crosswalk, inherit, gateway), the e2e checker, image build, DoD PKI fetch, references, deploy assets (Compose, Helm, Podman, proxy), the theme and extension. |
+| `keycloak-rp-integration/` | **App developers start here** when someone else runs the IdP. A second Claude Code skill: it integrates your app as an OIDC relying party (code + PKCE, private_key_jwt, token validation, roles, timeouts, back-channel logout) and writes the validated `client-request.json` you hand the IdP operator. Tested examples for Node/Express, Python/Flask and Go; the STIG rules your app inherits. See `keycloak-rp-integration/SKILL.md`. |
+| `keycloak-rp-integration.skill` | That skill, packaged. Install by unzipping into `~/.claude/skills/` (or the app repo's `.claude/skills/`). |
 | `keycloak-asd-stig.skill` | The packaged skill. Install it by unzipping into `~/.claude/skills/`. |
 | `kc-cac-setup/` | `kc-cac-setup.sh`: a self-contained, one-command local CAC test stack (Docker or Podman). The README is the runbook. `build.sh` rebuilds it from `header.sh` plus the skill. |
 | `lab-evidence/` | Lab results: verify reports, screenshots, strict-FIPS runs, SBOMs, deployment notes, the 800-53 Rev 5 crosswalk (.md/.csv). |
+| `docs/integrate-your-app-with-our-idp.md` | **Start here** to connect an app to a hardened Keycloak someone else operates: install the relying-party skill and the prompt to give your coding agent. |
 | `docs/integrate-cac-in-your-app.md` | **Start here** for adding CAC login to another app: how to install the skill and a fill-in prompt for Claude Code. |
 | `docs/keycloak-gateway-integration-prompt.md` | A prompt for putting apps behind the hardened oauth2-proxy gateway. |
 | `evals/` | Skill-creator eval runs (iterations 1–4, with and without the skill) and the HTML viewers. Iteration 4: 42/42 with the skill, 90% without. |

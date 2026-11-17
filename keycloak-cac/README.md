@@ -76,7 +76,9 @@ Add one JSON file per application to `CAC_CLIENTS_DIR`. A Kubernetes ConfigMap w
  "roles": ["payroll-user", "payroll-approver"]}
 ```
 
-The fields are documented in `keycloak-asd-stig/references/profile.md` under clients. If an application can't enforce the STIG session rules itself, put the skill's hardened oauth2-proxy gateway in front of it (`kcstig.py gateway`).
+The fields are documented in `keycloak-asd-stig/references/profile.md` under clients. Client ids that belong to Keycloak itself (`account`, `admin-cli`, `realm-management`, `*-realm` and so on) are refused. For a request from an application team (`client-request.json`, see `keycloak-rp-integration/`), use `kcstig.py add-client`: it validates the request, records the owner, changes an existing client only with `--update` (and another owner's only with `--transfer`), applies the client and writes the clients file.
+
+`CAC_CLIENTS_DIR` (or its ConfigMap) and `CAC_CLIENTS_JSON` must be writable by the IdP operator only. A `client_id` may be defined once across them; a second definition stops the container. A client that `add-client` recorded an owner for is changed only by its own `<client_id>.json`. If an application can't enforce the STIG session rules itself, put the skill's hardened oauth2-proxy gateway in front of it (`kcstig.py gateway`).
 
 ## Environment
 <!-- env-start -->

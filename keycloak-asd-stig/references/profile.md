@@ -84,6 +84,27 @@ Upper/lower/digit/special (1 each), `notUsername`, `notEmail` are always added.
 
 ## `clients[]`
 
+Reserved: `client_id` may not be one of Keycloak's own clients (`account`, `account-console`, `admin-cli`,
+`broker`, `realm-management`, `security-admin-console`) or end in `-realm`. `load_profile` stops on such a profile or
+clients.d file, and `upsert_client` refuses them, so no clients.d file can overwrite part of the IdP.
+
+Registering an application team's client: take their `client-request.json` (format and validator in
+`keycloak-rp-integration/`) and run `kcstig.py add-client client-request.json --profile p.json --clients-dir
+clients.d --owner <owner id>`. It validates the request with the relying-party validator's rules (warnings refuse
+too unless `--no-strict`) and refuses reserved ids. It records the owner (`stig.owner`, `stig.owner-contact`, and
+`owner`/`owner_contact` in the clients.d file), applies the client live and writes `clients.d/<client_id>.json`.
+Changing an existing client needs `--update <id>` and prints a before/after diff of the redirect, logout and JWKS
+URLs. Another owner's client also needs `--transfer`, a client add-client did not create also needs `--adopt <id>`,
+and `--prune-roles` deletes roles the request dropped. With `auth: client-secret`, `--secret-out FILE` writes the
+secret (0600, never printed). Run `validate-client-request.py --strict` on the file you received first, and confirm
+any change request with the recorded contact through a second channel (`keycloak-rp-integration/references/operator-handoff.md`).
+
+Keys only `add-client` writes: `owner`, `owner_contact` (become the client attributes `stig.owner`,
+`stig.owner-contact` and `stig.created-by=add-client`). They are honoured only in `clients.d/<client_id>.json` and
+dropped, with a warning, anywhere else. Each `client_id` may be defined once across the profile and clients.d: a
+second definition stops the load. `apply` refuses to change a live client whose `stig.owner` differs from the
+definition's. `--owner` is required when `add-client` creates a client.
+
 Common keys:
 
 | Key | Type | Default | Meaning |

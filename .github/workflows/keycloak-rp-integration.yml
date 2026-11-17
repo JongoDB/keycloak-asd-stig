@@ -1,0 +1,80 @@
+# keycloak-rp-integration skill: the client request contract and the example relying parties.
+#   request  validator + JSON Schema on the example and on good/bad fixtures; operator-side compatibility (the emitted
+#            client loads through keycloak-asd-stig's kcstig.py with no warnings); STIG note is up to date
+#   e2e      kcstig.py add-client against a real Keycloak (ownership, --adopt, reserved ids, secret file), then the Node,
+#            Python and Go examples, each with client-jwt and client-secret, registered through add-client
+name: keycloak-rp-integration
+on:
+  pull_request:
+    paths: ["keycloak-rp-integration/**", "keycloak-asd-stig/scripts/kcstig.py", "keycloak-asd-stig/references/**",
+            "keycloak-asd-stig.skill", ".github/workflows/keycloak-rp-integration.yml"]
+  push:
+    branches: [main]
+    paths: ["keycloak-rp-integration/**", "keycloak-asd-stig/scripts/kcstig.py", "keycloak-asd-stig/references/**",
+            "keycloak-asd-stig.skill", ".github/workflows/keycloak-rp-integration.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: keycloak-rp-integration-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  # same pin as keycloak-cac-image.yml
+  KEYCLOAK_IMAGE: quay.io/keycloak/keycloak:26.8.2@sha256:723b1d6e254c0fc96d5cffec860c7e0744d6a3277822b865bb538cf891575e41
+jobs:
+  request:
+    runs-on: ubuntu-24.04
+    defaults: {run: {working-directory: keycloak-rp-integration}}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with: {python-version: "3.12"}
+      - run: pip install jsonschema==4.25.1
+      - name: The example request is valid
+        run: python3 scripts/validate-client-request.py assets/client-request.example.json --emit-client -
+      - name: Good fixtures pass, bad fixtures fail (http, wildcards, localhost, IP literals in every spelling, non-ASCII, reserved ids, trailing newlines, bad roles, secrets, duplicate keys)
+        run: |
+          for f in tests/fixtures/valid/*.json; do python3 scripts/validate-client-request.py --quiet "$f"; done
+          rc=0
+          for f in tests/fixtures/invalid/*.json tests/fixtures/invalid-validator-only/*.json; do
+            if python3 scripts/validate-client-request.py --quiet "$f" 2>/dev/null; then echo "::error::accepted $f"; rc=1; fi
+          done
+          for f in tests/fixtures/strict-invalid/*.json; do
+            python3 scripts/validate-client-request.py --quiet "$f" 2>/dev/null || { echo "::error::refused without --strict: $f"; rc=1; }
+            if python3 scripts/validate-client-request.py --quiet --strict "$f" 2>/dev/null; then echo "::error::accepted under --strict: $f"; rc=1; fi
+          done
+          exit $rc
+      - name: Unit tests (validator, JSON Schema agreement, kcstig add-client refusals, reserved ids in clients.d, bypass forms)
+        run: REQUIRE_JSONSCHEMA=1 python3 tests/test_client_request.py
+      - name: STIG inheritance note matches the control map
+        run: python3 scripts/stig_note.py --check
+      - name: The packaged IdP skill carries the tree's kcstig.py (add-client and its guards), byte for byte
+        working-directory: .
+        run: |
+          set -euo pipefail
+          for f in scripts/kcstig.py SKILL.md references/profile.md; do
+            unzip -p keycloak-asd-stig.skill "keycloak-asd-stig/$f" | cmp - "keycloak-asd-stig/$f" \
+              || { echo "::error::keycloak-asd-stig.skill has a stale keycloak-asd-stig/$f - refresh the zip"; exit 1; }
+          done
+
+  e2e:
+    needs: request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with: {python-version: "3.12"}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1     # v7.1.0
+        with: {node-version: "22"}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e       # v7.0.0
+        with: {go-version-file: keycloak-rp-integration/examples/go/go.mod, cache: false}
+      - name: Install example dependencies (pinned)
+        run: |
+          pip install -r keycloak-rp-integration/examples/python-flask/requirements.txt
+          (cd keycloak-rp-integration/examples/node-express && npm ci --no-audit --no-fund)
+          docker pull -q "$KEYCLOAK_IMAGE"
+      - name: Examples against Keycloak (node, python, go x client-jwt, client-secret)
+        run: python3 keycloak-rp-integration/tests/e2e/run_e2e.py
