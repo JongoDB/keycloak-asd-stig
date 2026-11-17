@@ -18,16 +18,26 @@ final class AccountsPolicy {
         String l = n.toLowerCase(java.util.Locale.ROOT);
         return !(l.contains("://") || l.contains("www.") || l.contains("http") || l.contains("@") || l.matches(".*\\.[a-z]{2,}(/.*)?$"));
     }
-    /** Default e-mail domains a delegate may create accounts for: any .mil domain, and defconai.com. */
-    static final String DEFAULT_EMAIL_DOMAINS = ".mil,defconai.com";
+    /** Default e-mail domains a delegate may create accounts for when nothing is configured: any .mil domain.
+     *  Organizations add theirs with the client or realm attribute stig.accounts.email-domains. */
+    static final String DEFAULT_EMAIL_DOMAINS = ".mil";
+    /** One allowlist entry: ".suffix" (any domain ending in it) or an exact domain. */
+    static final Pattern DOMAIN_ENTRY = Pattern.compile("^\\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$");
     static final int CREATE_PER_HOUR = 20;
-    /** `domains`: comma list; ".mil" matches any domain ending in .mil, "defconai.com" exactly that domain. */
+    /** `domains`: comma list; ".mil" matches any domain ending in .mil, "example.org" exactly that domain.
+     *  null (nothing configured) means DEFAULT_EMAIL_DOMAINS. A configured value fails closed: one with no entries
+     *  (blank, ",") or with any malformed entry ("*.mil", "@x.org", "x .org") allows no domain at all. */
     static boolean emailDomainAllowed(String email, String domains) {
         if (email == null || email.indexOf('@') < 0) return false;
         String d = email.substring(email.lastIndexOf('@') + 1).toLowerCase(java.util.Locale.ROOT);
-        for (String e : (domains == null || domains.isBlank() ? DEFAULT_EMAIL_DOMAINS : domains).split(",")) {
+        java.util.List<String> entries = new java.util.ArrayList<>();
+        for (String e : (domains == null ? DEFAULT_EMAIL_DOMAINS : domains).split(",", -1)) {
             String x = e.trim().toLowerCase(java.util.Locale.ROOT);
             if (x.isEmpty()) continue;
+            if (!DOMAIN_ENTRY.matcher(x).matches()) return false;      // misconfigured: refuse everything
+            entries.add(x);
+        }
+        for (String x : entries) {
             if (x.startsWith(".") ? d.endsWith(x) && d.length() > x.length() : d.equals(x)) return true;
         }
         return false;

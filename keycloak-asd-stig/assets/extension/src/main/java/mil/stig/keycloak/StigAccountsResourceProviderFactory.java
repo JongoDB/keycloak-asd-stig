@@ -71,7 +71,9 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
     /** Recorded on every account this endpoint creates: such an account is never made an administrator without a
      *  credential reset and an operator-set e-mail address (the operator's tooling enforces it). */
     static final String CREATED_BY = "stig_created_by";
-    /** Client (for a service-account caller) or realm attribute: comma list of e-mail domains; default .mil,defconai.com. */
+    /** Client (for a service-account caller) or realm attribute: comma list of e-mail domains a caller may create
+     *  accounts for (".mil" = any domain ending in .mil; "example.org" = exactly that domain). The client attribute
+     *  wins over the realm attribute. Unset on both: ".mil" only. Set but blank or malformed: no domain (fail closed). */
     static final String EMAIL_DOMAINS = "stig.accounts.email-domains";
 
     @Override public AdminRealmResourceProvider create(KeycloakSession session) { return this; }
@@ -81,7 +83,7 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
     @Override public String getId() { return ID; }
 
     /** Only callers holding this realm-management role (the IdP's user managers) may use the endpoint at all; an
-     *  application's fine-grained-only delegate (e.g. LogC2's) is refused everything, whatever its group scopes. */
+     *  application's fine-grained-only delegate is refused everything, whatever its group scopes. */
     static final String REQUIRED_ROLE = "query-users";
 
     @Override
@@ -160,9 +162,11 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             UserModel cu = auth.adminAuth().getUser();
             String link = cu == null ? null : cu.getServiceAccountClientLink();
             ClientModel c = link == null ? null : realm.getClientById(link);
+            // A set attribute is authoritative even when blank (then nothing is allowed); only an unset one falls
+            // through, client -> realm -> the default.
             String v = c == null ? null : c.getAttribute(EMAIL_DOMAINS);
-            if (v == null || v.isBlank()) v = realm.getAttribute(EMAIL_DOMAINS);
-            return v == null || v.isBlank() ? AccountsPolicy.DEFAULT_EMAIL_DOMAINS : v;
+            if (v == null) v = realm.getAttribute(EMAIL_DOMAINS);
+            return v == null ? AccountsPolicy.DEFAULT_EMAIL_DOMAINS : v;
         }
 
         /** At most CREATE_PER_HOUR creations per caller per clock hour, atomically: each creation claims one of the

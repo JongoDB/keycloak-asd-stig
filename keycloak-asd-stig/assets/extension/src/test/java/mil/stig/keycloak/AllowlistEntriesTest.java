@@ -45,7 +45,7 @@ public final class AllowlistEntriesTest {
         t("older format (bare expanded names) still read", StigAdministrators.classify(Set.of("query-users"), Set.of("query-users", "view-users"), live)
                 == StigAdministrators.Standing.VETTED && StigAdministrators.classify(Set.of("realm-admin"), Set.of("query-users"), live)
                 == StigAdministrators.Standing.OVER_ENTRY);
-        t("enforced realms: parsed from the configuration", StigAdministrators.enforcedRealms("defconai, other ,").equals(Set.of("defconai", "other")));
+        t("enforced realms: parsed from the configuration", StigAdministrators.enforcedRealms("example, other ,").equals(Set.of("example", "other")));
         t("enforced realms: none configured -> empty", StigAdministrators.enforcedRealms(null).isEmpty());
         String ev = "{\"username\":\"j\",\"attributes\":{\"cac_edipi\":[\"1234567890\"],\"dept\":[\"x\"]},\"x\":[{\"entra_oid\":\"o\"}]}";
         String s = AdminAttributeConcealmentFilter.scrub(ev);

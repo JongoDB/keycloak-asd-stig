@@ -26,6 +26,14 @@ bash kc-cac-setup/kc-cac-setup.sh --upn <your card's Principal Name>            
 ```
 Use the card's UPN exactly as it appears. Many cards use 16 digits (the EDIPI plus a suffix). See `kc-cac-setup/README.md`.
 
+## Upgrade notes
+- **Delegated account creation (`stig-accounts`) allows `.mil` only unless configured.** The built-in default no
+  longer includes any other domain. A blank client or realm value, or a list with one malformed entry, now allows
+  nothing, where it used to fall back or skip the bad entry. For example, `.mil,example.org.` (trailing dot) or
+  `.mil,my_org.mil` (underscore) disables the whole list. Before upgrading, set the realm (or calling client)
+  attribute `stig.accounts.email-domains` to the list you rely on, for example `.mil,example.org`. The
+  before/after table is in `keycloak-asd-stig/references/operations.md` section 8.
+
 ## Status
 - All lab topologies pass the e2e suite: env-only, edge proxy, 2-node HA, Helm through Podman, strict FIPS, and the 26.7 to 26.8 upgrade.
 - The gateway passes its tests.
