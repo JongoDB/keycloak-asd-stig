@@ -136,7 +136,9 @@ and name the domain list in force.
 
 Other `stig-accounts` limits, whoever calls: at most **20 creations and 20 disables per caller in any 60 minutes**
 (a sliding window: each one holds a slot for exactly an hour; 429 beyond; a refused disable leaves the account enabled;
-a creation claims its slot only after every other check passed, so a refused request - 400, 403, 409 - spends none), a set-up e-mail re-sent at most once per 15 minutes and only
+a creation claims its slot after the caller's own mistakes - malformed input, a domain, a lifespan or a group it
+cannot manage, which spend none - and BEFORE the username/e-mail existence check, so every 409 spends one and probing
+whether an account exists is capped at 20 an hour; the 409 never says which of the two is taken), a set-up e-mail re-sent at most once per 15 minutes and only
 while the account is not set up. Every call may carry an optional `reference` (a body field of `POST /users`,
 `?reference=` on the others; 1-64 characters of `A-Z a-z 0-9 . _ : -`, otherwise 400), for example the id of the
 request a call fulfils. It is recorded in the admin event's representation and in the `STIG-ACCOUNTS` log line, so an

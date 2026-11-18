@@ -239,15 +239,17 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                 refused("create", "group " + groupPath + " is not one whose membership the caller manages");
                 return err(Response.Status.FORBIDDEN, "not allowed");
             }
-            if (session.users().getUserByUsername(realm, username) != null || session.users().getUserByEmail(realm, email) != null) {
-                refused("create", "username or e-mail address already in use: " + username);
-                return err(Response.Status.CONFLICT, "username or e-mail address already in use");
-            }
-            // the rate slot is claimed only now, after every refusal (domain, lifespan, group, in use): a refused request
-            // never spends one. The claim itself stays atomic, so concurrent creations cannot exceed the limit.
+            // The rate slot is claimed HERE: after the caller's own mistakes (malformed input, domain, lifespan, a group it
+            // cannot manage), which spend none, and BEFORE the existence check, so every 409 costs a slot and probing
+            // whether a username or e-mail exists anywhere in the realm stays limited to 20 an hour. The 409 never says
+            // which of the two is taken, nor echoes either. The claim is atomic, so concurrency cannot exceed the limit.
             if (!underRate("create", AccountsPolicy.CREATE_PER_HOUR)) {
                 refused("create", "more than " + AccountsPolicy.CREATE_PER_HOUR + " accounts in an hour");
                 return err(Response.Status.TOO_MANY_REQUESTS, "too many accounts created this hour");
+            }
+            if (session.users().getUserByUsername(realm, username) != null || session.users().getUserByEmail(realm, email) != null) {
+                refused("create", "username or e-mail address already in use: " + username);
+                return err(Response.Status.CONFLICT, "username or e-mail address already in use");
             }
             UserModel u = session.users().addUser(realm, username);
             u.setEnabled(true); u.setEmail(email); u.setEmailVerified(false); u.setFirstName(first); u.setLastName(last);
