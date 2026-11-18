@@ -18,8 +18,10 @@ import java.util.regex.Pattern;
  *   - nothing else (403), whatever the person's own roles: a token from such a client never reaches the rest of the
  *     admin API, so a page it was issued to cannot be turned against anything but those calls.
  * A write with an older authentication (or none recorded in the token) is answered 401 with an RFC 9470 step-up
- * challenge, so the page re-authenticates with max_age and retries. Any other value of the profile attribute, or a
- * malformed max age, refuses every request from that client (fail closed). No attribute: not restricted here.
+ * challenge, so the page re-authenticates with max_age and retries. Any other value of the profile attribute (a blank
+ * one included), or a malformed or blank max age, refuses every request from that client (fail closed). No attribute:
+ * not restricted here. A MASTER-realm client carrying the attribute is refused outright (the master realm is never
+ * confined, so a client there must not look as if it were). The profile confines the ADMIN API only.
  */
 final class AdminApiStepUp {
     private AdminApiStepUp() { }
@@ -37,7 +39,8 @@ final class AdminApiStepUp {
 
     /** The max age the client is held to, or -1 when the attribute is malformed (fail closed). */
     static int maxAge(String attr) {
-        if (attr == null || attr.isBlank()) return DEFAULT_MAX_AGE;
+        if (attr == null) return DEFAULT_MAX_AGE;              // unset: the default; set but blank: fail closed
+        if (attr.isBlank()) return -1;
         try {
             int v = Integer.parseInt(attr.trim());
             return v >= MIN_MAX_AGE && v <= MAX_MAX_AGE ? v : -1;
@@ -55,7 +58,7 @@ final class AdminApiStepUp {
      * @param now        the current time (seconds)
      */
     static Verdict decide(String profile, String maxAgeAttr, String method, List<String> segs, Long authTime, long now) {
-        if (profile == null || profile.isBlank()) return Verdict.NOT_RESTRICTED;
+        if (profile == null) return Verdict.NOT_RESTRICTED;     // unset; set but blank fails closed (as stig-accounts' domains)
         if (!ACCOUNT_ONBOARDING.equals(profile.trim())) return Verdict.REFUSE;
         int max = maxAge(maxAgeAttr);
         if (max < 0 || method == null || segs == null) return Verdict.REFUSE;

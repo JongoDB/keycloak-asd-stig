@@ -55,7 +55,7 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
  *   POST /users/{id}/setup-email     re-send the set-up link to the address ON RECORD, only while the account is still
  *                                    being set up (no credential, set-up actions pending; else 409); once per 15 min. 204
  *   POST /users/{id}/disable         disable a member and end its sessions (back-channel). 204. There is NO enable:
- *                                    re-enabling is for realm administrators only. At most 20 per caller per hour.
+ *                                    re-enabling is for realm administrators only. At most 20 per caller in any 60 minutes.
  *   An optional `reference` (body field of POST /users, or ?reference= on the others; 1-64 of [A-Za-z0-9._:-], e.g.
  *   the request the call fulfils) is recorded in the admin event and the audit log line. Invalid: 400.
  *   anything else                    403
@@ -171,14 +171,15 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             return v == null ? AccountsPolicy.DEFAULT_EMAIL_DOMAINS : v;
         }
 
-        /** At most `limit` operations of one kind per caller per clock hour, atomically: each one claims one of the
-         *  hour's numbered slots with putIfAbsent (atomic in the cluster cache); with every slot taken it is refused. */
+        /** At most `limit` operations of one kind per caller in ANY 60 minutes (a sliding window), atomically: each one
+         *  claims one of `limit` numbered slots with putIfAbsent (atomic in the cluster cache), and a slot frees itself
+         *  exactly one hour after it was claimed; with every slot taken it is refused. */
         private boolean underRate(String kind, int limit) {
             UserModel cu = auth.adminAuth().getUser();
-            String base = "stig-accounts-" + kind + ":" + (cu == null ? "?" : cu.getId()) + ":" + (Time.currentTime() / 3600) + ":";
+            String base = "stig-accounts-" + kind + ":" + (cu == null ? "?" : cu.getId()) + ":";
             org.keycloak.models.SingleUseObjectProvider so = session.singleUseObjects();
             for (int i = 0; i < limit; i++) {
-                if (so.putIfAbsent(base + i, 3700)) return true;
+                if (so.putIfAbsent(base + i, AccountsPolicy.RATE_WINDOW)) return true;
             }
             return false;
         }

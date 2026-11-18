@@ -36,8 +36,9 @@ Use the card's UPN exactly as it appears. Many cards use 16 digits (the EDIPI pl
   `.mil,my_org.mil` (underscore) disables the whole list. Before upgrading, set the realm (or calling client)
   attribute `stig.accounts.email-domains` to the list you rely on, for example `.mil,example.org`. The
   before/after table is in `keycloak-asd-stig/references/operations.md` section 8.
-- **`stig-accounts` disables are limited too: 20 per caller per clock hour** (429 beyond), like creations. A caller
-  that disables more than that in one hour now has to wait for the next. Optional `reference` on every call (recorded
+- **`stig-accounts` disables are limited too, and both limits are now a sliding hour: at most 20 creations and 20
+  disables per caller in any 60 minutes** (429 beyond). The earlier per-clock-hour window allowed up to 40 around an
+  hour boundary. Optional `reference` on every call (recorded
   in the admin event); `operations.md` section 8.
 - **New: an admin-API client profile** (`stig.admin-api.profile=account-onboarding` on a client) holds every token that
   client issues to the account-administration calls and requires a recent authentication for writes (401 with an

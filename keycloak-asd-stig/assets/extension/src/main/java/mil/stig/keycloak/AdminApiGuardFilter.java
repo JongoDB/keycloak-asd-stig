@@ -65,12 +65,14 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
             kind = Kind.ADMIN;                // matched by Keycloak's admin resources whatever the path looked like
         }
         if (kind == Kind.UNCLASSIFIABLE) {
-            LOG.warnf("STIG-ADMIN-PATH-UNCLASSIFIABLE %s %s: refused", req.getMethod(), req.getUriInfo().getRequestUri().getRawPath());
+            LOG.warnf("STIG-ADMIN-PATH-UNCLASSIFIABLE %s %s: refused", logSafe(req.getMethod()), logSafe(req.getUriInfo().getRequestUri().getRawPath()));
             req.abortWith(forbidden());
             return;
         }
         if (kind != Kind.ADMIN) return;
-        String path = req.getUriInfo().getPath();
+        // logged as the RAW path (percent-encoding kept) with any control character replaced: a %0a in the request
+        // can never start a forged audit line
+        String path = logSafe(req.getUriInfo().getRequestUri().getRawPath());
         KeycloakSession session = KeycloakSessionUtil.getKeycloakSession();
         if (session == null) return;
         AdminAuth auth = AdminRoot.getRealmAdminAuth(session).orElse(null);
@@ -81,24 +83,34 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
                 return;                       // not admin-authenticated: Keycloak itself answers 401
             }
         }
-        if (auth == null || auth.getRealm() == null || Config.getAdminRealm().equals(auth.getRealm().getName())) return;
+        if (auth == null || auth.getRealm() == null) return;
+        ClientModel client = auth.getClient();
+        String profile = client == null ? null : client.getAttribute(AdminApiStepUp.PROFILE_ATTR);
+        if (Config.getAdminRealm().equals(auth.getRealm().getName())) {
+            // the master realm (the operator's tooling, break-glass) is never confined - so a client of it must never
+            // look as if it were: one carrying the profile attribute is refused outright
+            if (profile != null) {
+                LOG.errorf("STIG-ADMIN-API-PROFILE-REFUSED realm=%s client=%s %s %s: a master-realm client carries %s; refused",
+                        auth.getRealm().getName(), client.getClientId(), logSafe(req.getMethod()), path, AdminApiStepUp.PROFILE_ATTR);
+                req.abortWith(forbidden());
+            }
+            return;
+        }
         if (StigAdministrators.unvettedAdministrator(session, auth.getRealm(), auth.getUser())) {
             LOG.errorf("STIG-ADMIN-NOT-ALLOWLISTED realm=%s user=%s path=admin-api %s %s: refused", auth.getRealm().getName(),
-                    auth.getUser().getUsername(), req.getMethod(), path);
+                    auth.getUser().getUsername(), logSafe(req.getMethod()), path);
             req.abortWith(forbidden());
             return;
         }
         if (!AdminAttributeConcealmentFilter.fullAdministrator(session) && namesConcealed(req.getUriInfo().getQueryParameters())) {
             LOG.warnf("STIG-ATTRIBUTE-PROBE-REFUSED realm=%s user=%s %s %s", auth.getRealm().getName(),
-                    auth.getUser() == null ? "?" : auth.getUser().getUsername(), req.getMethod(), path);
+                    auth.getUser() == null ? "?" : auth.getUser().getUsername(), logSafe(req.getMethod()), path);
             req.abortWith(forbidden());
             return;
         }
         // A client held to an admin-API profile (AdminApiStepUp): its tokens reach only the profile's calls, and its
         // writes need a recent authentication. Checked for every caller of that client, administrators included.
-        ClientModel client = auth.getClient();
-        String profile = client == null ? null : client.getAttribute(AdminApiStepUp.PROFILE_ATTR);
-        if (profile != null && !profile.isBlank()) {
+        if (profile != null) {                                   // set, even blank: decide() fails closed on blank
             List<String> rest = AdminApiStepUp.afterRealm(seg);
             Long authTime = auth.getToken() == null ? null : auth.getToken().getAuth_time();
             String maxAttr = client.getAttribute(AdminApiStepUp.MAX_AGE_ATTR);
@@ -107,13 +119,13 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
             if (v == AdminApiStepUp.Verdict.STEP_UP) {
                 LOG.warnf("STIG-ADMIN-API-STEP-UP-REQUIRED realm=%s user=%s client=%s auth_age=%s %s %s: refused (401)",
                         auth.getRealm().getName(), who, client.getClientId(),
-                        authTime == null ? "none" : String.valueOf(Time.currentTime() - authTime), req.getMethod(), path);
+                        authTime == null ? "none" : String.valueOf(Time.currentTime() - authTime), logSafe(req.getMethod()), path);
                 req.abortWith(Response.status(Response.Status.UNAUTHORIZED)
                         .header("WWW-Authenticate", AdminApiStepUp.challenge(Math.max(AdminApiStepUp.maxAge(maxAttr), AdminApiStepUp.MIN_MAX_AGE)))
                         .entity(Map.of("error", "insufficient_user_authentication")).type(MediaType.APPLICATION_JSON).build());
             } else if (v == AdminApiStepUp.Verdict.REFUSE) {
                 LOG.warnf("STIG-ADMIN-API-PROFILE-REFUSED realm=%s user=%s client=%s profile=%s %s %s: refused",
-                        auth.getRealm().getName(), who, client.getClientId(), profile, req.getMethod(), path);
+                        auth.getRealm().getName(), who, client.getClientId(), profile, logSafe(req.getMethod()), path);
                 req.abortWith(forbidden());
             }
         }
@@ -127,6 +139,17 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
             }
         }
         return false;
+    }
+
+    /** For audit lines: control characters (CR, LF, ...) replaced by '?', at most 512 characters. */
+    static String logSafe(String s) {
+        if (s == null) return "-";
+        StringBuilder b = new StringBuilder(Math.min(s.length(), 512));
+        for (int i = 0; i < s.length() && b.length() < 512; i++) {
+            char c = s.charAt(i);
+            b.append(c < 0x20 || c == 0x7f || (c >= 0x80 && c < 0xa0) || c == 0x2028 || c == 0x2029 ? '?' : c);
+        }
+        return b.toString();
     }
 
     static Response forbidden() {

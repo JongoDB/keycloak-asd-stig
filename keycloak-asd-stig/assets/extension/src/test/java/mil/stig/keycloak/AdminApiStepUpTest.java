@@ -22,7 +22,10 @@ public final class AdminApiStepUpTest {
     public static void main(String[] a) {
         // no profile: nothing restricted here, whatever the call
         t("no profile attribute: not restricted", AdminApiStepUp.decide(null, null, "DELETE", s("users", U), null, NOW), Verdict.NOT_RESTRICTED);
-        t("blank profile attribute: not restricted", AdminApiStepUp.decide(" ", null, "POST", s("users"), null, NOW), Verdict.NOT_RESTRICTED);
+        t("profile attribute set but blank: every call refused (fail closed)", AdminApiStepUp.decide(" ", null, "GET", s("users"), NOW, NOW), Verdict.REFUSE);
+        t("profile attribute set but empty: every call refused (fail closed)", AdminApiStepUp.decide("", null, "GET", s("users"), NOW, NOW), Verdict.REFUSE);
+        t("max age set but blank: refused (fail closed)", AdminApiStepUp.decide(P, " ", "GET", s("users"), NOW, NOW), Verdict.REFUSE);
+        t("max age set but empty: refused (fail closed)", AdminApiStepUp.maxAge(""), -1);
         t("unknown profile value: every call refused (fail closed)", AdminApiStepUp.decide("other", null, "GET", s("users"), NOW, NOW), Verdict.REFUSE);
         t("malformed max age: refused (fail closed)", AdminApiStepUp.decide(P, "5m", "GET", s("users"), NOW, NOW), Verdict.REFUSE);
         t("max age below 30: refused", AdminApiStepUp.decide(P, "10", "GET", s("users"), NOW, NOW), Verdict.REFUSE);
@@ -96,6 +99,17 @@ public final class AdminApiStepUpTest {
         t("afterRealm: empty segments dropped", AdminApiStepUp.afterRealm(s("admin", "", "realms", "r1", "", "users")), s("users"));
         t("challenge names insufficient_user_authentication and max_age",
                 AdminApiStepUp.challenge(300).contains("insufficient_user_authentication") && AdminApiStepUp.challenge(300).contains("max_age=\"300\""), true);
+
+        // audit lines: a %0a (or a decoded newline) in the path never starts a forged line
+        String raw = "/admin/realms/r1/users%0aSTIG-ADMIN-FORGED%20line";
+        t("logSafe keeps a raw path's percent-encoding as it is", AdminApiGuardFilter.logSafe(raw), raw);
+        t("logSafe: a decoded LF/CR becomes '?'", AdminApiGuardFilter.logSafe("/admin/realms/r1/users\nSTIG-FORGED\r\n"), "/admin/realms/r1/users?STIG-FORGED??");
+        t("logSafe: other control characters (NUL, ESC, DEL, NEL, U+2028) become '?'",
+                AdminApiGuardFilter.logSafe("a\u0000b\u001bc\u007fd\u0085e\u2028f"), "a?b?c?d?e?f");
+        t("logSafe: no line break survives in any input", !AdminApiGuardFilter.logSafe(java.net.URI.create("http://h" + raw).getPath()).contains("\n"), true);
+        t("logSafe caps the length at 512", AdminApiGuardFilter.logSafe("x".repeat(2000)).length(), 512);
+        t("logSafe(null)", AdminApiGuardFilter.logSafe(null), "-");
+        t("rate window is a sliding hour", AccountsPolicy.RATE_WINDOW, 3600);
 
         // stig-accounts reference
         t("reference absent", AccountsPolicy.reference(null), null);

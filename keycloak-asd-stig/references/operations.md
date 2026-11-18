@@ -134,8 +134,8 @@ kcadm.sh update clients/<client uuid> -r <realm> -s 'attributes."stig.accounts.e
 Check it with `kcadm.sh get realms/<realm> --fields attributes`. Refusals are logged as `STIG-ACCOUNTS-REFUSED`
 and name the domain list in force.
 
-Other `stig-accounts` limits, whoever calls: at most **20 creations and 20 disables per caller per clock hour**
-(429 beyond; a refused disable leaves the account enabled), a set-up e-mail re-sent at most once per 15 minutes and only
+Other `stig-accounts` limits, whoever calls: at most **20 creations and 20 disables per caller in any 60 minutes**
+(a sliding window: each one holds a slot for exactly an hour; 429 beyond; a refused disable leaves the account enabled), a set-up e-mail re-sent at most once per 15 minutes and only
 while the account is not set up. Every call may carry an optional `reference` (a body field of `POST /users`,
 `?reference=` on the others; 1-64 characters of `A-Z a-z 0-9 . _ : -`, otherwise 400), for example the id of the
 request a call fulfils. It is recorded in the admin event's representation and in the `STIG-ACCOUNTS` log line, so an
@@ -174,13 +174,22 @@ accounts, without the application holding any credential that can do so. The per
   `WWW-Authenticate: Bearer error="insufficient_user_authentication", ..., max_age="300"`, logged
   `STIG-ADMIN-API-STEP-UP-REQUIRED`. The page signs the person in again with `max_age` (the realm's full flow: card, or
   password plus OTP) and retries. Reads are not stepped up.
-- Another value of `stig.admin-api.profile`, or a malformed max age: every request from that client is refused (fail
-  closed). No attribute: the client is not restricted by this rule.
+- Another value of `stig.admin-api.profile`, or a malformed max age - **a set but blank value included** (as for
+  `stig.accounts.email-domains`): every request from that client is refused (fail closed). No attribute: the client is
+  not restricted by this rule.
+- A **master-realm** client carrying `stig.admin-api.profile` is refused outright: the master realm is never confined,
+  so a client there must not look as if it were.
+- **The profile confines the admin API only** (`/admin/realms/...`). The same token still works wherever any token of
+  the realm does (userinfo, the account console's API for that person's own account); nothing there reaches other
+  accounts, but do not read the profile as a general token restriction.
 - Within the profile, Keycloak's own permissions and `stig-accounts`' rules still decide: a delegated user manager
   reaches only the groups their fine-grained permissions cover.
 
 The filter states the capability as `admin-api-profile=1` in the allowlist gate's `operationalInfo` (server info,
-`providers.authenticator.providers.stig-admin-allowlist-gate`). **Read it before creating such a client**: on an older
+`providers.authenticator.providers.stig-admin-allowlist-gate`). Its audit lines (`STIG-ADMIN-API-PROFILE-REFUSED`,
+`STIG-ADMIN-API-STEP-UP-REQUIRED`, and the filter's `STIG-ADMIN-NOT-ALLOWLISTED` and `STIG-ATTRIBUTE-PROBE-REFUSED`) log
+the raw request path with control characters replaced, so a `%0a` in a request cannot forge a line. **Read it before
+creating such a client**: on an older
 extension the attribute is ignored and the client would reach the whole admin API with no step-up. Also check the
 client's shape regularly (scope mappings above all): an added `realm-admin` mapping would put administrator-grade
 tokens on an application's origin.
