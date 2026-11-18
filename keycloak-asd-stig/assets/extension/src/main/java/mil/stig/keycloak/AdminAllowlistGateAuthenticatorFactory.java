@@ -35,9 +35,16 @@ public class AdminAllowlistGateAuthenticatorFactory implements Authenticator, Au
     public static final String ROLE_EXTENT_KEY = "allowlist-role-extent";
     public static final String ROLE_EXTENT_VERSION = "2";      // 2: granted groups by id + snapshot (see StigAdministrators)
 
+    /** Capability marker for the admin-API client profile (AdminApiStepUp, enforced by AdminApiGuardFilter): 1 = a
+     *  client with stig.admin-api.profile=account-onboarding reaches only that profile's calls, and its writes need an
+     *  authentication no older than stig.admin-api.max-auth-age. Tooling that creates such a client reads it first:
+     *  on an older extension the attribute would be ignored. */
+    public static final String ADMIN_API_PROFILE_KEY = "admin-api-profile";
+    public static final String ADMIN_API_PROFILE_VERSION = "1";
+
     @Override
     public java.util.Map<String, String> getOperationalInfo() {
-        return java.util.Map.of(ROLE_EXTENT_KEY, ROLE_EXTENT_VERSION);
+        return java.util.Map.of(ROLE_EXTENT_KEY, ROLE_EXTENT_VERSION, ADMIN_API_PROFILE_KEY, ADMIN_API_PROFILE_VERSION);
     }
 
     public static final String ID = "stig-admin-allowlist-gate";

@@ -24,6 +24,18 @@ final class AccountsPolicy {
     /** One allowlist entry: ".suffix" (any domain ending in it) or an exact domain. */
     static final Pattern DOMAIN_ENTRY = Pattern.compile("^\\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$");
     static final int CREATE_PER_HOUR = 20;
+    /** The rate window in seconds: a sliding hour (a slot frees itself this long after it was claimed). */
+    static final int RATE_WINDOW = 3600;
+    /** At most this many accounts disabled per caller in any 60 minutes (a stolen session cannot empty a tree at once). */
+    static final int DISABLE_PER_HOUR = 20;
+    /** An optional caller reference (e.g. the request it fulfils), recorded in the admin event and the audit log. */
+    static final Pattern REFERENCE = Pattern.compile("^[A-Za-z0-9._:-]{1,64}$");
+    /** null when absent; "" when present but invalid; else the reference. */
+    static String reference(String r) {
+        if (r == null) return null;
+        String x = r.trim();
+        return REFERENCE.matcher(x).matches() ? x : "";
+    }
     /** `domains`: comma list; ".mil" matches any domain ending in .mil, "example.org" exactly that domain.
      *  null (nothing configured) means DEFAULT_EMAIL_DOMAINS. A configured value fails closed: one with no entries
      *  (blank, ",") or with any malformed entry ("*.mil", "@x.org", "x .org") allows no domain at all. */
