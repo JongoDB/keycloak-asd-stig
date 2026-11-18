@@ -12,6 +12,8 @@ import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 import org.jboss.logging.Logger;
 import org.keycloak.Config;
+import org.keycloak.common.util.Time;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.services.resources.admin.AdminAuth;
 import org.keycloak.services.resources.admin.AdminRoot;
@@ -23,7 +25,10 @@ import org.keycloak.utils.KeycloakSessionUtil;
  *     realm-management role beyond its entry - so a token,
  *     refresh token or session obtained before (or without) vetting cannot be used against the API either;
  *   - refused (403) for anyone but a realm administrator or the master realm when any query parameter names a
- *     concealed attribute (q=cac_edipi:..., on /users, /users/count, group members, ...): no probing by value.
+ *     concealed attribute (q=cac_edipi:..., on /users, /users/count, group members, ...): no probing by value;
+ *   - for a token issued to a client held to an admin-API profile (client attribute stig.admin-api.profile, see
+ *     AdminApiStepUp): refused (403) outside the profile's calls, and a write answered 401 with a step-up challenge
+ *     (RFC 9470) when the authentication behind the token is older than the client's stig.admin-api.max-auth-age.
  * The master realm (the operator's tooling, break-glass) is never refused. A request that is not admin-authenticated
  * is left to Keycloak's own checks.
  */
@@ -87,6 +92,30 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
             LOG.warnf("STIG-ATTRIBUTE-PROBE-REFUSED realm=%s user=%s %s %s", auth.getRealm().getName(),
                     auth.getUser() == null ? "?" : auth.getUser().getUsername(), req.getMethod(), path);
             req.abortWith(forbidden());
+            return;
+        }
+        // A client held to an admin-API profile (AdminApiStepUp): its tokens reach only the profile's calls, and its
+        // writes need a recent authentication. Checked for every caller of that client, administrators included.
+        ClientModel client = auth.getClient();
+        String profile = client == null ? null : client.getAttribute(AdminApiStepUp.PROFILE_ATTR);
+        if (profile != null && !profile.isBlank()) {
+            List<String> rest = AdminApiStepUp.afterRealm(seg);
+            Long authTime = auth.getToken() == null ? null : auth.getToken().getAuth_time();
+            String maxAttr = client.getAttribute(AdminApiStepUp.MAX_AGE_ATTR);
+            AdminApiStepUp.Verdict v = AdminApiStepUp.decide(profile, maxAttr, req.getMethod(), rest, authTime, Time.currentTime());
+            String who = auth.getUser() == null ? "?" : auth.getUser().getUsername();
+            if (v == AdminApiStepUp.Verdict.STEP_UP) {
+                LOG.warnf("STIG-ADMIN-API-STEP-UP-REQUIRED realm=%s user=%s client=%s auth_age=%s %s %s: refused (401)",
+                        auth.getRealm().getName(), who, client.getClientId(),
+                        authTime == null ? "none" : String.valueOf(Time.currentTime() - authTime), req.getMethod(), path);
+                req.abortWith(Response.status(Response.Status.UNAUTHORIZED)
+                        .header("WWW-Authenticate", AdminApiStepUp.challenge(Math.max(AdminApiStepUp.maxAge(maxAttr), AdminApiStepUp.MIN_MAX_AGE)))
+                        .entity(Map.of("error", "insufficient_user_authentication")).type(MediaType.APPLICATION_JSON).build());
+            } else if (v == AdminApiStepUp.Verdict.REFUSE) {
+                LOG.warnf("STIG-ADMIN-API-PROFILE-REFUSED realm=%s user=%s client=%s profile=%s %s %s: refused",
+                        auth.getRealm().getName(), who, client.getClientId(), profile, req.getMethod(), path);
+                req.abortWith(forbidden());
+            }
         }
     }
 

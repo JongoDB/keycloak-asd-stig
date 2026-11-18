@@ -55,7 +55,9 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
  *   POST /users/{id}/setup-email     re-send the set-up link to the address ON RECORD, only while the account is still
  *                                    being set up (no credential, set-up actions pending; else 409); once per 15 min. 204
  *   POST /users/{id}/disable         disable a member and end its sessions (back-channel). 204. There is NO enable:
- *                                    re-enabling is for realm administrators only (console, idp-admin.py user-enable).
+ *                                    re-enabling is for realm administrators only. At most 20 per caller per hour.
+ *   An optional `reference` (body field of POST /users, or ?reference= on the others; 1-64 of [A-Za-z0-9._:-], e.g.
+ *   the request the call fulfils) is recorded in the admin event and the audit log line. Invalid: 400.
  *   anything else                    403
  *
  * Authorisation is Keycloak's own: the admin API's token checks (audience, admin scope) and the realm's fine-grained
@@ -169,19 +171,21 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             return v == null ? AccountsPolicy.DEFAULT_EMAIL_DOMAINS : v;
         }
 
-        /** At most CREATE_PER_HOUR creations per caller per clock hour, atomically: each creation claims one of the
+        /** At most `limit` operations of one kind per caller per clock hour, atomically: each one claims one of the
          *  hour's numbered slots with putIfAbsent (atomic in the cluster cache); with every slot taken it is refused. */
-        private boolean underRate() {
+        private boolean underRate(String kind, int limit) {
             UserModel cu = auth.adminAuth().getUser();
-            String base = "stig-accounts-create:" + (cu == null ? "?" : cu.getId()) + ":" + (Time.currentTime() / 3600) + ":";
+            String base = "stig-accounts-" + kind + ":" + (cu == null ? "?" : cu.getId()) + ":" + (Time.currentTime() / 3600) + ":";
             org.keycloak.models.SingleUseObjectProvider so = session.singleUseObjects();
-            for (int i = 0; i < AccountsPolicy.CREATE_PER_HOUR; i++) {
+            for (int i = 0; i < limit; i++) {
                 if (so.putIfAbsent(base + i, 3700)) return true;
             }
             return false;
         }
 
-        private boolean sendSetup(UserModel u, int lifespan) {
+        private static String refSuffix(String ref) { return ref == null ? "" : " reference=" + ref; }
+
+        private boolean sendSetup(UserModel u, int lifespan, String ref) {
             ClientModel console = realm.getClientByClientId(Constants.ACCOUNT_CONSOLE_CLIENT_ID);
             String redirect = UriBuilder.fromUri(session.getContext().getUri().getBaseUri()).path("realms").path(realm.getName())
                     .path("account").path("/").build().toString();
@@ -197,7 +201,9 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                         .setRealm(realm).setUser(u).sendExecuteActions(b.build(realm.getName()).toString(), TimeUnit.SECONDS.toMinutes(lifespan));
                 session.singleUseObjects().put("stig-accounts-setup:" + u.getId(), AccountsPolicy.RESEND_INTERVAL, Map.of("t", "1"));
                 adminEvent.operation(OperationType.ACTION).resource(ResourceType.USER)
-                        .resourcePath("users", u.getId(), "execute-actions-email").success();
+                        .resourcePath("users", u.getId(), "execute-actions-email");
+                if (ref != null) adminEvent.representation(Map.of("reference", ref));
+                adminEvent.success();
                 return true;
             } catch (EmailException e) {
                 LOG.warnf("STIG-ACCOUNTS set-up e-mail to %s failed: %s", u.getUsername(), e.getMessage());
@@ -206,9 +212,14 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
         }
 
         @POST @Path("users") @Consumes(MediaType.APPLICATION_JSON)
-        public Response create(Map<String, Object> body, @QueryParam("lifespan") Integer lifespanQ) {
+        public Response create(Map<String, Object> body, @QueryParam("lifespan") Integer lifespanQ,
+                               @QueryParam("reference") String refQ) {
             String username = str(body, "username"), email = str(body, "email"), first = str(body, "firstName"),
                    last = str(body, "lastName"), groupPath = str(body, "group");
+            Object refB = body == null ? null : body.get("reference");
+            if (refB != null && !(refB instanceof String)) return err(Response.Status.BAD_REQUEST, "reference must be a string");
+            String ref = AccountsPolicy.reference(refB != null ? (String) refB : refQ);
+            if ("".equals(ref)) return err(Response.Status.BAD_REQUEST, "reference must be 1-64 of A-Z a-z 0-9 . _ : -");
             Integer lifespanB = body != null && body.get("lifespan") instanceof Number n ? n.intValue() : lifespanQ;
             if (!AccountsPolicy.validUsername(username)) return err(Response.Status.BAD_REQUEST, "username must be first.last in lower case");
             if (!AccountsPolicy.validEmail(email)) return err(Response.Status.BAD_REQUEST, "invalid e-mail address");
@@ -220,7 +231,7 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                 refused("create", "e-mail domain of " + email + " not in " + domains);
                 return err(Response.Status.FORBIDDEN, "e-mail domain not allowed for this caller");
             }
-            if (!underRate()) {
+            if (!underRate("create", AccountsPolicy.CREATE_PER_HOUR)) {
                 refused("create", "more than " + AccountsPolicy.CREATE_PER_HOUR + " accounts in an hour");
                 return err(Response.Status.TOO_MANY_REQUESTS, "too many accounts created this hour");
             }
@@ -242,15 +253,19 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             u.setSingleAttribute(CREATED_BY, caller() + " " + Time.currentTimeMillis());   // read by the operator's tooling
             Map<String, Object> rep = new LinkedHashMap<>();
             rep.put("id", u.getId()); rep.put("username", username); rep.put("email", email); rep.put("group", g.getId());
+            if (ref != null) rep.put("reference", ref);
             adminEvent.operation(OperationType.CREATE).resource(ResourceType.USER).resourcePath("users", u.getId()).representation(rep).success();
-            LOG.infof("STIG-ACCOUNTS created realm=%s caller=%s user=%s group=%s", realm.getName(), caller(), username, groupPath);
-            boolean sent = sendSetup(u, lifespan);
+            LOG.infof("STIG-ACCOUNTS created realm=%s caller=%s user=%s group=%s%s", realm.getName(), caller(), username, groupPath, refSuffix(ref));
+            boolean sent = sendSetup(u, lifespan, ref);
             Map<String, Object> out = new LinkedHashMap<>(rep); out.put("setupEmail", sent ? "sent" : "failed");
             return Response.status(Response.Status.CREATED).entity(out).type(MediaType.APPLICATION_JSON).build();
         }
 
         @POST @Path("users/{id}/setup-email")
-        public Response resend(@PathParam("id") String id, @QueryParam("lifespan") Integer lifespanQ) {
+        public Response resend(@PathParam("id") String id, @QueryParam("lifespan") Integer lifespanQ,
+                               @QueryParam("reference") String refQ) {
+            String ref = AccountsPolicy.reference(refQ);
+            if ("".equals(ref)) return err(Response.Status.BAD_REQUEST, "reference must be 1-64 of A-Z a-z 0-9 . _ : -");
             UserModel u = target(id, "setup-email");
             if (u == null) return err(Response.Status.FORBIDDEN, "not allowed");
             int lifespan = AccountsPolicy.lifespan(lifespanQ);
@@ -266,22 +281,32 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (session.singleUseObjects().contains("stig-accounts-setup:" + u.getId())) {
                 return err(Response.Status.TOO_MANY_REQUESTS, "a set-up e-mail went to this account less than 15 minutes ago");
             }
-            return sendSetup(u, lifespan) ? Response.noContent().build() : err(Response.Status.BAD_GATEWAY, "the e-mail could not be sent");
+            if (!sendSetup(u, lifespan, ref)) return err(Response.Status.BAD_GATEWAY, "the e-mail could not be sent");
+            LOG.infof("STIG-ACCOUNTS setup-email realm=%s caller=%s user=%s%s", realm.getName(), caller(), u.getUsername(), refSuffix(ref));
+            return Response.noContent().build();
         }
 
         @POST @Path("users/{id}/disable")
-        public Response disable(@PathParam("id") String id) {
+        public Response disable(@PathParam("id") String id, @QueryParam("reference") String refQ) {
+            String ref = AccountsPolicy.reference(refQ);
+            if ("".equals(ref)) return err(Response.Status.BAD_REQUEST, "reference must be 1-64 of A-Z a-z 0-9 . _ : -");
             UserModel u = target(id, "disable");
             if (u == null) return err(Response.Status.FORBIDDEN, "not allowed");
             if (!u.isEnabled()) return Response.noContent().build();          // already disabled: nothing to do
+            if (!underRate("disable", AccountsPolicy.DISABLE_PER_HOUR)) {
+                refused("disable", "more than " + AccountsPolicy.DISABLE_PER_HOUR + " accounts disabled in an hour");
+                return err(Response.Status.TOO_MANY_REQUESTS, "too many accounts disabled this hour");
+            }
             u.setEnabled(false);
             session.users().setNotBeforeForUser(realm, u, Time.currentTime());
             session.sessions().getUserSessionsStream(realm, u).collect(Collectors.toList())
                    .forEach(s -> AuthenticationManager.backchannelLogout(session, realm, s, session.getContext().getUri(),
                            session.getContext().getConnection(), session.getContext().getRequestHeaders(), true));
+            Map<String, Object> drep = new LinkedHashMap<>(); drep.put("enabled", false);
+            if (ref != null) drep.put("reference", ref);
             adminEvent.operation(OperationType.UPDATE).resource(ResourceType.USER).resourcePath("users", u.getId())
-                    .representation(Map.of("enabled", false)).success();
-            LOG.infof("STIG-ACCOUNTS disabled realm=%s caller=%s user=%s", realm.getName(), caller(), u.getUsername());
+                    .representation(drep).success();
+            LOG.infof("STIG-ACCOUNTS disabled realm=%s caller=%s user=%s%s", realm.getName(), caller(), u.getUsername(), refSuffix(ref));
             return Response.noContent().build();
         }
 

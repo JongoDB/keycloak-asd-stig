@@ -9,6 +9,7 @@
 6. Re-running apply / verify (drift control)
 7. Upgrading Keycloak
 8. Delegated account creation: allowed e-mail domains (stig-accounts)
+9. Account administration from another application's page (admin-API client profile, step-up)
 
 ## 1. Break-glass / admin recovery
 After hardening, the admin realm has no password grant (ROPC denied), the bootstrap admin is deleted, and
@@ -133,3 +134,58 @@ kcadm.sh update clients/<client uuid> -r <realm> -s 'attributes."stig.accounts.e
 Check it with `kcadm.sh get realms/<realm> --fields attributes`. Refusals are logged as `STIG-ACCOUNTS-REFUSED`
 and name the domain list in force.
 
+Other `stig-accounts` limits, whoever calls: at most **20 creations and 20 disables per caller per clock hour**
+(429 beyond; a refused disable leaves the account enabled), a set-up e-mail re-sent at most once per 15 minutes and only
+while the account is not set up. Every call may carry an optional `reference` (a body field of `POST /users`,
+`?reference=` on the others; 1-64 characters of `A-Z a-z 0-9 . _ : -`, otherwise 400), for example the id of the
+request a call fulfils. It is recorded in the admin event's representation and in the `STIG-ACCOUNTS` log line, so an
+application's own records can be matched to the IdP's exactly.
+
+## 9. Account administration from another application's page (admin-API client profile, step-up)
+
+Use this when an application wants a page on which **your delegated user managers** create, re-send, disable and move
+accounts, without the application holding any credential that can do so. The person signed in to the page acts with
+**their own token**; the IdP decides every call by that person's own permissions.
+
+**The client.** A dedicated public OIDC client for that page:
+
+| Setting | Value |
+|---|---|
+| Client type | public, standard flow with PKCE S256 only (no implicit, direct grant, device, CIBA or token exchange), no service account |
+| Redirect URI / web origin | exactly the page's callback, and its origin (the only origin the admin API then answers CORS for) |
+| `fullScopeAllowed` | `false` |
+| Scope mappings | `realm-management` **`query-users` and `query-groups` only**. Keycloak honours a realm-management role on the admin API only if the client may carry it, so no token from this client ever carries more, whoever signs in (a realm administrator included) |
+| Default client scopes | the admin console's: `kc-admin-api` (the admin-API audience), `web-origins` (allowed origins), `basic` (`auth_time`), `acr`, `roles`, `profile`, `email`; no optional scopes, no protocol mappers |
+| Tokens | refresh tokens off, short access tokens (300 s), client session idle 10 minutes (V-222390 for an administrative page) |
+| `stig.admin-api.profile` | `account-onboarding` |
+| `stig.admin-api.max-auth-age` | seconds (30..900, default 300) |
+| Optional | `dpop.bound.access.tokens=true`: tokens bound to a key the page holds (RFC 9449). Keycloak's admin API then refuses the token without a proof from that key, so a token copied out of the page is useless elsewhere |
+
+**What `AdminApiGuardFilter` enforces for such a client** (every caller, administrators included):
+
+- Reads: `users` (search and count), `users/{id}`, `users/{id}/groups`, `groups`, `groups/{id}`, `groups/{id}/children`,
+  `groups/{id}/members`, `group-by-path/...`.
+- Writes: `POST stig-accounts/users`, `POST stig-accounts/users/{id}/setup-email`, `POST stig-accounts/users/{id}/disable`,
+  `PUT` and `DELETE users/{id}/groups/{groupId}`.
+- **Anything else: 403**, logged `STIG-ADMIN-API-PROFILE-REFUSED`. Edits, credentials, resets, execute-actions mail,
+  impersonation, role mappings, events and clients are therefore unreachable through the page, whoever is signed in.
+- **A write whose authentication is older than `stig.admin-api.max-auth-age`** (the token's `auth_time`; a token
+  without one counts as too old): **401** with an RFC 9470 challenge,
+  `WWW-Authenticate: Bearer error="insufficient_user_authentication", ..., max_age="300"`, logged
+  `STIG-ADMIN-API-STEP-UP-REQUIRED`. The page signs the person in again with `max_age` (the realm's full flow: card, or
+  password plus OTP) and retries. Reads are not stepped up.
+- Another value of `stig.admin-api.profile`, or a malformed max age: every request from that client is refused (fail
+  closed). No attribute: the client is not restricted by this rule.
+- Within the profile, Keycloak's own permissions and `stig-accounts`' rules still decide: a delegated user manager
+  reaches only the groups their fine-grained permissions cover.
+
+The filter states the capability as `admin-api-profile=1` in the allowlist gate's `operationalInfo` (server info,
+`providers.authenticator.providers.stig-admin-allowlist-gate`). **Read it before creating such a client**: on an older
+extension the attribute is ignored and the client would reach the whole admin API with no step-up. Also check the
+client's shape regularly (scope mappings above all): an added `realm-admin` mapping would put administrator-grade
+tokens on an application's origin.
+
+**CORS.** Keycloak answers a preflight from any origin, and on the actual response grants only an origin in the token's
+`allowed-origins` (from the client's web origins); a request from another origin carrying such a token is refused (403).
+Refusals (401, 403, 409, 429) carry the CORS header too, so the page can show the reason. Record the application origin
+as an admin-API client in your V-222574 (separate admin interface) assessment.

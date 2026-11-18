@@ -36,6 +36,12 @@ Use the card's UPN exactly as it appears. Many cards use 16 digits (the EDIPI pl
   `.mil,my_org.mil` (underscore) disables the whole list. Before upgrading, set the realm (or calling client)
   attribute `stig.accounts.email-domains` to the list you rely on, for example `.mil,example.org`. The
   before/after table is in `keycloak-asd-stig/references/operations.md` section 8.
+- **`stig-accounts` disables are limited too: 20 per caller per clock hour** (429 beyond), like creations. A caller
+  that disables more than that in one hour now has to wait for the next. Optional `reference` on every call (recorded
+  in the admin event); `operations.md` section 8.
+- **New: an admin-API client profile** (`stig.admin-api.profile=account-onboarding` on a client) holds every token that
+  client issues to the account-administration calls and requires a recent authentication for writes (401 with an
+  RFC 9470 step-up challenge otherwise). Clients without the attribute are unaffected. `operations.md` section 9.
 
 ## Status
 - All lab topologies pass the e2e suite: env-only, edge proxy, 2-node HA, Helm through Podman, strict FIPS, and the 26.7 to 26.8 upgrade.
