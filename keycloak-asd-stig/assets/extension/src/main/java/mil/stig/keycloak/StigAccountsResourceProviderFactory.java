@@ -232,10 +232,6 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                 refused("create", "e-mail domain of " + email + " not in " + domains);
                 return err(Response.Status.FORBIDDEN, "e-mail domain not allowed for this caller");
             }
-            if (!underRate("create", AccountsPolicy.CREATE_PER_HOUR)) {
-                refused("create", "more than " + AccountsPolicy.CREATE_PER_HOUR + " accounts in an hour");
-                return err(Response.Status.TOO_MANY_REQUESTS, "too many accounts created this hour");
-            }
             int lifespan = AccountsPolicy.lifespan(lifespanB);
             if (lifespan < 0) return err(Response.Status.BAD_REQUEST, "lifespan must be 300..86400 seconds");
             GroupModel g = groupPath == null ? null : KeycloakModelUtils.findGroupByPath(session, realm, groupPath);
@@ -246,6 +242,12 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (session.users().getUserByUsername(realm, username) != null || session.users().getUserByEmail(realm, email) != null) {
                 refused("create", "username or e-mail address already in use: " + username);
                 return err(Response.Status.CONFLICT, "username or e-mail address already in use");
+            }
+            // the rate slot is claimed only now, after every refusal (domain, lifespan, group, in use): a refused request
+            // never spends one. The claim itself stays atomic, so concurrent creations cannot exceed the limit.
+            if (!underRate("create", AccountsPolicy.CREATE_PER_HOUR)) {
+                refused("create", "more than " + AccountsPolicy.CREATE_PER_HOUR + " accounts in an hour");
+                return err(Response.Status.TOO_MANY_REQUESTS, "too many accounts created this hour");
             }
             UserModel u = session.users().addUser(realm, username);
             u.setEnabled(true); u.setEmail(email); u.setEmailVerified(false); u.setFirstName(first); u.setLastName(last);
