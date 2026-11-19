@@ -91,6 +91,24 @@ public final class AdminApiStepUpTest {
         t("PUT the realm refused", d("PUT", s(), NOW), Verdict.REFUSE);
         t("an out-of-profile write is refused, not stepped up, even when stale", d("PUT", s("users", U), NOW - 9999), Verdict.REFUSE);
 
+        // stig.admin-api.operations
+        String OPS = "create,setup-email,membership";
+        t("operations unset: all four", AdminApiStepUp.operations(null), AdminApiStepUp.OPERATIONS);
+        t("operations create,setup-email,membership: disable REFUSED, even fresh",
+                AdminApiStepUp.decide(P, null, OPS, "POST", s("stig-accounts", "users", U, "disable"), NOW, NOW), Verdict.REFUSE);
+        t("... create allowed", AdminApiStepUp.decide(P, null, OPS, "POST", s("stig-accounts", "users"), NOW, NOW), Verdict.ALLOW);
+        t("... setup-email allowed", AdminApiStepUp.decide(P, null, OPS, "POST", s("stig-accounts", "users", U, "setup-email"), NOW, NOW), Verdict.ALLOW);
+        t("... membership PUT allowed", AdminApiStepUp.decide(P, null, OPS, "PUT", s("users", U, "groups", G), NOW, NOW), Verdict.ALLOW);
+        t("... membership DELETE allowed", AdminApiStepUp.decide(P, null, OPS, "DELETE", s("users", U, "groups", G), NOW, NOW), Verdict.ALLOW);
+        t("... a stale allowed write still steps up", AdminApiStepUp.decide(P, null, OPS, "POST", s("stig-accounts", "users"), NOW - 999, NOW), Verdict.STEP_UP);
+        t("... reads unaffected", AdminApiStepUp.decide(P, null, OPS, "GET", s("users", U, "groups"), null, NOW), Verdict.ALLOW);
+        t("operations create,setup-email only: membership REFUSED",
+                AdminApiStepUp.decide(P, null, "create,setup-email", "DELETE", s("users", U, "groups", G), NOW, NOW), Verdict.REFUSE);
+        t("operations set but blank: every request refused", AdminApiStepUp.decide(P, null, " ", "GET", s("users"), NOW, NOW), Verdict.REFUSE);
+        t("operations with an empty entry: refused", AdminApiStepUp.decide(P, null, "create,", "GET", s("users"), NOW, NOW), Verdict.REFUSE);
+        t("operations naming an unknown one: refused", AdminApiStepUp.decide(P, null, "create,impersonate", "GET", s("users"), NOW, NOW), Verdict.REFUSE);
+        t("operations tolerate spaces", AdminApiStepUp.operations(" create , membership "), java.util.Set.of("create", "membership"));
+
         // path parsing
         t("afterRealm: a realm's sub-path", AdminApiStepUp.afterRealm(s("admin", "realms", "r1", "users", U)), s("users", U));
         t("afterRealm: the realm itself", AdminApiStepUp.afterRealm(s("admin", "realms", "r1")), s());

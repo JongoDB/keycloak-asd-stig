@@ -17,6 +17,9 @@ import java.util.regex.Pattern;
  *       PUT | DELETE users/{id}/groups/{groupId}       a membership change (Keycloak's own permissions apply)
  *   - nothing else (403), whatever the person's own roles: a token from such a client never reaches the rest of the
  *     admin API, so a page it was issued to cannot be turned against anything but those calls.
+ * Optional `stig.admin-api.operations`: the writes the client may make, a comma list of create, setup-email, disable,
+ * membership (PUT/DELETE of a group membership); unset = all four; set but blank, or naming anything else, refuses
+ * every request (fail closed).
  * A write with an older authentication (or none recorded in the token) is answered 401 with an RFC 9470 step-up
  * challenge, so the page re-authenticates with max_age and retries. Any other value of the profile attribute (a blank
  * one included), or a malformed or blank max age, refuses every request from that client (fail closed). No attribute:
@@ -28,6 +31,10 @@ final class AdminApiStepUp {
 
     static final String PROFILE_ATTR = "stig.admin-api.profile";
     static final String MAX_AGE_ATTR = "stig.admin-api.max-auth-age";
+    /** Optional: the write operations the client may make, a comma list of OPERATIONS. Unset: all of them. Set but
+     *  blank, or naming anything else: every request refused (fail closed). */
+    static final String OPS_ATTR = "stig.admin-api.operations";
+    static final java.util.Set<String> OPERATIONS = java.util.Set.of("create", "setup-email", "disable", "membership");
     static final String ACCOUNT_ONBOARDING = "account-onboarding";
     static final int DEFAULT_MAX_AGE = 300, MIN_MAX_AGE = 30, MAX_MAX_AGE = 900;
     /** Tolerated clock skew for an auth_time in the future (seconds). */
@@ -58,13 +65,31 @@ final class AdminApiStepUp {
      * @param now        the current time (seconds)
      */
     static Verdict decide(String profile, String maxAgeAttr, String method, List<String> segs, Long authTime, long now) {
+        return decide(profile, maxAgeAttr, null, method, segs, authTime, now);
+    }
+
+    /** The operations a client may write, or null when the attribute is malformed (fail closed). */
+    static java.util.Set<String> operations(String attr) {
+        if (attr == null) return OPERATIONS;
+        java.util.Set<String> out = new java.util.HashSet<>();
+        for (String x : attr.split(",", -1)) {
+            String t = x.trim();
+            if (!OPERATIONS.contains(t)) return null;           // blank, empty entry or unknown: refuse everything
+            out.add(t);
+        }
+        return out;
+    }
+
+    static Verdict decide(String profile, String maxAgeAttr, String opsAttr, String method, List<String> segs, Long authTime, long now) {
         if (profile == null) return Verdict.NOT_RESTRICTED;     // unset; set but blank fails closed (as stig-accounts' domains)
         if (!ACCOUNT_ONBOARDING.equals(profile.trim())) return Verdict.REFUSE;
         int max = maxAge(maxAgeAttr);
-        if (max < 0 || method == null || segs == null) return Verdict.REFUSE;
+        java.util.Set<String> ops = operations(opsAttr);
+        if (max < 0 || ops == null || method == null || segs == null) return Verdict.REFUSE;
         String m = method.toUpperCase(java.util.Locale.ROOT);
         if (m.equals("GET") || m.equals("HEAD")) return readAllowed(segs) ? Verdict.ALLOW : Verdict.REFUSE;
-        if (!writeAllowed(m, segs)) return Verdict.REFUSE;
+        String op = writeOperation(m, segs);
+        if (op == null || !ops.contains(op)) return Verdict.REFUSE;
         if (authTime == null || authTime <= 0 || authTime > now + SKEW || now - authTime > max) return Verdict.STEP_UP;
         return Verdict.ALLOW;
     }
@@ -88,18 +113,23 @@ final class AdminApiStepUp {
         }
     }
 
-    static boolean writeAllowed(String m, List<String> s) {
+    /** The write operation a request is, or null when it is none the profile knows. */
+    static String writeOperation(String m, List<String> s) {
         int n = s.size();
         if (m.equals("POST") && n >= 2 && s.get(0).equals("stig-accounts") && s.get(1).equals("users")) {
-            if (n == 2) return true;
-            return n == 4 && id(s.get(2)) && (s.get(3).equals("setup-email") || s.get(3).equals("disable"));
+            if (n == 2) return "create";
+            if (n == 4 && id(s.get(2)) && s.get(3).equals("setup-email")) return "setup-email";
+            if (n == 4 && id(s.get(2)) && s.get(3).equals("disable")) return "disable";
+            return null;
         }
         if ((m.equals("PUT") || m.equals("DELETE")) && n == 4 && s.get(0).equals("users") && id(s.get(1))
                 && s.get(2).equals("groups") && id(s.get(3))) {
-            return true;
+            return "membership";
         }
-        return false;
+        return null;
     }
+
+    static boolean writeAllowed(String m, List<String> s) { return writeOperation(m, s) != null; }
 
     static boolean id(String x) { return x != null && ID.matcher(x).matches(); }
 

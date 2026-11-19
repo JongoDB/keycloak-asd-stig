@@ -162,6 +162,7 @@ accounts, without the application holding any credential that can do so. The per
 | Tokens | refresh tokens off, short access tokens (300 s), client session idle 10 minutes (V-222390 for an administrative page) |
 | `stig.admin-api.profile` | `account-onboarding` |
 | `stig.admin-api.max-auth-age` | seconds (30..900, default 300) |
+| `stig.admin-api.operations` | optional: the writes it may make, a comma list of `create`, `setup-email`, `disable`, `membership` (group PUT/DELETE). Unset: all four. Set but blank, or naming anything else: every request refused. Capability `admin-api-profile=2` |
 | Optional | `dpop.bound.access.tokens=true`: tokens bound to a key the page holds (RFC 9449). Keycloak's admin API then refuses the token without a proof from that key, so a token copied out of the page is useless elsewhere |
 
 **What `AdminApiGuardFilter` enforces for such a client** (every caller, administrators included):

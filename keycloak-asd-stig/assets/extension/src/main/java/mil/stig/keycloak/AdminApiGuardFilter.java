@@ -114,7 +114,8 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
             List<String> rest = AdminApiStepUp.afterRealm(seg);
             Long authTime = auth.getToken() == null ? null : auth.getToken().getAuth_time();
             String maxAttr = client.getAttribute(AdminApiStepUp.MAX_AGE_ATTR);
-            AdminApiStepUp.Verdict v = AdminApiStepUp.decide(profile, maxAttr, req.getMethod(), rest, authTime, Time.currentTime());
+            AdminApiStepUp.Verdict v = AdminApiStepUp.decide(profile, maxAttr, client.getAttribute(AdminApiStepUp.OPS_ATTR),
+                    req.getMethod(), rest, authTime, Time.currentTime());
             String who = auth.getUser() == null ? "?" : auth.getUser().getUsername();
             if (v == AdminApiStepUp.Verdict.STEP_UP) {
                 LOG.warnf("STIG-ADMIN-API-STEP-UP-REQUIRED realm=%s user=%s client=%s auth_age=%s %s %s: refused (401)",
