@@ -162,6 +162,7 @@ accounts, without the application holding any credential that can do so. The per
 | Tokens | refresh tokens off, short access tokens (300 s), client session idle 10 minutes (V-222390 for an administrative page) |
 | `stig.admin-api.profile` | `account-onboarding` |
 | `stig.admin-api.max-auth-age` | seconds (30..900, default 300) |
+| `stig.admin-api.operations` | optional: the writes it may make, a comma list of `create`, `setup-email`, `disable`, `membership` (group PUT/DELETE). Unset: all four. Set but blank, or naming anything else: every request refused. Capability `admin-api-profile=2` |
 | Optional | `dpop.bound.access.tokens=true`: tokens bound to a key the page holds (RFC 9449). Keycloak's admin API then refuses the token without a proof from that key, so a token copied out of the page is useless elsewhere |
 
 **What `AdminApiGuardFilter` enforces for such a client** (every caller, administrators included):
@@ -188,8 +189,13 @@ accounts, without the application holding any credential that can do so. The per
 - Within the profile, Keycloak's own permissions and `stig-accounts`' rules still decide: a delegated user manager
   reaches only the groups their fine-grained permissions cover.
 
-The filter states the capability as `admin-api-profile=1` in the allowlist gate's `operationalInfo` (server info,
-`providers.authenticator.providers.stig-admin-allowlist-gate`). Its audit lines (`STIG-ADMIN-API-PROFILE-REFUSED`,
+The filter states its capability as `admin-api-profile=<version>` in the allowlist gate's `operationalInfo` (server
+info, `providers.authenticator.providers.stig-admin-allowlist-gate`). The version is a number, compared numerically:
+**`>= 1` before creating a client with `stig.admin-api.profile`**, and **`>= 2` before setting
+`stig.admin-api.operations`**. An older extension ignores the attribute it does not know, which silently widens the
+client: at version 1 an operations list is not enforced, so the client may make all four writes. An operations list
+on a client WITHOUT `stig.admin-api.profile` (version 2 and later) refuses every request from that client (403,
+`STIG-ADMIN-API-PROFILE-REFUSED`), rather than confining nothing. Its audit lines (`STIG-ADMIN-API-PROFILE-REFUSED`,
 `STIG-ADMIN-API-STEP-UP-REQUIRED`, and the filter's `STIG-ADMIN-NOT-ALLOWLISTED` and `STIG-ATTRIBUTE-PROBE-REFUSED`) log
 the raw request path with control characters replaced, so a `%0a` in a request cannot forge a line. **Read it before
 creating such a client**: on an older
@@ -199,5 +205,8 @@ tokens on an application's origin.
 
 **CORS.** Keycloak answers a preflight from any origin, and on the actual response grants only an origin in the token's
 `allowed-origins` (from the client's web origins); a request from another origin carrying such a token is refused (403).
-Refusals (401, 403, 409, 429) carry the CORS header too, so the page can show the reason. Record the application origin
+Refusals (401, 403, 409, 429) carry the CORS header too, so the page can show the reason. The step-up 401 also
+sends `Access-Control-Expose-Headers: WWW-Authenticate`, without which a browser page cannot read the challenge (or its
+`max_age`) cross-origin. Tell it apart from an EXPIRED token: that 401 comes from Keycloak itself, before the profile
+is checked, and carries no `insufficient_user_authentication` challenge - get a new token silently and retry. Record the application origin
 as an admin-API client in your V-222574 (separate admin interface) assessment.
