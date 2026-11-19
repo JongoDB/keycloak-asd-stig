@@ -122,6 +122,9 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
                         authTime == null ? "none" : String.valueOf(Time.currentTime() - authTime), logSafe(req.getMethod()), path);
                 req.abortWith(Response.status(Response.Status.UNAUTHORIZED)
                         .header("WWW-Authenticate", AdminApiStepUp.challenge(Math.max(AdminApiStepUp.maxAge(maxAttr), AdminApiStepUp.MIN_MAX_AGE)))
+                        // a browser page reads a cross-origin response header only if it is exposed: without this the
+                        // page sees the 401 but not the challenge (and its max_age)
+                        .header("Access-Control-Expose-Headers", AdminApiStepUp.EXPOSE_HEADERS)
                         .entity(Map.of("error", "insufficient_user_authentication")).type(MediaType.APPLICATION_JSON).build());
             } else if (v == AdminApiStepUp.Verdict.REFUSE) {
                 LOG.warnf("STIG-ADMIN-API-PROFILE-REFUSED realm=%s user=%s client=%s profile=%s %s %s: refused",

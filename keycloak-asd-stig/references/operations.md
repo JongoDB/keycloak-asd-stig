@@ -199,5 +199,8 @@ tokens on an application's origin.
 
 **CORS.** Keycloak answers a preflight from any origin, and on the actual response grants only an origin in the token's
 `allowed-origins` (from the client's web origins); a request from another origin carrying such a token is refused (403).
-Refusals (401, 403, 409, 429) carry the CORS header too, so the page can show the reason. Record the application origin
+Refusals (401, 403, 409, 429) carry the CORS header too, so the page can show the reason. The step-up 401 also
+sends `Access-Control-Expose-Headers: WWW-Authenticate`, without which a browser page cannot read the challenge (or its
+`max_age`) cross-origin. Tell it apart from an EXPIRED token: that 401 comes from Keycloak itself, before the profile
+is checked, and carries no `insufficient_user_authentication` challenge - get a new token silently and retry. Record the application origin
 as an admin-API client in your V-222574 (separate admin interface) assessment.

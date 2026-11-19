@@ -114,6 +114,9 @@ final class AdminApiStepUp {
         return null;
     }
 
+    /** Exposed to the page on the step-up 401, so its script can read the challenge cross-origin. */
+    static final String EXPOSE_HEADERS = "WWW-Authenticate";
+
     /** The RFC 9470 challenge for a write that needs a fresher authentication. */
     static String challenge(int maxAge) {
         return "Bearer error=\"insufficient_user_authentication\", error_description=\"A more recent authentication is "
