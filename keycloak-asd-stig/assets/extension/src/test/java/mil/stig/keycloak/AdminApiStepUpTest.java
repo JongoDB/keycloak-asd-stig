@@ -107,6 +107,10 @@ public final class AdminApiStepUpTest {
         t("operations set but blank: every request refused", AdminApiStepUp.decide(P, null, " ", "GET", s("users"), NOW, NOW), Verdict.REFUSE);
         t("operations with an empty entry: refused", AdminApiStepUp.decide(P, null, "create,", "GET", s("users"), NOW, NOW), Verdict.REFUSE);
         t("operations naming an unknown one: refused", AdminApiStepUp.decide(P, null, "create,impersonate", "GET", s("users"), NOW, NOW), Verdict.REFUSE);
+        t("operations set WITHOUT the profile: every request refused (it would confine nothing)",
+                AdminApiStepUp.decide(null, null, "create", "GET", s("users"), NOW, NOW), Verdict.REFUSE);
+        t("... and a write too", AdminApiStepUp.decide(null, null, OPS, "POST", s("stig-accounts", "users"), NOW, NOW), Verdict.REFUSE);
+        t("neither attribute: not restricted", AdminApiStepUp.decide(null, null, null, "DELETE", s("users", U), NOW, NOW), Verdict.NOT_RESTRICTED);
         t("operations tolerate spaces", AdminApiStepUp.operations(" create , membership "), java.util.Set.of("create", "membership"));
 
         // path parsing

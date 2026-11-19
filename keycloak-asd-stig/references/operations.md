@@ -189,8 +189,13 @@ accounts, without the application holding any credential that can do so. The per
 - Within the profile, Keycloak's own permissions and `stig-accounts`' rules still decide: a delegated user manager
   reaches only the groups their fine-grained permissions cover.
 
-The filter states the capability as `admin-api-profile=1` in the allowlist gate's `operationalInfo` (server info,
-`providers.authenticator.providers.stig-admin-allowlist-gate`). Its audit lines (`STIG-ADMIN-API-PROFILE-REFUSED`,
+The filter states its capability as `admin-api-profile=<version>` in the allowlist gate's `operationalInfo` (server
+info, `providers.authenticator.providers.stig-admin-allowlist-gate`). The version is a number, compared numerically:
+**`>= 1` before creating a client with `stig.admin-api.profile`**, and **`>= 2` before setting
+`stig.admin-api.operations`**. An older extension ignores the attribute it does not know, which silently widens the
+client: at version 1 an operations list is not enforced, so the client may make all four writes. An operations list
+on a client WITHOUT `stig.admin-api.profile` (version 2 and later) refuses every request from that client (403,
+`STIG-ADMIN-API-PROFILE-REFUSED`), rather than confining nothing. Its audit lines (`STIG-ADMIN-API-PROFILE-REFUSED`,
 `STIG-ADMIN-API-STEP-UP-REQUIRED`, and the filter's `STIG-ADMIN-NOT-ALLOWLISTED` and `STIG-ATTRIBUTE-PROBE-REFUSED`) log
 the raw request path with control characters replaced, so a `%0a` in a request cannot forge a line. **Read it before
 creating such a client**: on an older

@@ -19,7 +19,8 @@ import java.util.regex.Pattern;
  *     admin API, so a page it was issued to cannot be turned against anything but those calls.
  * Optional `stig.admin-api.operations`: the writes the client may make, a comma list of create, setup-email, disable,
  * membership (PUT/DELETE of a group membership); unset = all four; set but blank, or naming anything else, refuses
- * every request (fail closed).
+ * every request (fail closed). Set on a client WITHOUT the profile attribute: every request refused too (it would
+ * otherwise confine nothing while looking as if it did).
  * A write with an older authentication (or none recorded in the token) is answered 401 with an RFC 9470 step-up
  * challenge, so the page re-authenticates with max_age and retries. Any other value of the profile attribute (a blank
  * one included), or a malformed or blank max age, refuses every request from that client (fail closed). No attribute:
@@ -81,7 +82,10 @@ final class AdminApiStepUp {
     }
 
     static Verdict decide(String profile, String maxAgeAttr, String opsAttr, String method, List<String> segs, Long authTime, long now) {
-        if (profile == null) return Verdict.NOT_RESTRICTED;     // unset; set but blank fails closed (as stig-accounts' domains)
+        if (profile == null) {
+            // an operations list without the profile would confine nothing: refuse rather than look confined
+            return opsAttr == null ? Verdict.NOT_RESTRICTED : Verdict.REFUSE;
+        }                                                        // set but blank fails closed (as stig-accounts' domains)
         if (!ACCOUNT_ONBOARDING.equals(profile.trim())) return Verdict.REFUSE;
         int max = maxAge(maxAgeAttr);
         java.util.Set<String> ops = operations(opsAttr);

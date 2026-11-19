@@ -86,12 +86,14 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
         if (auth == null || auth.getRealm() == null) return;
         ClientModel client = auth.getClient();
         String profile = client == null ? null : client.getAttribute(AdminApiStepUp.PROFILE_ATTR);
+        String opsAttr = client == null ? null : client.getAttribute(AdminApiStepUp.OPS_ATTR);
         if (Config.getAdminRealm().equals(auth.getRealm().getName())) {
             // the master realm (the operator's tooling, break-glass) is never confined - so a client of it must never
             // look as if it were: one carrying the profile attribute is refused outright
-            if (profile != null) {
+            if (profile != null || opsAttr != null) {
                 LOG.errorf("STIG-ADMIN-API-PROFILE-REFUSED realm=%s client=%s %s %s: a master-realm client carries %s; refused",
-                        auth.getRealm().getName(), client.getClientId(), logSafe(req.getMethod()), path, AdminApiStepUp.PROFILE_ATTR);
+                        auth.getRealm().getName(), client.getClientId(), logSafe(req.getMethod()), path,
+                        profile != null ? AdminApiStepUp.PROFILE_ATTR : AdminApiStepUp.OPS_ATTR);
                 req.abortWith(forbidden());
             }
             return;
@@ -110,11 +112,11 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
         }
         // A client held to an admin-API profile (AdminApiStepUp): its tokens reach only the profile's calls, and its
         // writes need a recent authentication. Checked for every caller of that client, administrators included.
-        if (profile != null) {                                   // set, even blank: decide() fails closed on blank
+        if (profile != null || opsAttr != null) {                // set, even blank: decide() fails closed on blank
             List<String> rest = AdminApiStepUp.afterRealm(seg);
             Long authTime = auth.getToken() == null ? null : auth.getToken().getAuth_time();
             String maxAttr = client.getAttribute(AdminApiStepUp.MAX_AGE_ATTR);
-            AdminApiStepUp.Verdict v = AdminApiStepUp.decide(profile, maxAttr, client.getAttribute(AdminApiStepUp.OPS_ATTR),
+            AdminApiStepUp.Verdict v = AdminApiStepUp.decide(profile, maxAttr, opsAttr,
                     req.getMethod(), rest, authTime, Time.currentTime());
             String who = auth.getUser() == null ? "?" : auth.getUser().getUsername();
             if (v == AdminApiStepUp.Verdict.STEP_UP) {
@@ -129,7 +131,9 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
                         .entity(Map.of("error", "insufficient_user_authentication")).type(MediaType.APPLICATION_JSON).build());
             } else if (v == AdminApiStepUp.Verdict.REFUSE) {
                 LOG.warnf("STIG-ADMIN-API-PROFILE-REFUSED realm=%s user=%s client=%s profile=%s %s %s: refused",
-                        auth.getRealm().getName(), who, client.getClientId(), profile, logSafe(req.getMethod()), path);
+                        auth.getRealm().getName(), who, client.getClientId(),
+                        profile != null ? logSafe(profile) : "(none: " + AdminApiStepUp.OPS_ATTR + " set without it)",
+                        logSafe(req.getMethod()), path);
                 req.abortWith(forbidden());
             }
         }
