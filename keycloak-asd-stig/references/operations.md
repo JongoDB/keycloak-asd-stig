@@ -316,7 +316,9 @@ matched, its `username` detail (and the attempted username the login page may ec
 last four digits and an 8-hex keyed hash (HMAC-SHA-256 under the realm's active HMAC key), so repeated attempts by one card
 correlate without the number; once an account is matched, it is that account's username. The certificate subject the event
 records (`x509_cert_subject_distinguished_name`) has its EDIPI masked the same way. The HTTP access log records the request path WITHOUT its query string (`%m %R %H`; `%U` would keep the query string), and
-no Referer (it can carry one): an admin search such as `users?q=cac_edipi:<EDIPI>` would otherwise write the number to the
+no raw Referer (it can carry one): the extension records it sanitised instead (V-222447), `STIG-REFERER ip=<client> METHOD
+<path> referer=<scheme>://<host>[:port]<path>` (no query, fragment or user info; digits masked; the same client, method and
+path as the access log line, for correlation; `STIG_REFERER_AUDIT=sanitised`, required by `verify`): an admin search such as `users?q=cac_edipi:<EDIPI>` would otherwise write the number to the
 log. Admin-API query strings of ALLOWED requests are audited instead by the extension, `STIG-ADMIN-QUERY realm user client
 METHOD path?query`: a `q=` naming a concealed attribute anywhere (as decoded by the extension or by Keycloak, quotes and
 case ignored) is logged as `q=<concealed>`; a parameter named after, or naming, a concealed attribute gets `<concealed>`; a

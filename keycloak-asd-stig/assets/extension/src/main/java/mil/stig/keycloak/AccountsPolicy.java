@@ -47,6 +47,21 @@ final class AccountsPolicy {
     /** Any EDIPI-like run (10 or more digits) in a text - a certificate subject (CN=LAST.FIRST.MI.<EDIPI>), an exception
      *  message - reduced to its last four digits, for log lines. */
     static String redactEdipis(String s) { return s == null ? null : s.replaceAll("\\d{6,}(\\d{4})", "******$1"); }
+    /** Digits in a logged value (any script: \p{Nd}): every run of four or more becomes "####"; and when the value holds
+     *  ten or more digits in all (an EDIPI however it is split: 123-456-7890, 12-34-56-78-90), EVERY digit is masked
+     *  ("#") except the value's last four. */
+    static String maskDigitRuns(String s) {
+        if (s == null) return null;
+        long total = s.codePoints().filter(Character::isDigit).count();
+        if (total < 10) return s.replaceAll("\\p{Nd}{4,}", "####");
+        long keepFrom = total - 4, seen = 0;
+        StringBuilder b = new StringBuilder(s.length());
+        for (int cp : s.codePoints().toArray()) {
+            if (Character.isDigit(cp)) b.append(seen++ >= keepFrom ? new String(Character.toChars(cp)) : "#");
+            else b.appendCodePoint(cp);
+        }
+        return b.toString();
+    }
     /** An EDIPI for a log line or an admin event: the last four digits at most. */
     static String maskEdipi(String e) { return e == null || e.length() < 4 ? "****" : "******" + e.substring(e.length() - 4); }
     /** Admin-only attribute stig-accounts writes on every create: the sign-in methods the create intended, sorted,

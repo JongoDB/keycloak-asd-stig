@@ -115,6 +115,20 @@ public final class EdipiRedactionTest {
         t("maskedQuery: Keycloak's own decoding names a concealed attribute where this one does not -> concealed",
                 AdminApiGuardFilter.maskedQuery("q=harmless", java.util.Map.of("q", List.of("\"cac_edipi\":\"1\"")), AdminAttributeConcealmentFilter.DEFAULT).equals("q=<concealed>"),
                 AdminApiGuardFilter.maskedQuery("q=harmless", java.util.Map.of("q", List.of("\"cac_edipi\":\"1\"")), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskDigitRuns: 123-456-7890 keeps only the last four", AccountsPolicy.maskDigitRuns("123-456-7890").equals("###-###-7890"), AccountsPolicy.maskDigitRuns("123-456-7890"));
+        t("maskDigitRuns: 12-34-56-78-90 (two-digit runs) too", AccountsPolicy.maskDigitRuns("12-34-56-78-90").equals("##-##-##-78-90"), AccountsPolicy.maskDigitRuns("12-34-56-78-90"));
+        t("maskDigitRuns: non-ASCII digits (Arabic-Indic) masked as digits", AccountsPolicy.maskDigitRuns("\u0661\u0662\u0663\u0664\u0665").equals("####"),
+                AccountsPolicy.maskDigitRuns("\u0661\u0662\u0663\u0664\u0665"));
+        t("maskDigitRuns: fewer than ten digits, runs of four or more -> ####", AccountsPolicy.maskDigitRuns("a12345b123").equals("a####b123"), AccountsPolicy.maskDigitRuns("a12345b123"));
+        t("maskedQuery: a phone-style EDIPI in a value", AdminApiGuardFilter.maskedQuery("search=123-456-7890", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("search=###-###-7890"),
+                AdminApiGuardFilter.maskedQuery("search=123-456-7890", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("logSafe: a format character (U+202E) is replaced", AdminApiGuardFilter.logSafe("a\u202Eb\u200Bc").equals("a?b?c"), AdminApiGuardFilter.logSafe("a\u202Eb\u200Bc"));
+        t("referer: query and fragment dropped, digits masked", StigRefererAuditFilter.sanitise("https://idp.example/admin/x/console/?q=cac_edipi:1234567890#/users").equals("https://idp.example/admin/x/console/"),
+                StigRefererAuditFilter.sanitise("https://idp.example/admin/x/console/?q=cac_edipi:1234567890#/users"));
+        t("referer: user info dropped, port kept, path digits masked", StigRefererAuditFilter.sanitise("https://u:p@Host.example:8443/a/1234567890/b").equals("https://host.example:8443/a/######7890/b"),
+                StigRefererAuditFilter.sanitise("https://u:p@Host.example:8443/a/1234567890/b"));
+        t("referer: not an absolute http(s) URI -> <unparsable>", StigRefererAuditFilter.sanitise("javascript:alert(1)").equals("<unparsable>")
+                && StigRefererAuditFilter.sanitise("/relative?x=1").equals("<unparsable>") && StigRefererAuditFilter.sanitise("%%%").equals("<unparsable>"), "");
         System.out.printf("EdipiRedactionTest: %d/%d passed%n", run - failed, run);
         if (failed > 0) System.exit(1);
     }

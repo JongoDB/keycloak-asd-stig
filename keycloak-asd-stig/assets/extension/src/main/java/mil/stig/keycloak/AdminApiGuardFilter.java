@@ -192,7 +192,7 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
         return String.join("&", out);
     }
 
-    private static String digits(String s) { return s == null ? null : s.replaceAll("[0-9]{4,}", "####"); }
+    private static String digits(String s) { return AccountsPolicy.maskDigitRuns(s); }
 
     /** Form-decoding that FAILS (null) on a malformed escape instead of keeping the raw text. */
     private static String decStrict(String s) {
@@ -219,7 +219,10 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
         StringBuilder b = new StringBuilder(Math.min(s.length(), 512));
         for (int i = 0; i < s.length() && b.length() < 512; i++) {
             char c = s.charAt(i);
-            b.append(c < 0x20 || c == 0x7f || (c >= 0x80 && c < 0xa0) || c == 0x2028 || c == 0x2029 ? '?' : c);
+            // control characters, line/paragraph separators AND format characters (Cf: e.g. U+202E, which reorders
+            // what a reader of the log sees) all become '?'
+            b.append(c < 0x20 || c == 0x7f || (c >= 0x80 && c < 0xa0) || c == 0x2028 || c == 0x2029
+                    || Character.getType(c) == Character.FORMAT ? '?' : c);
         }
         return b.toString();
     }

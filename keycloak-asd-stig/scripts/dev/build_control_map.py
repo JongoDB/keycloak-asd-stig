@@ -121,7 +121,7 @@ for v in (222434, 222435, 222436):
 for v in (222441, 222442, 222443, 222445):
     m(v, "SHARED", "User events LOGIN/CODE_TO_TOKEN/REFRESH_TOKEN/LOGOUT (session create/renew/destroy) enabled with all event types; idle expiry is visible as failed REFRESH_TOKEN_ERROR/INVALID token events.", ["realm.user_events"], app="App logs its own session lifecycle.")
 m(222446, "KC", "Every event record carries an epoch-millisecond timestamp.", ["realm.user_events"])
-m(222447, "SHARED", "HTTP access log enabled (--http-access-log-enabled) with a pattern capturing method, request path and User-Agent; query strings are audited by the extension (STIG-ADMIN-QUERY, EDIPIs masked), and the Referer is not recorded (it can carry query strings).", ["deploy.access_log"])
+m(222447, "SHARED", "HTTP access log enabled (--http-access-log-enabled) with a pattern capturing method, request path and User-Agent; the Referer is recorded sanitised by the extension (STIG-REFERER: scheme, host and path only, digits masked; STIG_REFERER_AUDIT=sanitised) and admin query strings by STIG-ADMIN-QUERY (concealed attributes and digits masked).", ["deploy.access_log"])
 m(222448, "KC", "Events record the client IP (ipAddress).", ["realm.user_events"])
 m(222449, "KC", "Events record userId/username.", ["realm.user_events"])
 for v in (222450, 222451, 222454, 222455, 222458, 222460):
