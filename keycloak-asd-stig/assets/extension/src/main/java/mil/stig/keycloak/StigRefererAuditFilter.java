@@ -24,13 +24,25 @@ public class StigRefererAuditFilter implements ContainerRequestFilter {
     private static final Logger LOG = Logger.getLogger("mil.stig.audit");
     static final boolean ON = !"off".equalsIgnoreCase(String.valueOf(System.getenv("STIG_REFERER_AUDIT")).trim());
 
+    /** The HTTP request as the server (and its access log, %h) sees it. */
+    @jakarta.ws.rs.core.Context
+    io.vertx.core.http.HttpServerRequest http;
+
     @Override
     public void filter(ContainerRequestContext req) {
         if (!ON) return;
         String ref = req.getHeaderString("Referer");
         if (ref == null || ref.isBlank()) return;
-        KeycloakSession session = KeycloakSessionUtil.getKeycloakSession();
-        String ip = session == null || session.getContext().getConnection() == null ? "?" : session.getContext().getConnection().getRemoteAddr();
+        String ip = null;
+        try {
+            if (http != null && http.remoteAddress() != null) ip = http.remoteAddress().hostAddress();   // what %h prints
+        } catch (RuntimeException e) {
+            ip = null;
+        }
+        if (ip == null) {
+            KeycloakSession session = KeycloakSessionUtil.getKeycloakSession();
+            ip = session == null || session.getContext().getConnection() == null ? "?" : session.getContext().getConnection().getRemoteAddr();
+        }
         LOG.infof("STIG-REFERER ip=%s %s %s referer=%s", AdminApiGuardFilter.logSafe(ip), AdminApiGuardFilter.logSafe(req.getMethod()),
                 AdminApiGuardFilter.logSafe(req.getUriInfo().getRequestUri().getRawPath()), AdminApiGuardFilter.logSafe(sanitise(ref)));
     }
