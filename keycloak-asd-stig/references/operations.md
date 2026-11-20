@@ -315,7 +315,8 @@ EDIPI is bound or reserved; it is capped by the hourly create limit and every at
 matched, its `username` detail (and the attempted username the login page may echo) is `card:******NNNN#xxxxxxxx` - the
 last four digits and an 8-hex keyed hash (HMAC-SHA-256 under the realm's active HMAC key), so repeated attempts by one card
 correlate without the number; once an account is matched, it is that account's username. The certificate subject the event
-records (`x509_cert_subject_distinguished_name`) has its EDIPI masked the same way. **Never enable DEBUG (or TRACE) for
+records (`x509_cert_subject_distinguished_name`) has its EDIPI masked the same way. The HTTP access log records the request path WITHOUT its query string (`%m %U %H`): an admin search such as
+`users?q=cac_edipi:<EDIPI>` (the operator's uniqueness check) would otherwise write the number to the log. **Never enable DEBUG (or TRACE) for
 `org.keycloak.authentication.authenticators.x509` or `org.keycloak.services.x509` in production**: Keycloak's own debug
 lines print certificate subjects and identities. Keep those categories at INFO or above (e.g.
 `KC_LOG_LEVEL=INFO,org.keycloak.authentication.authenticators.x509:info,org.keycloak.services.x509:info`).
