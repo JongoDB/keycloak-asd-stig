@@ -95,7 +95,9 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
                         auth.getRealm().getName(), client.getClientId(), logSafe(req.getMethod()), path,
                         profile != null ? AdminApiStepUp.PROFILE_ATTR : AdminApiStepUp.OPS_ATTR);
                 req.abortWith(forbidden());
+                return;
             }
+            auditQuery(req, auth, path);
             return;
         }
         if (StigAdministrators.unvettedAdministrator(session, auth.getRealm(), auth.getUser())) {
@@ -136,6 +138,68 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
                         logSafe(req.getMethod()), path);
                 req.abortWith(forbidden());
             }
+            if (v == AdminApiStepUp.Verdict.STEP_UP || v == AdminApiStepUp.Verdict.REFUSE) return;   // refused: logged without the query
+        }
+        auditQuery(req, auth, path);
+    }
+
+    /** An ALLOWED admin request's query string, audited (STIG-ADMIN-QUERY) as maskedQuery() renders it: the access log
+     *  records the path only, since a query can carry an EDIPI (users?q=cac_edipi:...) or another concealed value.
+     *  Refused requests are logged by their refusal line, without the query. */
+    private static void auditQuery(ContainerRequestContext req, AdminAuth auth, String path) {
+        String query = req.getUriInfo().getRequestUri().getRawQuery();
+        if (query == null || query.isEmpty()) return;
+        LOG.infof("STIG-ADMIN-QUERY realm=%s user=%s client=%s %s %s?%s", auth.getRealm().getName(),
+                auth.getUser() == null ? "?" : auth.getUser().getUsername(), auth.getClient() == null ? "?" : auth.getClient().getClientId(),
+                logSafe(req.getMethod()), path,
+                logSafe(maskedQuery(query, req.getUriInfo().getQueryParameters(true), AdminAttributeConcealmentFilter.CONCEALED)));
+    }
+
+    static final String CONCEALED_MASK = "<concealed>";
+
+    /**
+     * A query string for the audit line. Fail closed against parser and decoder differentials:
+     *  - each raw parameter is decoded strictly; one that does not decode is logged as key=<concealed>;
+     *  - a parameter whose NAME is a concealed attribute: key=<concealed>;
+     *  - `q`: if a concealed attribute's name appears ANYWHERE in it - as this method decodes it, or as Keycloak decoded it
+     *    (`keycloakView`, UriInfo.getQueryParameters(true), the values Keycloak's search acts on; quotes and all), case
+     *    ignored - the WHOLE value is masked: q=<concealed>;
+     *  - any other value naming a concealed attribute (in either view): <concealed>;
+     *  - everything else: every run of four or more digits becomes "####".
+     * Pure; unit-tested.
+     */
+    static String maskedQuery(String rawQuery, java.util.Map<String, List<String>> keycloakView, List<String> concealed) {
+        java.util.function.Predicate<String> names = v -> {
+            if (v == null) return false;
+            String l = v.toLowerCase(Locale.ROOT);
+            return concealed.stream().anyMatch(a -> l.contains(a.toLowerCase(Locale.ROOT)));
+        };
+        java.util.function.Function<String, Boolean> kcNames = k -> {
+            List<String> vs = keycloakView == null ? null : keycloakView.get(k);
+            return vs != null && vs.stream().anyMatch(names::test);
+        };
+        List<String> out = new java.util.ArrayList<>();
+        for (String pair : rawQuery.split("&", -1)) {
+            int i = pair.indexOf('=');
+            String rk = i < 0 ? pair : pair.substring(0, i), rv = i < 0 ? null : pair.substring(i + 1);
+            String k = decStrict(rk), v = rv == null ? null : decStrict(rv);
+            if (k == null) { out.add("<undecodable>=" + CONCEALED_MASK); continue; }
+            if (rv != null && v == null) { out.add(digits(k) + "=" + CONCEALED_MASK); continue; }
+            boolean keyHidden = concealed.stream().anyMatch(a -> a.equalsIgnoreCase(k.trim())) || names.test(k);
+            if (keyHidden || names.test(v) || kcNames.apply(k)) { out.add(digits(k) + (v == null && !keyHidden ? "" : "=" + CONCEALED_MASK)); continue; }
+            out.add(v == null ? digits(k) : digits(k) + "=" + digits(v));
+        }
+        return String.join("&", out);
+    }
+
+    private static String digits(String s) { return AccountsPolicy.maskDigitRuns(s); }
+
+    /** Form-decoding that FAILS (null) on a malformed escape instead of keeping the raw text. */
+    private static String decStrict(String s) {
+        try {
+            return java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 
@@ -153,9 +217,14 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
     static String logSafe(String s) {
         if (s == null) return "-";
         StringBuilder b = new StringBuilder(Math.min(s.length(), 512));
-        for (int i = 0; i < s.length() && b.length() < 512; i++) {
-            char c = s.charAt(i);
-            b.append(c < 0x20 || c == 0x7f || (c >= 0x80 && c < 0xa0) || c == 0x2028 || c == 0x2029 ? '?' : c);
+        // by CODE POINT: control characters, line/paragraph separators AND format characters (Cf - U+202E, which reorders
+        // what a reader of the log sees, and the supplementary tag characters U+E0000..) all become '?'
+        for (int i = 0; i < s.length() && b.length() < 512; ) {
+            int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp < 0x20 || cp == 0x7f || (cp >= 0x80 && cp < 0xa0) || cp == 0x2028 || cp == 0x2029
+                    || Character.getType(cp) == Character.FORMAT || Character.getType(cp) == Character.SURROGATE) b.append('?');
+            else b.appendCodePoint(cp);
         }
         return b.toString();
     }

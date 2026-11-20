@@ -1549,6 +1549,12 @@ class Checker:
         self.res("server.version", "manual", "Keycloak %s - confirm it is a currently supported release" % self.caps["version"])
         ext = self.caps["extension"]
         self.res("server.extension", ext, "stig-extensions provider loaded=%s" % ext)
+        # V-222447 at runtime: the extension publishes whether the Referer audit is on (a deployment variable can switch
+        # it off whatever the image says)
+        gate = (((self.caps["info"].get("providers") or {}).get("authenticator") or {}).get("providers") or {}).get(
+            "stig-admin-allowlist-gate") or {}
+        ra = (gate.get("operationalInfo") or {}).get("referer-audit")
+        self.res("server.referer_audit", ra == "sanitised", "operationalInfo referer-audit=%s (stig-admin-allowlist-gate)" % ra)
 
     def check_live(self):
         base = self.live_url
@@ -1661,8 +1667,15 @@ def deploy_checks(results, deploy_dir):
         r("deploy.client_auth", opt("https-client-auth", "(request|required)"), "https-client-auth=request")
     if not results.get("deploy.truststore", {}).get("status") == "pass":
         r("deploy.truststore", opt("truststore-paths"), "truststore-paths (DoD PKI roots only)")
-    r("deploy.access_log", opt("http-access-log-enabled", "true") and "User-Agent" in conf,
-      "http-access-log-enabled=true with a pattern recording Referer/User-Agent")
+    # V-222447: method, path and User-Agent in the access log; the Referer either in the access-log pattern or - as this
+    # image does, since a Referer can carry a query string - recorded SANITISED by stig-extensions (STIG-REFERER lines)
+    # KEY=v, KEY: v, Helm/k8s "- name: KEY / value: v" and JSON {"name": "KEY", "value": "v"} forms alike
+    rv = r"STIG_REFERER_AUDIT[\"']?\s*[=:,]?\s*(?:[\"']?value[\"']?\s*:\s*)?[\"']?%s\b"
+    referer_off = re.search(rv % "off", conf, re.I)                       # ANY "off", anywhere, fails
+    referer_ok = not referer_off and ("%{i,Referer}" in conf or re.search(rv % "sanitised", conf, re.I))
+    r("deploy.access_log", opt("http-access-log-enabled", "true") and "User-Agent" in conf and bool(referer_ok),
+      "http-access-log-enabled=true with a pattern recording method, path and User-Agent; Referer recorded "
+      "(STIG_REFERER_AUDIT=sanitised and never =off anywhere, or %{i,Referer} in the pattern)")
     syslog = opt("log", r"[a-z,]*syslog")
     r("deploy.syslog", bool(syslog), "log handlers include syslog",
       manual_ev=None if syslog else "logs go to stdout (JSON) - confirm the platform log collector forwards them to the SIEM")

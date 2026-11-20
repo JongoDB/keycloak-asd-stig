@@ -13,9 +13,11 @@ import org.keycloak.models.RealmModel;
 
 /**
  * What an audit record shows for a card whose identity is an EDIPI: "card:******7890#1a2b3c4d" - the last four digits and
- * an 8-hex keyed hash (HMAC-SHA-256 under the realm's active HMAC key), so repeated attempts by the same card can be
- * correlated across events without the number ever being written. Without an HMAC key in the realm: the masked part
- * only. The hash is short on purpose: it correlates, it does not identify (2^32 values over a 10^10 space).
+ * an 8-hex keyed hash, so repeated attempts by the same card can be correlated across events without the number ever
+ * being written. The key is a DEDICATED subkey, HMAC-SHA-256(realm's active HMAC key, "stig-card-label-v1"), so the
+ * realm's token-signing key is never used directly for this. Activating a new HMAC key in the realm changes every tag:
+ * correlation holds within one key's lifetime only. Without an HMAC key in the realm: the masked part only. The hash is
+ * short on purpose: it correlates, it does not identify (2^32 values over a 10^10 space).
  */
 final class CardLabel {
     private CardLabel() { }
@@ -23,7 +25,20 @@ final class CardLabel {
     static String of(KeycloakSession session, RealmModel realm, String identity) {
         String masked = "card:" + AccountsPolicy.redactEdipis(identity == null ? "?" : identity);
         byte[] key = key(session, realm);
-        return key == null ? masked : masked + "#" + tag(key, identity);
+        return key == null ? masked : masked + "#" + tag(subkey(key), identity);
+    }
+
+    static final String SUBKEY_LABEL = "stig-card-label-v1";
+
+    /** The dedicated subkey: HMAC-SHA-256(realm key, "stig-card-label-v1"). */
+    static byte[] subkey(byte[] realmKey) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(realmKey, "HmacSHA256"));
+            return mac.doFinal(SUBKEY_LABEL.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** The first 4 bytes of HMAC-SHA-256(key, "stig-card:" + identity), hex. */

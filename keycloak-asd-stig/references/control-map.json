@@ -588,9 +588,10 @@
   },
   "V-222447": {
    "disposition": "SHARED",
-   "implementation": "HTTP access log enabled (--http-access-log-enabled) with a pattern capturing method, URI, Referer and User-Agent.",
+   "implementation": "HTTP access log enabled (--http-access-log-enabled) with a pattern capturing method, request path and User-Agent; the Referer is recorded sanitised by the extension (STIG-REFERER: scheme, host and path only, digits masked; STIG_REFERER_AUDIT=sanitised) and admin query strings by STIG-ADMIN-QUERY (concealed attributes and digits masked).",
    "checks": [
-    "deploy.access_log"
+    "deploy.access_log",
+    "server.referer_audit"
    ],
    "app_action": null,
    "na_condition": null,

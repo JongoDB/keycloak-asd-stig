@@ -78,6 +78,63 @@ public final class EdipiRedactionTest {
         t("... differs for another card", !CardLabel.tag(k1, "1234567890").equals(CardLabel.tag(k1, "1234567891")), "");
         t("... differs under another realm's key", !CardLabel.tag(k1, "1234567890").equals(CardLabel.tag(k2, "1234567890")), "");
         t("... 8 hex, never the number", CardLabel.tag(k1, "1234567890").matches("[0-9a-f]{8}") && !TEN.matcher(CardLabel.tag(k1, "1234567890")).find(), "");
+        t("the label key is a dedicated subkey, not the realm key itself", !java.util.Arrays.equals(CardLabel.subkey(k1), k1)
+                && CardLabel.subkey(k1).length == 32 && java.util.Arrays.equals(CardLabel.subkey(k1), CardLabel.subkey(k1)), "");
+        t("... so a tag under the subkey differs from one under the raw realm key", !CardLabel.tag(CardLabel.subkey(k1), "1234567890").equals(CardLabel.tag(k1, "1234567890")), "");
+        t("an admin query is audited with its EDIPIs masked", AccountsPolicy.redactEdipis("q=cac_edipi:1234567890&exact=true").equals("q=cac_edipi:******7890&exact=true"), "");
+        t("maskedQuery: a partial EDIPI search: the whole q masked", AdminApiGuardFilter.maskedQuery("q=cac_edipi:123456789", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("q=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("q=cac_edipi:123456789", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: an encoded full EDIPI search", AdminApiGuardFilter.maskedQuery("q=cac_edipi%3A1234567890&exact=true", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("q=<concealed>&exact=true"),
+                AdminApiGuardFilter.maskedQuery("q=cac_edipi%3A1234567890&exact=true", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: quoted name and value (Keycloak strips the quotes)", AdminApiGuardFilter.maskedQuery("q=%22cac_edipi%22:%22123%22", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("q=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("q=%22cac_edipi%22:%22123%22", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: quoted, upper case", AdminApiGuardFilter.maskedQuery("q=%22CAC_EDIPI%22%3A1", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("q=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("q=%22CAC_EDIPI%22%3A1", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: another concealed attribute's value", AdminApiGuardFilter.maskedQuery("q=entra_oid:0a1b2c3d-1111", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("q=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("q=entra_oid:0a1b2c3d-1111", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a concealed term among ordinary ones: all of q masked", AdminApiGuardFilter.maskedQuery("q=firstName:Ann+cac_upn:x%40mil", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("q=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("q=firstName:Ann+cac_upn:x%40mil", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a q naming no concealed attribute is kept", AdminApiGuardFilter.maskedQuery("q=firstName:Ann+lastName:Lee", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("q=firstName:Ann lastName:Lee"),
+                AdminApiGuardFilter.maskedQuery("q=firstName:Ann+lastName:Lee", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a concealed attribute as a parameter key", AdminApiGuardFilter.maskedQuery("cac_edipi=1234", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("cac_edipi=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("cac_edipi=1234", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: any digit run of four or more", AdminApiGuardFilter.maskedQuery("search=1234567&max=100", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("search=####&max=100"),
+                AdminApiGuardFilter.maskedQuery("search=1234567&max=100", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: digits inside a value", AdminApiGuardFilter.maskedQuery("username=bob12345&first=0", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("username=bob####&first=0"),
+                AdminApiGuardFilter.maskedQuery("username=bob12345&first=0", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a concealed name inside another value (any case)", AdminApiGuardFilter.maskedQuery("search=CAC_EDIPI%3A99", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("search=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("search=CAC_EDIPI%3A99", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: an ordinary query unchanged", AdminApiGuardFilter.maskedQuery("briefRepresentation=true", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("briefRepresentation=true"),
+                AdminApiGuardFilter.maskedQuery("briefRepresentation=true", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a malformed escape: the value concealed, never kept raw", AdminApiGuardFilter.maskedQuery("search=%zz1234", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("search=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("search=%zz1234", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a malformed escape in q", AdminApiGuardFilter.maskedQuery("q=%E0%A4%A", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("q=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("q=%E0%A4%A", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a malformed escape in the key", AdminApiGuardFilter.maskedQuery("%zz=1", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("<undecodable>=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("%zz=1", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: Keycloak's own decoding names a concealed attribute where this one does not -> concealed",
+                AdminApiGuardFilter.maskedQuery("q=harmless", java.util.Map.of("q", List.of("\"cac_edipi\":\"1\"")), AdminAttributeConcealmentFilter.DEFAULT).equals("q=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("q=harmless", java.util.Map.of("q", List.of("\"cac_edipi\":\"1\"")), AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskDigitRuns: 123-456-7890 keeps only the last four", AccountsPolicy.maskDigitRuns("123-456-7890").equals("###-###-7890"), AccountsPolicy.maskDigitRuns("123-456-7890"));
+        t("maskDigitRuns: 12-34-56-78-90 (two-digit runs) too", AccountsPolicy.maskDigitRuns("12-34-56-78-90").equals("##-##-##-78-90"), AccountsPolicy.maskDigitRuns("12-34-56-78-90"));
+        t("maskDigitRuns: non-ASCII digits (Arabic-Indic) masked as digits", AccountsPolicy.maskDigitRuns("\u0661\u0662\u0663\u0664\u0665").equals("####"),
+                AccountsPolicy.maskDigitRuns("\u0661\u0662\u0663\u0664\u0665"));
+        t("maskDigitRuns: fewer than ten digits, runs of four or more -> ####", AccountsPolicy.maskDigitRuns("a12345b123").equals("a####b123"), AccountsPolicy.maskDigitRuns("a12345b123"));
+        t("maskedQuery: a phone-style EDIPI in a value", AdminApiGuardFilter.maskedQuery("search=123-456-7890", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT).equals("search=###-###-7890"),
+                AdminApiGuardFilter.maskedQuery("search=123-456-7890", java.util.Map.of(), AdminAttributeConcealmentFilter.DEFAULT));
+        t("logSafe: a format character (U+202E) is replaced", AdminApiGuardFilter.logSafe("a\u202Eb\u200Bc").equals("a?b?c"), AdminApiGuardFilter.logSafe("a\u202Eb\u200Bc"));
+        t("referer: query and fragment dropped, digits masked", StigRefererAuditFilter.sanitise("https://idp.example/admin/x/console/?q=cac_edipi:1234567890#/users").equals("https://idp.example/admin/x/console/"),
+                StigRefererAuditFilter.sanitise("https://idp.example/admin/x/console/?q=cac_edipi:1234567890#/users"));
+        t("referer: user info dropped, port kept, path digits masked", StigRefererAuditFilter.sanitise("https://u:p@Host.example:8443/a/1234567890/b").equals("https://host.example:8443/a/######7890/b"),
+                StigRefererAuditFilter.sanitise("https://u:p@Host.example:8443/a/1234567890/b"));
+        t("referer: not an absolute http(s) URI -> <unparsable>", StigRefererAuditFilter.sanitise("javascript:alert(1)").equals("<unparsable>")
+                && StigRefererAuditFilter.sanitise("/relative?x=1").equals("<unparsable>") && StigRefererAuditFilter.sanitise("%%%").equals("<unparsable>"), "");
+        t("logSafe: a supplementary format character (TAG LATIN SMALL LETTER A, U+E0061) is replaced",
+                AdminApiGuardFilter.logSafe("a" + new String(Character.toChars(0xE0061)) + "b").equals("a?b"), AdminApiGuardFilter.logSafe("a" + new String(Character.toChars(0xE0061)) + "b"));
+        t("logSafe: a lone surrogate is replaced", AdminApiGuardFilter.logSafe("a\uD800b").equals("a?b"), AdminApiGuardFilter.logSafe("a\uD800b"));
+        t("logSafe: an ordinary supplementary character is kept", AdminApiGuardFilter.logSafe("a" + new String(Character.toChars(0x1F600)) + "b").equals("a" + new String(Character.toChars(0x1F600)) + "b"), "");
+        t("referer: digits in the host masked too", StigRefererAuditFilter.sanitise("https://id-1234567890.example/x").equals("https://id-######7890.example/x"),
+                StigRefererAuditFilter.sanitise("https://id-1234567890.example/x"));
         System.out.printf("EdipiRedactionTest: %d/%d passed%n", run - failed, run);
         if (failed > 0) System.exit(1);
     }

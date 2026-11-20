@@ -42,9 +42,14 @@ public class AdminAllowlistGateAuthenticatorFactory implements Authenticator, Au
     public static final String ADMIN_API_PROFILE_KEY = "admin-api-profile";
     public static final String ADMIN_API_PROFILE_VERSION = "2";      // 2: stig.admin-api.operations is enforced too
 
+    /** Runtime state of the sanitised Referer audit (V-222447, StigRefererAuditFilter): "sanitised" or "off". The
+     *  operator's verify and guard read it - a deployment variable can switch the audit off, so config alone is not proof. */
+    public static final String REFERER_AUDIT_KEY = "referer-audit";
+
     @Override
     public java.util.Map<String, String> getOperationalInfo() {
-        return java.util.Map.of(ROLE_EXTENT_KEY, ROLE_EXTENT_VERSION, ADMIN_API_PROFILE_KEY, ADMIN_API_PROFILE_VERSION);
+        return java.util.Map.of(ROLE_EXTENT_KEY, ROLE_EXTENT_VERSION, ADMIN_API_PROFILE_KEY, ADMIN_API_PROFILE_VERSION,
+                REFERER_AUDIT_KEY, StigRefererAuditFilter.ON ? "sanitised" : "off");
     }
 
     public static final String ID = "stig-admin-allowlist-gate";
@@ -71,7 +76,11 @@ public class AdminAllowlistGateAuthenticatorFactory implements Authenticator, Au
     @Override public void close() { }
     @Override public Authenticator create(KeycloakSession session) { return this; }
     @Override public void init(Config.Scope config) { }
-    @Override public void postInit(KeycloakSessionFactory factory) { }
+    @Override public void postInit(KeycloakSessionFactory factory) {
+        // once at start-up: whether the Referer is audited (V-222447); OFF is a finding, so it is a warning
+        if (StigRefererAuditFilter.ON) LOG.infof("STIG-REFERER-AUDIT on: the Referer is recorded sanitised (STIG-REFERER lines)");
+        else LOG.warnf("STIG-REFERER-AUDIT OFF: STIG_REFERER_AUDIT=off - the Referer is NOT recorded (V-222447 not met)");
+    }
     @Override public String getId() { return ID; }
     @Override public String getDisplayType() { return "Administrators must be on the allowlist"; }
     @Override public String getReferenceCategory() { return null; }
