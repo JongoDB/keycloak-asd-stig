@@ -311,3 +311,12 @@ The present-card step binds only when `stig.accounts.card-attribute` equals the 
 check and the step never carry a full EDIPI (last four digits). Accepted risk: the generic 409 tells a delegate whether an
 EDIPI is bound or reserved; it is capped by the hourly create limit and every attempt is logged with the caller.
 
+**EDIPIs in events and logs.** A card sign-in's login event never carries the card's identity: until an account is
+matched, its `username` detail (and the attempted username the login page may echo) is `card:******NNNN#xxxxxxxx` - the
+last four digits and an 8-hex keyed hash (HMAC-SHA-256 under the realm's active HMAC key), so repeated attempts by one card
+correlate without the number; once an account is matched, it is that account's username. The certificate subject the event
+records (`x509_cert_subject_distinguished_name`) has its EDIPI masked the same way. **Never enable DEBUG (or TRACE) for
+`org.keycloak.authentication.authenticators.x509` or `org.keycloak.services.x509` in production**: Keycloak's own debug
+lines print certificate subjects and identities. Keep those categories at INFO or above (e.g.
+`KC_LOG_LEVEL=INFO,org.keycloak.authentication.authenticators.x509:info,org.keycloak.services.x509:info`).
+

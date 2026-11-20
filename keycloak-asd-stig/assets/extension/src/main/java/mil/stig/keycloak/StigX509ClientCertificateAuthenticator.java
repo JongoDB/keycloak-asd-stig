@@ -3,7 +3,8 @@
  * Copyright Red Hat, Inc. and/or its affiliates and other contributors, Apache License 2.0
  * (http://www.apache.org/licenses/LICENSE-2.0). Changed: the brute-force (password lockout) check is removed, and the local
  * CRL step checks only the issuing CA's CRL, whose signature is verified once per file version (IssuerCrlCheck); the chain
- * validation is a method of its own, also used by PresentCardRequiredAction.
+ * validation is a method of its own, also used by PresentCardRequiredAction; no full EDIPI reaches a log line, the login
+ * event (subject DN, username) or the attempted username.
  */
 package mil.stig.keycloak;
 
@@ -72,7 +73,9 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
             }
 
             saveX509CertificateAuditDataToAuthSession(context, certs[0]);
-            recordX509CertificateAuditDataViaContextEvent(context);
+            String dn0 = context.getAuthenticationSession().getAuthNote(Details.X509_CERTIFICATE_SUBJECT_DISTINGUISHED_NAME);
+            if (dn0 != null) context.getAuthenticationSession().setAuthNote(Details.X509_CERTIFICATE_SUBJECT_DISTINGUISHED_NAME, AccountsPolicy.redactEdipis(dn0));
+            recordX509CertificateAuditDataViaContextEvent(context); redactSubject(context);
 
             X509AuthenticatorConfigModel config = null;
             if (context.getAuthenticatorConfig() != null && context.getAuthenticatorConfig().getConfig() != null) {
@@ -119,12 +122,17 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
 
             UserModel user;
             try {
-                context.getEvent().detail(Details.USERNAME, userIdentity.toString());
-                context.getAuthenticationSession().setAuthNote(AbstractUsernameFormAuthenticator.ATTEMPTED_USERNAME, userIdentity.toString());
+                // STIG: never the card's identity (an EDIPI) in the event (the jboss-logging listener writes LOGIN_ERROR to the
+                // log and the SIEM, and the event store keeps it) nor in the attempted username the login page may echo:
+                // a masked, keyed label until an account is matched, then that account's username
+                String label = CardLabel.of(context.getSession(), context.getRealm(), userIdentity.toString());
+                context.getEvent().detail(Details.USERNAME, label);
+                context.getAuthenticationSession().setAuthNote(AbstractUsernameFormAuthenticator.ATTEMPTED_USERNAME, label);
                 user = getUserIdentityToModelMapper(config).find(context, userIdentity);
+                if (user != null) context.getEvent().detail(Details.USERNAME, user.getUsername());
             }
             catch(ModelDuplicateException e) {
-                logger.errorf("STIG-CARD-REFUSED reason=more than one account holds this card (%s)", AccountsPolicy.maskEdipi(userIdentity.toString()));
+                logger.errorf("STIG-CARD-REFUSED reason=more than one account holds this card (%s)", CardLabel.of(context.getSession(), context.getRealm(), userIdentity.toString()));
                 String errorMessage = "X509 certificate authentication's failed.";
                 // TODO is calling form().setErrors enough to show errors on login screen?
                 context.challenge(createErrorResponse(context, certs[0].getSubjectDN().getName(),
@@ -260,6 +268,13 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
         return false;
     }
 
+    /** The certificate's subject in the login event (Keycloak records it) with any EDIPI masked: the jboss-logging
+     *  listener writes events to the log and the SIEM, and the event store keeps them. */
+    private static void redactSubject(AuthenticationFlowContext context) {
+        String dn = context.getAuthenticationSession().getAuthNote(Details.X509_CERTIFICATE_SUBJECT_DISTINGUISHED_NAME);
+        if (dn != null) context.getEvent().detail(Details.X509_CERTIFICATE_SUBJECT_DISTINGUISHED_NAME, AccountsPolicy.redactEdipis(dn));
+    }
+
     /** Every check a card sign-in makes on the chain (trust, CA subject, validity, key usage, policy, revocation). */
     void validate(org.keycloak.models.KeycloakSession session, X509AuthenticatorConfigModel config, X509Certificate[] certs) throws Exception {
                 // STIG: with local CRL files, the CRL step is IssuerCrlCheck (the issuing CA's CRL, signature verified once
@@ -306,7 +321,7 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
             return;
         }
         if (context.getUser() != null) {
-            recordX509CertificateAuditDataViaContextEvent(context);
+            recordX509CertificateAuditDataViaContextEvent(context); redactSubject(context);
             context.success(UserCredentialModel.CLIENT_CERT);
             return;
         }

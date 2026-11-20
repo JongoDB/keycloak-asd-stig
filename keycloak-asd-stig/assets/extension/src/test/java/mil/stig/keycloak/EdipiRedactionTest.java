@@ -73,6 +73,11 @@ public final class EdipiRedactionTest {
         t("redactEdipis: CN=DOE.JOHN.Q.1234567890 -> ******7890",
                 AccountsPolicy.redactEdipis("CN=DOE.JOHN.Q.1234567890,OU=x").equals("CN=DOE.JOHN.Q.******7890,OU=x"), AccountsPolicy.redactEdipis("CN=DOE.JOHN.Q.1234567890"));
         t("redactEdipis: short numbers untouched", AccountsPolicy.redactEdipis("CA-99 serial 1000").equals("CA-99 serial 1000"), "");
+        byte[] k1 = "realm-key-one-0123456789abcdef".getBytes(StandardCharsets.UTF_8), k2 = "realm-key-two-0123456789abcdef".getBytes(StandardCharsets.UTF_8);
+        t("card label tag: stable for one card under one key (correlates)", CardLabel.tag(k1, "1234567890").equals(CardLabel.tag(k1, "1234567890")), "");
+        t("... differs for another card", !CardLabel.tag(k1, "1234567890").equals(CardLabel.tag(k1, "1234567891")), "");
+        t("... differs under another realm's key", !CardLabel.tag(k1, "1234567890").equals(CardLabel.tag(k2, "1234567890")), "");
+        t("... 8 hex, never the number", CardLabel.tag(k1, "1234567890").matches("[0-9a-f]{8}") && !TEN.matcher(CardLabel.tag(k1, "1234567890")).find(), "");
         System.out.printf("EdipiRedactionTest: %d/%d passed%n", run - failed, run);
         if (failed > 0) System.exit(1);
     }
