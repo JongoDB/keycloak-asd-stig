@@ -129,6 +129,12 @@ public final class EdipiRedactionTest {
                 StigRefererAuditFilter.sanitise("https://u:p@Host.example:8443/a/1234567890/b"));
         t("referer: not an absolute http(s) URI -> <unparsable>", StigRefererAuditFilter.sanitise("javascript:alert(1)").equals("<unparsable>")
                 && StigRefererAuditFilter.sanitise("/relative?x=1").equals("<unparsable>") && StigRefererAuditFilter.sanitise("%%%").equals("<unparsable>"), "");
+        t("logSafe: a supplementary format character (TAG LATIN SMALL LETTER A, U+E0061) is replaced",
+                AdminApiGuardFilter.logSafe("a" + new String(Character.toChars(0xE0061)) + "b").equals("a?b"), AdminApiGuardFilter.logSafe("a" + new String(Character.toChars(0xE0061)) + "b"));
+        t("logSafe: a lone surrogate is replaced", AdminApiGuardFilter.logSafe("a\uD800b").equals("a?b"), AdminApiGuardFilter.logSafe("a\uD800b"));
+        t("logSafe: an ordinary supplementary character is kept", AdminApiGuardFilter.logSafe("a" + new String(Character.toChars(0x1F600)) + "b").equals("a" + new String(Character.toChars(0x1F600)) + "b"), "");
+        t("referer: digits in the host masked too", StigRefererAuditFilter.sanitise("https://id-1234567890.example/x").equals("https://id-######7890.example/x"),
+                StigRefererAuditFilter.sanitise("https://id-1234567890.example/x"));
         System.out.printf("EdipiRedactionTest: %d/%d passed%n", run - failed, run);
         if (failed > 0) System.exit(1);
     }

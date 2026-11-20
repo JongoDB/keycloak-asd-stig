@@ -217,12 +217,14 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
     static String logSafe(String s) {
         if (s == null) return "-";
         StringBuilder b = new StringBuilder(Math.min(s.length(), 512));
-        for (int i = 0; i < s.length() && b.length() < 512; i++) {
-            char c = s.charAt(i);
-            // control characters, line/paragraph separators AND format characters (Cf: e.g. U+202E, which reorders
-            // what a reader of the log sees) all become '?'
-            b.append(c < 0x20 || c == 0x7f || (c >= 0x80 && c < 0xa0) || c == 0x2028 || c == 0x2029
-                    || Character.getType(c) == Character.FORMAT ? '?' : c);
+        // by CODE POINT: control characters, line/paragraph separators AND format characters (Cf - U+202E, which reorders
+        // what a reader of the log sees, and the supplementary tag characters U+E0000..) all become '?'
+        for (int i = 0; i < s.length() && b.length() < 512; ) {
+            int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp < 0x20 || cp == 0x7f || (cp >= 0x80 && cp < 0xa0) || cp == 0x2028 || cp == 0x2029
+                    || Character.getType(cp) == Character.FORMAT || Character.getType(cp) == Character.SURROGATE) b.append('?');
+            else b.appendCodePoint(cp);
         }
         return b.toString();
     }

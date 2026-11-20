@@ -318,7 +318,10 @@ correlate without the number; once an account is matched, it is that account's u
 records (`x509_cert_subject_distinguished_name`) has its EDIPI masked the same way. The HTTP access log records the request path WITHOUT its query string (`%m %R %H`; `%U` would keep the query string), and
 no raw Referer (it can carry one): the extension records it sanitised instead (V-222447), `STIG-REFERER ip=<client> METHOD
 <path> referer=<scheme>://<host>[:port]<path>` (no query, fragment or user info; digits masked; the same client, method and
-path as the access log line, for correlation; `STIG_REFERER_AUDIT=sanitised`, required by `verify`): an admin search such as `users?q=cac_edipi:<EDIPI>` would otherwise write the number to the
+path as the access log line, for correlation; `STIG_REFERER_AUDIT=sanitised`, required by `verify`, which fails on ANY `STIG_REFERER_AUDIT=off` in the deployment
+config; at runtime the extension logs `STIG-REFERER-AUDIT on|OFF` at start-up (WARN when off) and publishes
+`referer-audit=sanitised|off` in the allowlist gate's operationalInfo, which the live `verify` (`server.referer_audit`)
+reads. Not covered: a request matching no JAX-RS resource (a 404 route) or a static resource outside JAX-RS): an admin search such as `users?q=cac_edipi:<EDIPI>` would otherwise write the number to the
 log. Admin-API query strings of ALLOWED requests are audited instead by the extension, `STIG-ADMIN-QUERY realm user client
 METHOD path?query`: a `q=` naming a concealed attribute anywhere (as decoded by the extension or by Keycloak, quotes and
 case ignored) is logged as `q=<concealed>`; a parameter named after, or naming, a concealed attribute gets `<concealed>`; a

@@ -17,7 +17,10 @@ import org.keycloak.utils.KeycloakSessionUtil;
  * - only scheme, host, port and path: no user info, query or fragment;
  * - digits masked as in every other audit line (AccountsPolicy.maskDigitRuns), control and format characters replaced.
  * The client address, method and raw path are the ones the access log's %h and "%m %R" print, for correlation.
- * Off only when STIG_REFERER_AUDIT=off (the deployment check requires it on).
+ * Off only when STIG_REFERER_AUDIT=off: then a WARN line STIG-REFERER-AUDIT OFF at start-up, and referer-audit=off in the
+ * server info (the allowlist gate's operationalInfo), which the operator's verify and guard read.
+ * Not covered: a request that matches no JAX-RS resource (a 404 route) or a static resource served outside JAX-RS
+ * (/resources/...) - this filter runs on matched requests only. The access log still records those (no Referer).
  */
 @Provider
 public class StigRefererAuditFilter implements ContainerRequestFilter {
@@ -47,15 +50,16 @@ public class StigRefererAuditFilter implements ContainerRequestFilter {
                 AdminApiGuardFilter.logSafe(req.getUriInfo().getRequestUri().getRawPath()), AdminApiGuardFilter.logSafe(sanitise(ref)));
     }
 
-    /** scheme://host[:port]/path of a Referer, the path's digits masked; "<unparsable>" when it is not an absolute http(s) URI. */
+    /** scheme://host[:port]/path of a Referer, the host's and the path's digits masked; "<unparsable>" when it is not an absolute http(s) URI. */
     static String sanitise(String referer) {
         try {
             URI u = new URI(referer.trim());
             String scheme = u.getScheme(), host = u.getHost();
             if (scheme == null || host == null || !(scheme.equalsIgnoreCase("https") || scheme.equalsIgnoreCase("http"))) return "<unparsable>";
             String path = u.getRawPath() == null || u.getRawPath().isEmpty() ? "/" : u.getRawPath();
-            return scheme.toLowerCase(java.util.Locale.ROOT) + "://" + host.toLowerCase(java.util.Locale.ROOT)
-                    + (u.getPort() > 0 ? ":" + u.getPort() : "") + AccountsPolicy.maskDigitRuns(path);     // the path's digits
+            // the host's and the path's digits masked (each on its own, so the port stays readable)
+            return scheme.toLowerCase(java.util.Locale.ROOT) + "://" + AccountsPolicy.maskDigitRuns(host.toLowerCase(java.util.Locale.ROOT))
+                    + (u.getPort() > 0 ? ":" + u.getPort() : "") + AccountsPolicy.maskDigitRuns(path);
         } catch (Exception e) {
             return "<unparsable>";
         }
