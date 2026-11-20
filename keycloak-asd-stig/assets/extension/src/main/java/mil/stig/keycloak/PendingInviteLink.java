@@ -24,7 +24,9 @@ import java.util.regex.Pattern;
  *     stig-accounts' signIn "entra"), its e-mail is in the configured domain, and it owes no password, OTP or passkey
  *     set-up (a password-type invite still in set-up is never claimed through the provider);
  *   - that account: carries the delegate-creation marker (stig_created_by), is enabled, has NO administrator-set
- *     binding yet, NO stored credential (password, OTP, passkey) and NO card binding, and was created no more than
+ *     binding yet, NO stored credential (password, OTP, passkey) and NO card binding - except the one card the same
+ *     stig-accounts create bound for an account invited for BOTH (stig_signin_methods cac,entra and the digest of
+ *     exactly this card in stig_card_at_create), and was created no more than
  *     max-age days ago (by Keycloak's creation time AND by the marker's own time: the older one counts).
  * After binding, the binding is the admin-set attribute like any other: a different object id for the account is
  * refused from then on (by this step and by the post-broker match).
@@ -33,20 +35,31 @@ final class PendingInviteLink {
     private PendingInviteLink() { }
 
     static final String P_DOMAIN = "stig.pending-invite-domain", P_MAX_DAYS = "stig.pending-invite-max-age-days",
-            P_UPN = "stig.vouched-upn-attribute", P_CARD = "stig.card-attribute", P_MARKER = "stig.created-by-attribute";
+            P_UPN = "stig.vouched-upn-attribute", P_CARD = "stig.card-attribute", P_MARKER = "stig.created-by-attribute",
+            P_IDP = "stig.vouched-idp-attribute", P_ACCT = "stig.vouched-acct-attribute";
     static final int DEFAULT_MAX_DAYS = 7, MAX_MAX_DAYS = 30;
     static final String PENDING_MARKER = "entra_pending";
+    /** The marker's value: fixed, so the operator's tooling finds pending invites with an exact attribute search
+     *  (q=entra_pending:pending) instead of reading every account. Their age comes from Keycloak's creation time and
+     *  the delegate marker's; a numeric value (an epoch-ms time, as earlier builds wrote) still counts as a time too. */
+    static final String PENDING_VALUE = "pending";
     static final Pattern PRINCIPAL = Pattern.compile("^[A-Za-z0-9._%+'-]{1,64}@([A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+)$");
 
     /** What the rules need to know about one candidate account. */
     record Candidate(String id, String username, String email, boolean enabled, String createdBy, String binding,
-                     boolean hasCredential, String card, Long createdMs, String pending, java.util.List<String> requiredActions) { }
+                     boolean hasCredential, String card, Long createdMs, String pending, java.util.List<String> requiredActions,
+                     boolean cardFromCreate) {
+        Candidate(String id, String username, String email, boolean enabled, String createdBy, String binding, boolean hasCredential,
+                  String card, Long createdMs, String pending, java.util.List<String> requiredActions) {
+            this(id, username, email, enabled, createdBy, binding, hasCredential, card, createdMs, pending, requiredActions, false);
+        }
+    }
     /** Set-up actions of a password-type invite: an account still owing one of them was not invited for the provider. */
     static final java.util.Set<String> PASSWORD_SETUP = java.util.Set.of("UPDATE_PASSWORD", "CONFIGURE_TOTP", "webauthn-register",
             "webauthn-register-passwordless");
 
     /** The configuration, or null when the mode is off (no domain) or misconfigured (then also off: fail closed). */
-    record Cfg(String domain, int maxDays, String upnAttr, String cardAttr, String markerAttr) { }
+    record Cfg(String domain, int maxDays, String upnAttr, String cardAttr, String markerAttr, String idpAttr, String acctAttr) { }
 
     static Cfg cfg(Map<String, String> c) {
         Map<String, String> m = c == null ? Map.of() : c;
@@ -62,7 +75,50 @@ final class PendingInviteLink {
         }
         if (days < 1 || days > MAX_MAX_DAYS) return null;
         return new Cfg(d, days, m.getOrDefault(P_UPN, "entra_vouched_upn"), m.getOrDefault(P_CARD, "cac_edipi"),
-                m.getOrDefault(P_MARKER, "stig_created_by"));
+                m.getOrDefault(P_MARKER, "stig_created_by"), m.getOrDefault(P_IDP, "entra_vouched_idp"),
+                m.getOrDefault(P_ACCT, "entra_vouched_acct"));
+    }
+
+    /**
+     * A GUEST of the tenant (B2B from another tenant, e-mail one-time passcode, a Microsoft account, a social or SAML
+     * provider) carries the tenant's tid but its preferred_username is its HOME sign-in name - possibly in the domain.
+     * Entra marks it: the `idp` claim names the provider that authenticated the person (absent for the tenant's own
+     * members, or naming the tenant itself), and the optional `acct` claim is 1 for a guest. Null = a member; else why not.
+     */
+    static String guest(String idp, String acct, String tenant) {
+        if (acct != null && !acct.isBlank() && !acct.trim().equals("0")) return "the provider reports a guest account (acct=" + acct.trim() + ")";
+        if (idp == null || idp.isBlank()) return null;
+        String i = idp.trim().toLowerCase(Locale.ROOT), t = tenant == null ? "" : tenant.trim().toLowerCase(Locale.ROOT);
+        if (!t.isEmpty() && (i.equals("https://sts.windows.net/" + t + "/") || i.equals("https://login.microsoftonline.com/" + t + "/v2.0")))
+            return null;
+        return "the provider reports a guest of the tenant (idp=" + idp.trim() + ")";
+    }
+
+    /** One identity-provider mapper, as far as the pinning rule needs it. */
+    record Mapper(String alias, String type, String claim, String target) { }
+    static final String ATTRIBUTE_MAPPER = "oidc-user-attribute-idp-mapper";
+
+    /**
+     * The vouched attributes this mode reads must come from exactly the expected claims of the provider: EXACTLY ONE
+     * mapper in the realm writes the UPN attribute, and it is the provider's attribute importer from preferred_username;
+     * the same for the idp attribute from `idp` (without it a guest would pass unseen). The acct attribute is optional
+     * (an optional claim), but if any mapper writes it, exactly one does, from `acct`. Null = pinned; else why not.
+     */
+    static String mappersPinned(Cfg c, String alias, Collection<Mapper> ms) {
+        String w = pin(c.upnAttr(), "preferred_username", alias, ms, true);
+        if (w == null) w = pin(c.idpAttr(), "idp", alias, ms, true);
+        if (w == null) w = pin(c.acctAttr(), "acct", alias, ms, false);
+        return w;
+    }
+
+    private static String pin(String attr, String claim, String alias, Collection<Mapper> ms, boolean required) {
+        List<Mapper> w = ms.stream().filter(m -> m.target() != null && m.target().trim().equalsIgnoreCase(attr)).toList();
+        if (w.isEmpty()) return required ? "no identity-provider mapper writes " + attr + " (from the " + claim + " claim)" : null;
+        if (w.size() > 1) return "more than one identity-provider mapper writes " + attr;
+        Mapper m = w.get(0);
+        if (!alias.equals(m.alias()) || !ATTRIBUTE_MAPPER.equals(m.type()) || m.claim() == null || !claim.equals(m.claim().trim()))
+            return "the mapper writing " + attr + " is not " + alias + "'s importer of the " + claim + " claim";
+        return null;
     }
 
     /** The principal name, lower-cased, when it is local@<configured domain>; else null. */
@@ -116,10 +172,13 @@ final class PendingInviteLink {
         if (!a.enabled()) return Result.refuse("the account is disabled");
         if (a.binding() != null && !a.binding().isBlank()) return Result.refuse("the account is already bound to another identity");
         if (a.hasCredential()) return Result.refuse("the account already has a credential");
-        if (a.card() != null && !a.card().isBlank()) return Result.refuse("the account has a card binding");
+        // a card binding refuses - unless it is the one the same stig-accounts create bound for an account that signs in
+        // with BOTH (cardFromCreate: the create recorded both methods and this very card's digest)
+        if (a.card() != null && !a.card().isBlank() && !a.cardFromCreate()) return Result.refuse("the account has a card binding");
         long limit = c.maxDays() * 86_400_000L;
         Long t1 = a.createdMs(), t2 = markerTime(a.createdBy()), t3 = null;
-        try { t3 = a.pending() == null ? null : Long.parseLong(a.pending().trim()); } catch (NumberFormatException e) { t3 = null; }
+        String pv = a.pending() == null ? "" : a.pending().trim();
+        if (pv.matches("[0-9]{1,15}")) t3 = Long.parseLong(pv);
         if (t1 == null && t2 == null && t3 == null) return Result.refuse("the account's creation time is unknown");
         long oldest = Math.min(Math.min(t1 == null ? Long.MAX_VALUE : t1, t2 == null ? Long.MAX_VALUE : t2), t3 == null ? Long.MAX_VALUE : t3);
         for (Long t : new Long[] {t1, t2, t3})       // any recorded time in the future: something wrote it - refuse
@@ -138,6 +197,12 @@ final class PendingInviteLink {
             new org.keycloak.provider.ProviderConfigProperty(P_UPN, "Vouched principal-name attribute",
                 "Filled by the provider's mapper from its UPN / preferred_username claim (never the e-mail claim).",
                 org.keycloak.provider.ProviderConfigProperty.STRING_TYPE, "entra_vouched_upn"),
+            new org.keycloak.provider.ProviderConfigProperty(P_IDP, "Vouched idp attribute",
+                "Filled by the provider's mapper from the idp claim; a guest of the tenant is never bound.",
+                org.keycloak.provider.ProviderConfigProperty.STRING_TYPE, "entra_vouched_idp"),
+            new org.keycloak.provider.ProviderConfigProperty(P_ACCT, "Vouched acct attribute",
+                "Optional: filled from the optional acct claim; anything but 0 (a guest) is never bound.",
+                org.keycloak.provider.ProviderConfigProperty.STRING_TYPE, "entra_vouched_acct"),
             new org.keycloak.provider.ProviderConfigProperty(P_CARD, "Card binding attribute", "An account with one is never bound here.",
                 org.keycloak.provider.ProviderConfigProperty.STRING_TYPE, "cac_edipi"),
             new org.keycloak.provider.ProviderConfigProperty(P_MARKER, "Delegate-creation marker", "Set by stig-accounts on the accounts it creates.",

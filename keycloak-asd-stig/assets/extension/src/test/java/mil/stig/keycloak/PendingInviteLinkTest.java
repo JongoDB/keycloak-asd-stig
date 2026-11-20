@@ -81,7 +81,56 @@ public final class PendingInviteLinkTest {
                 List.of(new Candidate("1", "a@example.org", "a@other.org", true, "m " + NOW, null, false, null, NOW, String.valueOf(NOW), List.of()))).contains("not in"), true);
         t("the marker's own time older than 7 days: refused", why("a@example.org",
                 List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, null, NOW, String.valueOf(NOW - 8 * DAY), List.of()))).contains("older"), true);
+        t("the fixed marker value (stig-accounts writes \"pending\"): bound, aged by the other two times", bound("a@example.org",
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + (NOW - DAY), null, false, null, NOW - DAY, PendingInviteLink.PENDING_VALUE, List.of()))), "1");
+        t("the fixed marker value on an 8-day-old account: refused", why("a@example.org",
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + (NOW - 8 * DAY), null, false, null, NOW - DAY, PendingInviteLink.PENDING_VALUE, List.of()))).contains("older"), true);
         t("a principal in another domain never binds", bound("a@other.org", List.of(invite("1", "a", "a@other.org"))), null);
+
+        // guests of the tenant (B2B, one-time passcode, Microsoft account): never bound
+        String T = "11111111-2222-3333-4444-555555555555";
+        t("a member: no idp claim", PendingInviteLink.guest(null, null, T), null);
+        t("a member: idp names the tenant itself (sts)", PendingInviteLink.guest("https://sts.windows.net/" + T + "/", null, T), null);
+        t("a member: acct 0", PendingInviteLink.guest(null, "0", T), null);
+        t("a B2B guest (idp = another tenant): refused", PendingInviteLink.guest("https://sts.windows.net/99999999-2222-3333-4444-555555555555/", null, T) != null, true);
+        t("a Microsoft-account guest (idp live.com): refused", PendingInviteLink.guest("live.com", null, T) != null, true);
+        t("an e-mail one-time-passcode guest (idp mail): refused", PendingInviteLink.guest("mail", null, T) != null, true);
+        t("acct 1 (guest), even without idp: refused", PendingInviteLink.guest(null, "1", T) != null, true);
+        // the mappers feeding it are pinned
+        PendingInviteLink.Mapper upn = new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "preferred_username", "entra_vouched_upn");
+        PendingInviteLink.Mapper idp = new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "idp", "entra_vouched_idp");
+        t("pinned: one upn mapper from preferred_username, one idp mapper from idp", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, idp)), null);
+        t("no idp mapper: refused (a guest would pass unseen)", PendingInviteLink.mappersPinned(C, "entra", List.of(upn)) != null, true);
+        t("the upn attribute from the EMAIL claim: refused", PendingInviteLink.mappersPinned(C, "entra", List.of(idp,
+                new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "email", "entra_vouched_upn"))) != null, true);
+        t("a second mapper writing the upn attribute (another provider): refused", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, idp,
+                new PendingInviteLink.Mapper("other", "hardcoded-attribute-idp-mapper", null, "entra_vouched_upn"))) != null, true);
+        t("an acct mapper from another claim: refused", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, idp,
+                new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "upn", "entra_vouched_acct"))) != null, true);
+
+        // both on one account: the create's own card binding is accepted, no other
+        t("a card bound by the SAME create for an account invited for both: bound", bound("a@example.org",
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, "1234567890", NOW, "pending", List.of(), true))), "1");
+        t("a card bound any other way (or changed since): refused", why("a@example.org",
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, "1234567890", NOW, "pending", List.of(), false))).contains("card"), true);
+        t("signIn: a string", AccountsPolicy.signInMethods("entra"), List.of("entra"));
+        t("signIn: absent = password", AccountsPolicy.signInMethods(null), List.of("password"));
+        t("signIn: [entra, cac] = both, sorted", AccountsPolicy.signInMethods(List.of("entra", "cac")), List.of("cac", "entra"));
+        t("signIn: [password, cac] refused", AccountsPolicy.signInMethods(List.of("password", "cac")), null);
+        t("signIn: [] refused", AccountsPolicy.signInMethods(List.of()), null);
+        t("signIn: [fido] refused", AccountsPolicy.signInMethods(List.of("fido")), null);
+        t("signIn: a number refused", AccountsPolicy.signInMethods(3), null);
+        t("card digest: not the EDIPI, stable", AccountsPolicy.cardDigest("r", "1234567890").equals(AccountsPolicy.cardDigest("r", "1234567890"))
+                && !AccountsPolicy.cardDigest("r", "1234567890").contains("1234567890"), true);
+
+        // stig-accounts: signIn cac
+        t("edipi: ten digits", AccountsPolicy.validEdipi("1234567890"), true);
+        t("edipi: nine digits refused", AccountsPolicy.validEdipi("123456789"), false);
+        t("edipi: letters refused", AccountsPolicy.validEdipi("12345678x0"), false);
+        t("edipi: masked to the last four", AccountsPolicy.maskEdipi("1234567890"), "******7890");
+        t("card attribute unset: no card accounts", AccountsPolicy.cardAttribute(null), null);
+        t("card attribute malformed: no card accounts", AccountsPolicy.cardAttribute("cac edipi"), null);
+        t("card attribute set", AccountsPolicy.cardAttribute("cac_edipi"), "cac_edipi");
 
         // stig-accounts: signIn entra
         t("provider domain: exact match", AccountsPolicy.providerDomainMatches("a@Example.org", "example.org"), true);

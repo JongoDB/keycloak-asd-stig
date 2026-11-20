@@ -238,6 +238,23 @@ refused exactly as without the option:
   at most the configured number of days old (Keycloak's creation time, the delegate marker's and the pending marker's;
   the oldest counts; any time in the future refuses).
 
+**Guests are never bound.** A guest of the tenant (B2B from another tenant, e-mail one-time passcode, a Microsoft
+account) carries the tenant's `tid` but its HOME sign-in name as `preferred_username`, which may well be in the domain.
+Entra marks it with the `idp` claim (absent for the tenant's members, or naming the tenant itself) and the optional `acct`
+claim (1 for a guest): map `idp` into `stig.vouched-idp-attribute` (default `entra_vouched_idp`) and, optionally, `acct`
+into `stig.vouched-acct-attribute` (default `entra_vouched_acct`); a guest is refused. The binding also refuses unless the
+mappers are pinned: EXACTLY ONE mapper in the realm writes the UPN attribute, and it is this provider's attribute importer
+of `preferred_username`; the same for the idp attribute from `idp`; if any mapper writes the acct attribute, exactly one
+does, from `acct`. Only use a domain that is one of the tenant's VERIFIED domains - only then does the tenant own every
+UPN in it.
+
+The marker's value is fixed (`entra_pending` = `pending`), so tooling finds pending invites with an exact attribute search
+(`q=entra_pending:pending`); their age comes from Keycloak's creation time and the delegate marker's.
+
+**The binding stands even if a later step fails.** The binding is written during the first-broker step; if a later step
+of the sign-in then refuses (the post-broker checks, an administrator's MFA, the session limit, the terms not accepted),
+the account stays bound to that identity and the person simply signs in again. It is never bound to anyone else.
+
 The binding happens once: a cluster-wide single-use slot per account admits one binding sign-in (a racing second one is
 refused), and the binding sets the attribute and removes the pending marker, after which the account no longer
 qualifies.
@@ -252,4 +269,24 @@ action (no password or OTP set-up), no set-up mail (`setupEmail: none`), and the
 (403) unless the address is exactly in the realm's `stig.accounts.entra-domain`. `setup-email` answers 409 for it.
 The trust added: the provider's tenant owns its UPN domain, and a user manager's invite of that address is the
 authorization; the identity is pinned on first use.
+
+### Card accounts (`"signIn": "cac"`)
+
+`stig-accounts` `POST /users` with `"signIn": "cac", "edipi": "<10 digits>"` creates an account whose card is bound at
+creation, server-side: the extension writes the realm's card attribute (realm attribute `stig.accounts.card-attribute`,
+e.g. `cac_edipi`; unset or malformed = no card accounts, 403). Only on create, for a brand-new account: a username or
+e-mail already in use, or a card already bound to ANY account (the cac-identity-guard uniqueness rule; two concurrent
+creates with one card cannot both pass), is a 409 with one generic message. Malformed EDIPI, or an `edipi` with another
+`signIn`: 400. The account gets the terms action only, no set-up mail; `setup-email` answers 409. Every other rule of the
+endpoint applies unchanged (the caller's groups, e-mail domains, the admin-API profile's step-up and `create` operation,
+the hourly limit, which a 409 also spends). The EDIPI never appears in full in a log line, an admin event or the answer
+(`******1234`). Binding a card to an EXISTING account stays with realm administrators (cac-identity-guard).
+
+### Both on one account (`"signIn": ["entra", "cac"]`)
+
+A list asks for both: the create binds the card (as above) AND marks the account pending for the provider, records
+`stig_signin_methods` = `cac,entra` (admin-only; every create records its methods) and `stig_card_at_create` = SHA-256 of
+realm id + ":" + EDIPI (admin-only and concealed). The first provider sign-in then accepts that ONE card binding: the
+methods say both and the digest is of the card the account holds now. A card bound later, changed since, or bound by any
+other path keeps the refusal. Plain string forms are unchanged.
 

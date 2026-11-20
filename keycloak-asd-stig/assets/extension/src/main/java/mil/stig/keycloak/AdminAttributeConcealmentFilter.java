@@ -37,7 +37,7 @@ import org.keycloak.utils.KeycloakSessionUtil;
 @Provider
 public class AdminAttributeConcealmentFilter implements ContainerResponseFilter {
     static final List<String> DEFAULT = List.of("cac_edipi", "cac_upn", "cac_cn", "cac_subject_dn", "alt_token_upn", "entra_oid",
-            "entra_vouched_oid", "entra_vouched_tid", "entra_amr", "stig_created_by");
+            "entra_vouched_oid", "entra_vouched_tid", "entra_amr", "stig_created_by", "stig_card_at_create");
     static final List<String> CONCEALED = configured();
 
     static List<String> configured() {

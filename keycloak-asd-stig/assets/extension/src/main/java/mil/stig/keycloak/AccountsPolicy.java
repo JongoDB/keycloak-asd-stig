@@ -33,6 +33,53 @@ final class AccountsPolicy {
         if (email == null || domain == null || domain.isBlank() || email.indexOf('@') < 0) return false;
         return email.substring(email.lastIndexOf('@') + 1).equalsIgnoreCase(domain.trim());
     }
+    /** "signIn" value of a create for an account that signs in only with a card (CAC/PIV), bound at creation. */
+    static final String SIGN_IN_CARD = "cac";
+    /** Realm attribute: the user attribute the realm's X.509 step maps a card to (e.g. cac_edipi). Unset or malformed:
+     *  stig-accounts makes no card accounts (fail closed). */
+    static final String CARD_ATTRIBUTE = "stig.accounts.card-attribute";
+    static final Pattern ATTR_NAME = Pattern.compile("^[a-z][a-z0-9_]{0,63}$");
+    /** A DoD EDIPI: exactly ten digits. */
+    static final Pattern EDIPI = Pattern.compile("^[0-9]{10}$");
+    static boolean validEdipi(String e) { return e != null && EDIPI.matcher(e).matches(); }
+    /** The realm's card attribute, or null (no card accounts) when unset, blank or malformed. */
+    static String cardAttribute(String v) { return v != null && ATTR_NAME.matcher(v.trim()).matches() ? v.trim() : null; }
+    /** An EDIPI for a log line or an admin event: the last four digits at most. */
+    static String maskEdipi(String e) { return e == null || e.length() < 4 ? "****" : "******" + e.substring(e.length() - 4); }
+    /** Admin-only attribute stig-accounts writes on every create: the sign-in methods the create intended, sorted,
+     *  comma-separated (password | cac | entra | cac,entra). */
+    static final String SIGNIN_METHODS = "stig_signin_methods";
+    /** Admin-only (and concealed) attribute: the digest of the card a create bound for an account that ALSO signs in
+     *  through the provider. The first provider sign-in accepts that card binding only while it is still this one. */
+    static final String CARD_AT_CREATE = "stig_card_at_create";
+    /** SHA-256 (hex) of realm id + ":" + EDIPI: not the EDIPI itself (only ten digits, so it stays concealed too). */
+    static String cardDigest(String realmId, String edipi) {
+        try {
+            byte[] d = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest((realmId + ":" + edipi).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder b = new StringBuilder();
+            for (byte x : d) b.append(String.format("%02x", x));
+            return b.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+    /** The sign-in methods a create asks for ("signIn": a string or a list), sorted; null when invalid. Allowed:
+     *  password alone (the default), entra, cac, or entra and cac together. */
+    static java.util.List<String> signInMethods(Object v) {
+        java.util.TreeSet<String> m = new java.util.TreeSet<>();
+        if (v == null) m.add("password");
+        else if (v instanceof String s) m.add(s.trim());
+        else if (v instanceof java.util.Collection<?> c && !c.isEmpty() && c.size() <= 3) {
+            for (Object x : c) { if (!(x instanceof String s)) return null; m.add(s.trim()); }
+        } else return null;
+        java.util.List<String> out = new java.util.ArrayList<>(m);
+        if (out.equals(java.util.List.of("password")) || out.equals(java.util.List.of(SIGN_IN_CARD))
+                || out.equals(java.util.List.of(SIGN_IN_PROVIDER)) || out.equals(java.util.List.of(SIGN_IN_CARD, SIGN_IN_PROVIDER))) return out;
+        return null;
+    }
+    /** The 409 of a card create: one message whichever of username, e-mail address or card is taken. */
+    static final String CARD_CONFLICT = "username, e-mail address or card already in use";
     /** The rate window in seconds: a sliding hour (a slot frees itself this long after it was claimed). */
     static final int RATE_WINDOW = 3600;
     /** At most this many accounts disabled per caller in any 60 minutes (a stolen session cannot empty a tree at once). */

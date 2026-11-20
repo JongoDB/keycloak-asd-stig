@@ -91,6 +91,21 @@ public class IdpLinkByAdminAttributeAuthenticatorFactory extends AbstractIdpAuth
     private void bindPendingInvite(AuthenticationFlowContext context, BrokeredIdentityContext broker, AdminBoundIdentity id,
                                    PendingInviteLink.Cfg pc, String alias, String vouched) {
         KeycloakSession session = context.getSession(); RealmModel realm = context.getRealm();
+        // the attributes read here come from exactly the expected claims of this provider, and never from a guest
+        List<PendingInviteLink.Mapper> ms = new ArrayList<>();
+        session.identityProviders().getMappersStream().forEach(m -> {
+            Map<String, String> mc = m.getConfig() == null ? Map.of() : m.getConfig();
+            for (String k : AdminBoundIdentity.MAPPER_TARGET_KEYS)          // every attribute any key of it writes
+                if (mc.get(k) != null && !mc.get(k).isBlank())
+                    ms.add(new PendingInviteLink.Mapper(m.getIdentityProviderAlias(), m.getIdentityProviderMapper(), mc.get("claim"), mc.get(k)));
+        });
+        String why = PendingInviteLink.mappersPinned(pc, alias, ms);
+        if (why == null) why = PendingInviteLink.guest(AdminBoundIdentity.first(broker, pc.idpAttr()),
+                AdminBoundIdentity.first(broker, pc.acctAttr()), id.tenant);
+        if (why != null) {
+            refuse(context, broker, "no account carries this " + id.adminAttr + ", and no pending invite may be bound: " + why);
+            return;
+        }
         String upn = AdminBoundIdentity.first(broker, pc.upnAttr());
         String principal = PendingInviteLink.principal(pc, upn);
         Map<String, UserModel> users = new LinkedHashMap<>();
@@ -107,7 +122,7 @@ public class IdpLinkByAdminAttributeAuthenticatorFactory extends AbstractIdpAuth
                     u.getFirstAttribute(pc.markerAttr()), u.getFirstAttribute(id.adminAttr),
                     u.credentialManager().getStoredCredentialsStream().findAny().isPresent(),
                     u.getFirstAttribute(pc.cardAttr()), u.getCreatedTimestamp(), u.getFirstAttribute(PendingInviteLink.PENDING_MARKER),
-                    u.getRequiredActionsStream().collect(Collectors.toList())));
+                    u.getRequiredActionsStream().collect(Collectors.toList()), cardFromCreate(realm, u, pc.cardAttr())));
         }
         PendingInviteLink.Result r = PendingInviteLink.decide(pc, upn, cands, Time.currentTimeMillis());
         if (r.id() == null) {
@@ -132,6 +147,17 @@ public class IdpLinkByAdminAttributeAuthenticatorFactory extends AbstractIdpAuth
                 new ExistingUserInfo(user.getId(), id.adminAttr, vouched).serialize());
         context.setUser(user);
         context.success();
+    }
+
+    /** The account's card binding is the one its stig-accounts create bound for an account invited for both. */
+    static boolean cardFromCreate(RealmModel realm, UserModel u, String cardAttr) {
+        String card = u.getFirstAttribute(cardAttr), digest = u.getFirstAttribute(AccountsPolicy.CARD_AT_CREATE),
+               methods = u.getFirstAttribute(AccountsPolicy.SIGNIN_METHODS);
+        if (card == null || digest == null || methods == null) return false;
+        List<String> ms = List.of(methods.split(","));
+        return ms.contains(AccountsPolicy.SIGN_IN_CARD) && ms.contains(AccountsPolicy.SIGN_IN_PROVIDER)
+                && java.security.MessageDigest.isEqual(digest.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        AccountsPolicy.cardDigest(realm.getId(), card.trim()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     /** An admin event (UPDATE USER, attributed to the account itself, from the sign-in's address) recording the binding. */
