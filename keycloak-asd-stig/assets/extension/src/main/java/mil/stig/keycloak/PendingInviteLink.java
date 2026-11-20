@@ -101,13 +101,13 @@ final class PendingInviteLink {
     /**
      * The vouched attributes this mode reads must come from exactly the expected claims of the provider: EXACTLY ONE
      * mapper in the realm writes the UPN attribute, and it is the provider's attribute importer from preferred_username;
-     * the same for the idp attribute from `idp` (without it a guest would pass unseen). The acct attribute is optional
-     * (an optional claim), but if any mapper writes it, exactly one does, from `acct`. Null = pinned; else why not.
+     * the same for the idp attribute from `idp` (without it a guest would pass unseen) and the acct attribute from `acct`
+     * (an optional claim the provider sends only when configured; required as a mapper so it is never silently ignored). Null = pinned; else why not.
      */
     static String mappersPinned(Cfg c, String alias, Collection<Mapper> ms) {
         String w = pin(c.upnAttr(), "preferred_username", alias, ms, true);
         if (w == null) w = pin(c.idpAttr(), "idp", alias, ms, true);
-        if (w == null) w = pin(c.acctAttr(), "acct", alias, ms, false);
+        if (w == null) w = pin(c.acctAttr(), "acct", alias, ms, true);       // required too: guests are not told by idp alone
         return w;
     }
 

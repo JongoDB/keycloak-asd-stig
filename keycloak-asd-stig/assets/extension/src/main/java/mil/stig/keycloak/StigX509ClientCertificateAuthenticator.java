@@ -31,7 +31,6 @@ import org.keycloak.models.ModelDuplicateException;
 import org.keycloak.models.UserCredentialModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.utils.FormMessage;
-import org.keycloak.services.ServicesLogger;
 
 import org.jboss.logging.Logger;
 
@@ -94,7 +93,9 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
             try {
                 validate(context.getSession(), config, certs);
             } catch(Exception e) {
-                logger.error(e.getMessage(), e);
+                // STIG: a fixed reason and the subject with any EDIPI masked - never the raw message (it may carry the DN)
+                logger.errorf("STIG-CARD-REFUSED reason=certificate not valid (%s: %s) subject=%s", e.getClass().getSimpleName(),
+                        AccountsPolicy.redactEdipis(String.valueOf(e.getMessage())), AccountsPolicy.redactEdipis(certs[0].getSubjectX500Principal().getName()));
                 // TODO use specific locale to load error messages
                 String errorMessage = "Certificate validation's failed.";
                 // TODO is calling form().setErrors enough to show errors on login screen?
@@ -123,7 +124,7 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
                 user = getUserIdentityToModelMapper(config).find(context, userIdentity);
             }
             catch(ModelDuplicateException e) {
-                ServicesLogger.LOGGER.modelDuplicateException(e);
+                logger.errorf("STIG-CARD-REFUSED reason=more than one account holds this card (%s)", AccountsPolicy.maskEdipi(userIdentity.toString()));
                 String errorMessage = "X509 certificate authentication's failed.";
                 // TODO is calling form().setErrors enough to show errors on login screen?
                 context.challenge(createErrorResponse(context, certs[0].getSubjectDN().getName(),
@@ -183,7 +184,7 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
             }
         }
         catch(Exception e) {
-            logger.errorf(e, "[authenticate] Exception: %s", e.getMessage());
+            logger.errorf("[authenticate] %s: %s", e.getClass().getName(), AccountsPolicy.redactEdipis(String.valueOf(e.getMessage())));
             context.attempted();
         }
     }

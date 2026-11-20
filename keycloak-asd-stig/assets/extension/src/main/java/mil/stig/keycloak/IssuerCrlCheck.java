@@ -299,7 +299,7 @@ final class IssuerCrlCheck {
             }
             if (issuerKey == null) {
                 log.errorf("STIG-CRL-NO-PATH no truststore certificate named \"%s\" verifies \"%s\": certification path cannot be built",
-                        cert.getIssuerX500Principal().getName(), cert.getSubjectX500Principal().getName());
+                        AccountsPolicy.redactEdipis(cert.getIssuerX500Principal().getName()), AccountsPolicy.redactEdipis(cert.getSubjectX500Principal().getName()));
                 throw new GeneralSecurityException("Certification path cannot be built through the truststore");
             }
             if (!seenKeys.add(key(issuerKey))) continue;            // that CA was handled already (or a loop)
@@ -320,7 +320,7 @@ final class IssuerCrlCheck {
         String what = isCa ? "issuing CA certificate" : "certificate";
         for (Failure f : failed) {
             if (issuer.equals(f.issuer)) {
-                log.errorf("STIG-CRL-UNREADABLE the CRL of \"%s\" (%s) cannot be used: %s refused", issuer.getName(), f.path, what);
+                log.errorf("STIG-CRL-UNREADABLE the CRL of \"%s\" (%s) cannot be used: %s refused", AccountsPolicy.redactEdipis(issuer.getName()), f.path, what);
                 throw new GeneralSecurityException("CRL of the certificate's issuer is not usable");
             }
         }
@@ -328,7 +328,7 @@ final class IssuerCrlCheck {
         for (Loaded l : loaded) if (l.issuer.equals(issuer)) mine.add(l);
         if (mine.isEmpty()) {
             log.errorf("STIG-CRL-NO-ISSUER-CRL no usable CRL is issued by \"%s\": %s \"%s\" refused (add that CA's CRL)",
-                    issuer.getName(), what, cert.getSubjectX500Principal().getName());
+                    AccountsPolicy.redactEdipis(issuer.getName()), what, AccountsPolicy.redactEdipis(cert.getSubjectX500Principal().getName()));
             throw new GeneralSecurityException("No CRL available for the certificate's issuer");
         }
         for (Loaded l : mine) {
@@ -339,21 +339,22 @@ final class IssuerCrlCheck {
                 throw new GeneralSecurityException("CRL of the certificate's issuer is not usable");
             }
             if (l.crl.getThisUpdate() != null && l.crl.getThisUpdate().getTime() > now + CLOCK_SKEW_MS) {
-                log.errorf("STIG-CRL-REJECTED CRL of \"%s\" has thisUpdate %s in the future", issuer.getName(), l.crl.getThisUpdate());
+                log.errorf("STIG-CRL-REJECTED CRL of \"%s\" has thisUpdate %s in the future", AccountsPolicy.redactEdipis(issuer.getName()), l.crl.getThisUpdate());
                 throw new GeneralSecurityException("CRL is not yet valid");
             }
             if ((isCa && l.onlyUserCerts) || (!isCa && l.onlyCaCerts)) {
-                log.errorf("STIG-CRL-REJECTED CRL of \"%s\" does not cover %s certificates (issuingDistributionPoint)", issuer.getName(), isCa ? "CA" : "end-entity");
+                log.errorf("STIG-CRL-REJECTED CRL of \"%s\" does not cover %s certificates (issuingDistributionPoint)", AccountsPolicy.redactEdipis(issuer.getName()), isCa ? "CA" : "end-entity");
                 throw new GeneralSecurityException("CRL scope does not cover the certificate");
             }
             Date next = l.crl.getNextUpdate();
             if (next != null && next.getTime() < now) {
-                log.warnf("CRL of \"%s\" is not refreshed. Next update is %s.", issuer.getName(), next);
+                log.warnf("CRL of \"%s\" is not refreshed. Next update is %s.", AccountsPolicy.redactEdipis(issuer.getName()), next);
                 if (abortIfNonUpdated) throw new GeneralSecurityException("CRL is not refreshed");
             }
             if (l.crl.isRevoked(cert)) {
-                log.debugf("Certificate has been revoked, certificate's subject: %s", cert.getSubjectX500Principal().getName());
-                throw new GeneralSecurityException("Certificate has been revoked, certificate's subject: " + cert.getSubjectX500Principal().getName());
+                String subj = AccountsPolicy.redactEdipis(cert.getSubjectX500Principal().getName());   // never a full EDIPI in a log
+                log.debugf("Certificate has been revoked, certificate's subject: %s", subj);
+                throw new GeneralSecurityException("Certificate has been revoked, certificate's subject: " + subj);
             }
         }
     }
@@ -363,7 +364,7 @@ final class IssuerCrlCheck {
         Long last = ALARMED.get(f);
         if (last != null && now - last < 60_000L) return;             // once a minute per file, not once per sign-in
         ALARMED.put(f, now);
-        String who = issuer == null ? "" : " (issuer \"" + issuer.getName() + "\")";
+        String who = issuer == null ? "" : " (issuer \"" + AccountsPolicy.redactEdipis(issuer.getName()) + "\")";
         if (e instanceof java.nio.file.NoSuchFileException) {
             // expected right after a start in online mode: Keycloak (and the realm's CRL list) is up before crl-fetch
             // has downloaded the files into the fresh data directory. That CA's cards fail closed until it arrives.
@@ -450,7 +451,7 @@ final class IssuerCrlCheck {
         if (crl == null) throw new GeneralSecurityException("not a CRL");
         X500Principal issuer = crl.getIssuerX500Principal();
         boolean[] scope = structure(crl, issuer);
-        log.debugf("CRL \"%s\" read: issuer \"%s\", next update %s", f, issuer.getName(), crl.getNextUpdate());
+        log.debugf("CRL \"%s\" read: issuer \"%s\", next update %s", f, AccountsPolicy.redactEdipis(issuer.getName()), crl.getNextUpdate());
         return new Loaded(v, crl, scope[0], scope[1], der);
     }
 

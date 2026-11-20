@@ -44,6 +44,9 @@ final class AccountsPolicy {
     static boolean validEdipi(String e) { return e != null && EDIPI.matcher(e).matches(); }
     /** The realm's card attribute, or null (no card accounts) when unset, blank or malformed. */
     static String cardAttribute(String v) { return v != null && ATTR_NAME.matcher(v.trim()).matches() ? v.trim() : null; }
+    /** Any EDIPI-like run (10 or more digits) in a text - a certificate subject (CN=LAST.FIRST.MI.<EDIPI>), an exception
+     *  message - reduced to its last four digits, for log lines. */
+    static String redactEdipis(String s) { return s == null ? null : s.replaceAll("\\d{6,}(\\d{4})", "******$1"); }
     /** An EDIPI for a log line or an admin event: the last four digits at most. */
     static String maskEdipi(String e) { return e == null || e.length() < 4 ? "****" : "******" + e.substring(e.length() - 4); }
     /** Admin-only attribute stig-accounts writes on every create: the sign-in methods the create intended, sorted,

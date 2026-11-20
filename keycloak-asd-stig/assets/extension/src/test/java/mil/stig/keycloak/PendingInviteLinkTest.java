@@ -99,13 +99,19 @@ public final class PendingInviteLinkTest {
         // the mappers feeding it are pinned
         PendingInviteLink.Mapper upn = new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "preferred_username", "entra_vouched_upn");
         PendingInviteLink.Mapper idp = new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "idp", "entra_vouched_idp");
-        t("pinned: one upn mapper from preferred_username, one idp mapper from idp", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, idp)), null);
-        t("no idp mapper: refused (a guest would pass unseen)", PendingInviteLink.mappersPinned(C, "entra", List.of(upn)) != null, true);
-        t("the upn attribute from the EMAIL claim: refused", PendingInviteLink.mappersPinned(C, "entra", List.of(idp,
+        PendingInviteLink.Mapper acc = new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "acct", "entra_vouched_acct");
+        t("pinned: one mapper each for preferred_username, idp and acct", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, idp, acc)), null);
+        t("no acct mapper: refused (guest detection must not rest on idp alone)", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, idp)) != null, true);
+        t("x509 steps: one configuration -> pinned", PresentCardRequiredAction.pinned(List.of(Map.of("a", "1"))), Map.of("a", "1"));
+        t("x509 steps: two identical -> pinned", PresentCardRequiredAction.pinned(List.of(Map.of("a", "1"), Map.of("a", "1"))), Map.of("a", "1"));
+        t("x509 steps: two that differ -> none (refuse)", PresentCardRequiredAction.pinned(List.of(Map.of("a", "1"), Map.of("a", "2"))), null);
+        t("x509 steps: none -> none", PresentCardRequiredAction.pinned(List.of()), null);
+        t("no idp mapper: refused (a guest would pass unseen)", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, acc)) != null, true);
+        t("the upn attribute from the EMAIL claim: refused", PendingInviteLink.mappersPinned(C, "entra", List.of(acc, idp,
                 new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "email", "entra_vouched_upn"))) != null, true);
-        t("a second mapper writing the upn attribute (another provider): refused", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, idp,
+        t("a second mapper writing the upn attribute (another provider): refused", PendingInviteLink.mappersPinned(C, "entra", List.of(acc, upn, idp,
                 new PendingInviteLink.Mapper("other", "hardcoded-attribute-idp-mapper", null, "entra_vouched_upn"))) != null, true);
-        t("an acct mapper from another claim: refused", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, idp,
+        t("an acct mapper from another claim: refused", PendingInviteLink.mappersPinned(C, "entra", List.of(acc, upn, idp,
                 new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "upn", "entra_vouched_acct"))) != null, true);
 
         // both on one account: the create's own card binding is accepted, no other

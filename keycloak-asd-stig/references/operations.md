@@ -241,11 +241,10 @@ refused exactly as without the option:
 **Guests are never bound.** A guest of the tenant (B2B from another tenant, e-mail one-time passcode, a Microsoft
 account) carries the tenant's `tid` but its HOME sign-in name as `preferred_username`, which may well be in the domain.
 Entra marks it with the `idp` claim (absent for the tenant's members, or naming the tenant itself) and the optional `acct`
-claim (1 for a guest): map `idp` into `stig.vouched-idp-attribute` (default `entra_vouched_idp`) and, optionally, `acct`
-into `stig.vouched-acct-attribute` (default `entra_vouched_acct`); a guest is refused. The binding also refuses unless the
+claim (1 for a guest): map `idp` into `stig.vouched-idp-attribute` (default `entra_vouched_idp`) and `acct` into
+`stig.vouched-acct-attribute` (default `entra_vouched_acct`; ask the provider to send that optional claim); a guest is refused. The binding also refuses unless the
 mappers are pinned: EXACTLY ONE mapper in the realm writes the UPN attribute, and it is this provider's attribute importer
-of `preferred_username`; the same for the idp attribute from `idp`; if any mapper writes the acct attribute, exactly one
-does, from `acct`. Only use a domain that is one of the tenant's VERIFIED domains - only then does the tenant own every
+of `preferred_username`; the same for the idp attribute from `idp` and the acct attribute from `acct`. Only use a domain that is one of the tenant's VERIFIED domains - only then does the tenant own every
 UPN in it.
 
 The marker's value is fixed (`entra_pending` = `pending`), so tooling finds pending invites with an exact attribute search
@@ -305,4 +304,10 @@ card gives only the victim access.
 `signIn` forms: absent (password, set-up mail; `lifespan` optional), `"password"`, `"entra"`, `"cac"`, or a list of
 `entra` and/or `cac` in any order, each once. An empty list, a duplicate, `password` in a list: 400. A `lifespan` with
 any form but password: 400 (there is no set-up mail to time).
+
+The present-card step binds only when `stig.accounts.card-attribute` equals the browser flow's X.509 step's
+`x509-cert-auth.mapper-selection.user-attribute-name`, and every X.509 step in that flow carries the same configuration
+(else nothing is bound and `STIG-CARD-PRESENT-MISCONFIGURED` is logged). Log lines of the card sign-in, the issuer-CRL
+check and the step never carry a full EDIPI (last four digits). Accepted risk: the generic 409 tells a delegate whether an
+EDIPI is bound or reserved; it is capped by the hourly create limit and every attempt is logged with the caller.
 

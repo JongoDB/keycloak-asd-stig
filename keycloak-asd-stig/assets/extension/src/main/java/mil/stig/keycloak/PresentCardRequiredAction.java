@@ -124,15 +124,24 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
         }
         X509Certificate[] certs = chain(context);
         if (certs == null || certs.length == 0) { context.challenge(page(context, "No card was presented.")); return; }
+        // the card must be bound to the attribute the realm's X.509 step maps cards by - else a bound card would open nothing
+        // (or another account): refuse to bind on any mismatch or ambiguity, and leave the pending value for the operator
+        AuthenticatorConfigModel cfg = x509Config(realm);
+        if (cfg == null || cfg.getConfig() == null || !ca.equals(cfg.getConfig().get(USER_ATTR_KEY))) {
+            LOG.errorf("STIG-CARD-PRESENT-MISCONFIGURED realm=%s user=%s: %s - nothing bound", realm.getName(), u.getUsername(),
+                    cfg == null ? "the browser flow has no X.509 step, or several that differ"
+                                : "stig.accounts.card-attribute " + ca + " is not the X.509 step's user attribute " + cfg.getConfig().get(USER_ATTR_KEY));
+            context.success();
+            return;
+        }
         String identity;
         try {
-            AuthenticatorConfigModel cfg = x509Config(realm);
-            if (cfg == null) throw new IllegalStateException("the realm's browser flow has no configured X.509 step");
             Authenticator a = ((AuthenticatorFactory) session.getKeycloakSessionFactory()
                     .getProviderFactory(Authenticator.class, StigX509ClientCertificateAuthenticatorFactory.PROVIDER_ID)).create(session);
             identity = ((StigX509ClientCertificateAuthenticator) a).validatedIdentity(session, cfg, certs);
         } catch (Exception e) {
-            LOG.warnf("STIG-CARD-PRESENT-INVALID realm=%s user=%s: %s", realm.getName(), u.getUsername(), e.getMessage());
+            LOG.warnf("STIG-CARD-PRESENT-INVALID realm=%s user=%s reason=card not valid (%s) subject=%s", realm.getName(), u.getUsername(),
+                    e.getClass().getSimpleName(), AccountsPolicy.redactEdipis(certs[0].getSubjectX500Principal().getName()));
             context.challenge(page(context, "That card could not be validated."));
             return;
         }
@@ -155,23 +164,32 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
         context.success();
     }
 
-    /** The X.509 step's configuration in the realm's browser flow (its sub-flows included). */
+    static final String USER_ATTR_KEY = "x509-cert-auth.mapper-selection.user-attribute-name";
+
+    /** The X.509 step's configuration in the realm's browser flow (its sub-flows included). Pinned: when the flow holds
+     *  several X.509 steps, they must all carry the SAME configuration (else null: refuse rather than pick one). */
     static AuthenticatorConfigModel x509Config(RealmModel realm) {
-        return realm.getBrowserFlow() == null ? null : find(realm, realm.getBrowserFlow().getId(), 0);
+        if (realm.getBrowserFlow() == null) return null;
+        List<AuthenticatorConfigModel> all = new java.util.ArrayList<>();
+        find(realm, realm.getBrowserFlow().getId(), 0, all);
+        return pinned(all.stream().map(c -> c == null ? null : c.getConfig()).toList()) == null ? null : all.get(0);
     }
 
-    private static AuthenticatorConfigModel find(RealmModel realm, String flowId, int depth) {
-        if (depth > 8) return null;
+    /** The one configuration all X.509 steps share, or null (none, one without a configuration, or two that differ). */
+    static java.util.Map<String, String> pinned(List<java.util.Map<String, String>> cfgs) {
+        if (cfgs.isEmpty() || cfgs.stream().anyMatch(java.util.Objects::isNull)) return null;
+        return cfgs.stream().allMatch(c -> c.equals(cfgs.get(0))) ? cfgs.get(0) : null;
+    }
+
+    private static void find(RealmModel realm, String flowId, int depth, List<AuthenticatorConfigModel> out) {
+        if (depth > 8) return;
         for (AuthenticationExecutionModel e : (Iterable<AuthenticationExecutionModel>) realm.getAuthenticationExecutionsStream(flowId)::iterator) {
             if (e.isAuthenticatorFlow()) {
-                AuthenticatorConfigModel c = find(realm, e.getFlowId(), depth + 1);
-                if (c != null) return c;
-            } else if (List.of(StigX509ClientCertificateAuthenticatorFactory.PROVIDER_ID, "auth-x509-client-username-form").contains(e.getAuthenticator())
-                    && e.getAuthenticatorConfig() != null) {
-                return realm.getAuthenticatorConfigById(e.getAuthenticatorConfig());
+                find(realm, e.getFlowId(), depth + 1, out);
+            } else if (List.of(StigX509ClientCertificateAuthenticatorFactory.PROVIDER_ID, "auth-x509-client-username-form").contains(e.getAuthenticator())) {
+                out.add(e.getAuthenticatorConfig() == null ? null : realm.getAuthenticatorConfigById(e.getAuthenticatorConfig()));
             }
         }
-        return null;
     }
 
     private static void audit(RequiredActionContext context, String representation) {
