@@ -231,9 +231,16 @@ binding attribute, a vouched object id) and NO account carries that object id; t
 refused exactly as without the option:
 - the vouched principal name is `local@<domain>` (the provider's UPN claim, never its e-mail claim);
 - exactly one account has it as username or e-mail (case-insensitive);
-- that account carries the delegate-creation marker, is enabled, has no binding, no stored credential and no card
-  binding, and is at most the configured number of days old (Keycloak's creation time and the marker's time; the older
-  counts; a time in the future refuses).
+- that account was invited FOR the provider: it carries the `entra_pending` marker (only `stig-accounts`' `"signIn":
+  "entra"` sets it), its e-mail is in the domain, and it owes no password, OTP or passkey set-up - a password-type
+  invite still in set-up is never claimed through the provider;
+- it carries the delegate-creation marker, is enabled, has no binding, no stored credential and no card binding, and is
+  at most the configured number of days old (Keycloak's creation time, the delegate marker's and the pending marker's;
+  the oldest counts; any time in the future refuses).
+
+The binding happens once: a cluster-wide single-use slot per account admits one binding sign-in (a racing second one is
+refused), and the binding sets the attribute and removes the pending marker, after which the account no longer
+qualifies.
 
 On success the binding attribute is set, the `entra_pending` marker removed, an admin event recorded (UPDATE USER,
 attributed to the account, with the binding in its representation, which the concealment filter hides from

@@ -106,7 +106,8 @@ public class IdpLinkByAdminAttributeAuthenticatorFactory extends AbstractIdpAuth
             cands.add(new PendingInviteLink.Candidate(u.getId(), u.getUsername(), u.getEmail(), u.isEnabled(),
                     u.getFirstAttribute(pc.markerAttr()), u.getFirstAttribute(id.adminAttr),
                     u.credentialManager().getStoredCredentialsStream().findAny().isPresent(),
-                    u.getFirstAttribute(pc.cardAttr()), u.getCreatedTimestamp()));
+                    u.getFirstAttribute(pc.cardAttr()), u.getCreatedTimestamp(), u.getFirstAttribute(PendingInviteLink.PENDING_MARKER),
+                    u.getRequiredActionsStream().collect(Collectors.toList())));
         }
         PendingInviteLink.Result r = PendingInviteLink.decide(pc, upn, cands, Time.currentTimeMillis());
         if (r.id() == null) {
@@ -114,6 +115,12 @@ public class IdpLinkByAdminAttributeAuthenticatorFactory extends AbstractIdpAuth
             return;
         }
         UserModel user = users.get(r.id());
+        // ONCE: two first sign-ins racing for the same invite - only the one that claims this slot binds (atomic in
+        // the cluster cache); the other is refused, and after the binding the account no longer qualifies anyway
+        if (!session.singleUseObjects().putIfAbsent("stig-pending-invite-bind:" + realm.getId() + ":" + user.getId(), 300)) {
+            refuse(context, broker, "this pending invite is being bound by another sign-in");
+            return;
+        }
         // the binding becomes the administrator-set attribute, exactly as `link-entra` would set it: unique (checked
         // just above: no account carries it), fixed from now on; the pending marker goes
         user.setSingleAttribute(id.adminAttr, vouched);

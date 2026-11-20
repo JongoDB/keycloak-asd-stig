@@ -20,6 +20,9 @@ import java.util.regex.Pattern;
  *     into a dedicated attribute - never the mutable e-mail claim) of the form local@domain with domain = the
  *     configured one (case-insensitive);
  *   - EXACTLY ONE account has that principal name as its username or its e-mail on record (case-insensitive);
+ *   - that account was invited FOR the provider: it carries the pending marker (entra_pending, set only by
+ *     stig-accounts' signIn "entra"), its e-mail is in the configured domain, and it owes no password, OTP or passkey
+ *     set-up (a password-type invite still in set-up is never claimed through the provider);
  *   - that account: carries the delegate-creation marker (stig_created_by), is enabled, has NO administrator-set
  *     binding yet, NO stored credential (password, OTP, passkey) and NO card binding, and was created no more than
  *     max-age days ago (by Keycloak's creation time AND by the marker's own time: the older one counts).
@@ -37,7 +40,10 @@ final class PendingInviteLink {
 
     /** What the rules need to know about one candidate account. */
     record Candidate(String id, String username, String email, boolean enabled, String createdBy, String binding,
-                     boolean hasCredential, String card, Long createdMs) { }
+                     boolean hasCredential, String card, Long createdMs, String pending, java.util.List<String> requiredActions) { }
+    /** Set-up actions of a password-type invite: an account still owing one of them was not invited for the provider. */
+    static final java.util.Set<String> PASSWORD_SETUP = java.util.Set.of("UPDATE_PASSWORD", "CONFIGURE_TOTP", "webauthn-register",
+            "webauthn-register-passwordless");
 
     /** The configuration, or null when the mode is off (no domain) or misconfigured (then also off: fail closed). */
     record Cfg(String domain, int maxDays, String upnAttr, String cardAttr, String markerAttr) { }
@@ -101,15 +107,23 @@ final class PendingInviteLink {
         if (byId.size() > 1) return Result.refuse("more than one account has " + p + " as its username or e-mail");
         Candidate a = byId.values().iterator().next();
         if (a.createdBy() == null || a.createdBy().isBlank()) return Result.refuse("the account was not created by a delegated user manager");
+        if (a.pending() == null || a.pending().isBlank()) return Result.refuse("the account was not invited to sign in through the provider (no " + PENDING_MARKER + ")");
+        if (a.email() == null || a.email().indexOf('@') < 0
+                || !a.email().substring(a.email().lastIndexOf('@') + 1).equalsIgnoreCase(c.domain()))
+            return Result.refuse("the account's e-mail is not in " + c.domain());
+        if (a.requiredActions() != null && a.requiredActions().stream().anyMatch(PASSWORD_SETUP::contains))
+            return Result.refuse("the account is a password-type invite still in set-up");
         if (!a.enabled()) return Result.refuse("the account is disabled");
         if (a.binding() != null && !a.binding().isBlank()) return Result.refuse("the account is already bound to another identity");
         if (a.hasCredential()) return Result.refuse("the account already has a credential");
         if (a.card() != null && !a.card().isBlank()) return Result.refuse("the account has a card binding");
         long limit = c.maxDays() * 86_400_000L;
-        Long t1 = a.createdMs(), t2 = markerTime(a.createdBy());
-        if (t1 == null && t2 == null) return Result.refuse("the account's creation time is unknown");
-        long oldest = Math.min(t1 == null ? Long.MAX_VALUE : t1, t2 == null ? Long.MAX_VALUE : t2);
-        if (oldest > nowMs + 60_000L) return Result.refuse("the account's creation time is in the future");
+        Long t1 = a.createdMs(), t2 = markerTime(a.createdBy()), t3 = null;
+        try { t3 = a.pending() == null ? null : Long.parseLong(a.pending().trim()); } catch (NumberFormatException e) { t3 = null; }
+        if (t1 == null && t2 == null && t3 == null) return Result.refuse("the account's creation time is unknown");
+        long oldest = Math.min(Math.min(t1 == null ? Long.MAX_VALUE : t1, t2 == null ? Long.MAX_VALUE : t2), t3 == null ? Long.MAX_VALUE : t3);
+        for (Long t : new Long[] {t1, t2, t3})       // any recorded time in the future: something wrote it - refuse
+            if (t != null && t > nowMs + 60_000L) return Result.refuse("the account's creation time is in the future");
         if (nowMs - oldest > limit) return Result.refuse("the invitation is older than " + c.maxDays() + " days");
         return Result.bind(a.id());
     }

@@ -15,7 +15,7 @@ public final class PendingInviteLinkTest {
     }
     static final PendingInviteLink.Cfg C = PendingInviteLink.cfg(Map.of(PendingInviteLink.P_DOMAIN, "example.org"));
     static Candidate invite(String id, String username, String email) {
-        return new Candidate(id, username, email, true, "mgr.one " + (NOW - DAY), null, false, null, NOW - DAY);
+        return new Candidate(id, username, email, true, "mgr.one " + (NOW - DAY), null, false, null, NOW - DAY, String.valueOf(NOW - DAY), List.of("TERMS_AND_CONDITIONS"));
     }
     static String why(String upn, List<Candidate> cs) { return PendingInviteLink.decide(C, upn, cs, NOW).refusal(); }
     static String bound(String upn, List<Candidate> cs) { return PendingInviteLink.decide(C, upn, cs, NOW).id(); }
@@ -43,7 +43,7 @@ public final class PendingInviteLinkTest {
         // the happy path
         t("ONE pending invite whose e-mail is the principal: bound", bound("jane.doe@example.org", List.of(invite("1", "jane.doe", "jane.doe@example.org"))), "1");
         t("... matched case-insensitively", bound("JANE.DOE@example.org", List.of(invite("1", "jane.doe", "Jane.Doe@Example.org"))), "1");
-        t("... or whose USERNAME is the principal", bound("jane.doe@example.org", List.of(invite("1", "jane.doe@example.org", null))), "1");
+        t("... or whose USERNAME is the principal", bound("jane.doe@example.org", List.of(invite("1", "jane.doe@example.org", "j.doe@example.org"))), "1");
         t("the same account found by username AND e-mail counts once", bound("j@example.org",
                 List.of(invite("1", "j@example.org", "j@example.org"), invite("1", "j@example.org", "j@example.org"))), "1");
 
@@ -53,25 +53,34 @@ public final class PendingInviteLinkTest {
                 bound("robert@example.org", List.of(invite("1", "bob", "bob@example.org"))), null);
         t("two accounts match: refused", why("j@example.org", List.of(invite("1", "j@example.org", null), invite("2", "j.x", "j@example.org"))).contains("more than one"), true);
         t("not created by a delegate (no marker): refused", why("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", true, null, null, false, null, NOW))).contains("delegated"), true);
+                List.of(new Candidate("1", "a", "a@example.org", true, null, null, false, null, NOW, String.valueOf(NOW - DAY), List.of()))).contains("delegated"), true);
         t("disabled: refused", why("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", false, "m " + NOW, null, false, null, NOW))).contains("disabled"), true);
+                List.of(new Candidate("1", "a", "a@example.org", false, "m " + NOW, null, false, null, NOW, String.valueOf(NOW - DAY), List.of()))).contains("disabled"), true);
         t("already bound (another object id): refused", why("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, "11111111-1111-1111-1111-111111111111", false, null, NOW))).contains("already bound"), true);
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, "11111111-1111-1111-1111-111111111111", false, null, NOW, String.valueOf(NOW - DAY), List.of()))).contains("already bound"), true);
         t("has a credential: refused", why("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, true, null, NOW))).contains("credential"), true);
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, true, null, NOW, String.valueOf(NOW - DAY), List.of()))).contains("credential"), true);
         t("has a card binding: refused", why("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, "1234567890", NOW))).contains("card"), true);
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, "1234567890", NOW, String.valueOf(NOW - DAY), List.of()))).contains("card"), true);
         t("older than 7 days by Keycloak's creation time: refused", why("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, null, NOW - 8 * DAY))).contains("older"), true);
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, null, NOW - 8 * DAY, String.valueOf(NOW - DAY), List.of()))).contains("older"), true);
         t("older than 7 days by the marker's time (Keycloak's is recent): refused", why("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", true, "m " + (NOW - 8 * DAY), null, false, null, NOW))).contains("older"), true);
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + (NOW - 8 * DAY), null, false, null, NOW, String.valueOf(NOW - DAY), List.of()))).contains("older"), true);
         t("exactly 7 days old: still bound", bound("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", true, "m " + (NOW - 7 * DAY), null, false, null, NOW - 7 * DAY))), "1");
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + (NOW - 7 * DAY), null, false, null, NOW - 7 * DAY, String.valueOf(NOW - DAY), List.of()))), "1");
         t("a creation time in the future: refused", why("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", true, "m " + (NOW + DAY), null, false, null, NOW + DAY))).contains("future"), true);
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + (NOW + DAY), null, false, null, NOW + DAY, String.valueOf(NOW - DAY), List.of()))).contains("future"), true);
         t("no creation time at all: refused", why("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", true, "m", null, false, null, null))).contains("unknown"), true);
+                List.of(new Candidate("1", "a", "a@example.org", true, "m", null, false, null, null, "yes", List.of()))).contains("unknown"), true);
+        t("no pending marker (a password-type invite): refused", why("a@example.org",
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, null, NOW, null, List.of()))).contains("not invited"), true);
+        t("a password-type invite still in set-up (UPDATE_PASSWORD, CONFIGURE_TOTP), even WITH the marker: refused", why("a@example.org",
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, null, NOW, String.valueOf(NOW),
+                        List.of("UPDATE_PASSWORD", "CONFIGURE_TOTP", "TERMS_AND_CONDITIONS")))).contains("password-type"), true);
+        t("the account's e-mail outside the domain (matched by USERNAME only): refused", why("a@example.org",
+                List.of(new Candidate("1", "a@example.org", "a@other.org", true, "m " + NOW, null, false, null, NOW, String.valueOf(NOW), List.of()))).contains("not in"), true);
+        t("the marker's own time older than 7 days: refused", why("a@example.org",
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, null, NOW, String.valueOf(NOW - 8 * DAY), List.of()))).contains("older"), true);
         t("a principal in another domain never binds", bound("a@other.org", List.of(invite("1", "a", "a@other.org"))), null);
 
         // stig-accounts: signIn entra
