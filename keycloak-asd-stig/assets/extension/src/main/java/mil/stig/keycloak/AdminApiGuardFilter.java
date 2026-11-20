@@ -151,46 +151,55 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
         if (query == null || query.isEmpty()) return;
         LOG.infof("STIG-ADMIN-QUERY realm=%s user=%s client=%s %s %s?%s", auth.getRealm().getName(),
                 auth.getUser() == null ? "?" : auth.getUser().getUsername(), auth.getClient() == null ? "?" : auth.getClient().getClientId(),
-                logSafe(req.getMethod()), path, logSafe(maskedQuery(query, AdminAttributeConcealmentFilter.CONCEALED)));
+                logSafe(req.getMethod()), path,
+                logSafe(maskedQuery(query, req.getUriInfo().getQueryParameters(true), AdminAttributeConcealmentFilter.CONCEALED)));
     }
 
     static final String CONCEALED_MASK = "<concealed>";
 
-    /** A raw query string for the audit line: each parameter decoded; one NAMING a concealed attribute (as its key, or as
-     *  a `q=` term `attr:value`) keeps the name with a fixed mask instead of its value; in everything else every run of
-     *  four or more digits becomes "####" (a partial EDIPI search, an id). Pure; unit-tested. */
-    static String maskedQuery(String rawQuery, List<String> concealed) {
-        java.util.function.Predicate<String> hidden = k -> k != null && concealed.stream().anyMatch(a -> a.equalsIgnoreCase(k.trim()));
+    /**
+     * A query string for the audit line. Fail closed against parser and decoder differentials:
+     *  - each raw parameter is decoded strictly; one that does not decode is logged as key=<concealed>;
+     *  - a parameter whose NAME is a concealed attribute: key=<concealed>;
+     *  - `q`: if a concealed attribute's name appears ANYWHERE in it - as this method decodes it, or as Keycloak decoded it
+     *    (`keycloakView`, UriInfo.getQueryParameters(true), the values Keycloak's search acts on; quotes and all), case
+     *    ignored - the WHOLE value is masked: q=<concealed>;
+     *  - any other value naming a concealed attribute (in either view): <concealed>;
+     *  - everything else: every run of four or more digits becomes "####".
+     * Pure; unit-tested.
+     */
+    static String maskedQuery(String rawQuery, java.util.Map<String, List<String>> keycloakView, List<String> concealed) {
+        java.util.function.Predicate<String> names = v -> {
+            if (v == null) return false;
+            String l = v.toLowerCase(Locale.ROOT);
+            return concealed.stream().anyMatch(a -> l.contains(a.toLowerCase(Locale.ROOT)));
+        };
+        java.util.function.Function<String, Boolean> kcNames = k -> {
+            List<String> vs = keycloakView == null ? null : keycloakView.get(k);
+            return vs != null && vs.stream().anyMatch(names::test);
+        };
         List<String> out = new java.util.ArrayList<>();
         for (String pair : rawQuery.split("&", -1)) {
             int i = pair.indexOf('=');
-            String k = dec(i < 0 ? pair : pair.substring(0, i)), v = i < 0 ? null : dec(pair.substring(i + 1));
-            if (hidden.test(k)) { out.add(digits(k) + "=" + CONCEALED_MASK); continue; }
-            if (v == null) { out.add(digits(k)); continue; }
-            if ("q".equals(k)) {
-                List<String> terms = new java.util.ArrayList<>();
-                for (String t : v.trim().split("\\s+")) {
-                    int c = t.indexOf(':');
-                    String ak = c < 0 ? t : t.substring(0, c);
-                    terms.add(hidden.test(ak) ? digits(ak) + ":" + CONCEALED_MASK : digits(t));
-                }
-                out.add("q=" + String.join(" ", terms));
-                continue;
-            }
-            // a concealed name inside any other value (e.g. search=cac_edipi...) hides that value too
-            String lv = v.toLowerCase(Locale.ROOT);
-            out.add(digits(k) + "=" + (concealed.stream().anyMatch(a -> lv.contains(a.toLowerCase(Locale.ROOT))) ? CONCEALED_MASK : digits(v)));
+            String rk = i < 0 ? pair : pair.substring(0, i), rv = i < 0 ? null : pair.substring(i + 1);
+            String k = decStrict(rk), v = rv == null ? null : decStrict(rv);
+            if (k == null) { out.add("<undecodable>=" + CONCEALED_MASK); continue; }
+            if (rv != null && v == null) { out.add(digits(k) + "=" + CONCEALED_MASK); continue; }
+            boolean keyHidden = concealed.stream().anyMatch(a -> a.equalsIgnoreCase(k.trim())) || names.test(k);
+            if (keyHidden || names.test(v) || kcNames.apply(k)) { out.add(digits(k) + (v == null && !keyHidden ? "" : "=" + CONCEALED_MASK)); continue; }
+            out.add(v == null ? digits(k) : digits(k) + "=" + digits(v));
         }
         return String.join("&", out);
     }
 
     private static String digits(String s) { return s == null ? null : s.replaceAll("[0-9]{4,}", "####"); }
 
-    private static String dec(String s) {
+    /** Form-decoding that FAILS (null) on a malformed escape instead of keeping the raw text. */
+    private static String decStrict(String s) {
         try {
             return java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8);
         } catch (IllegalArgumentException e) {
-            return s;                          // malformed escape: kept raw (still masked)
+            return null;
         }
     }
 

@@ -318,8 +318,9 @@ correlate without the number; once an account is matched, it is that account's u
 records (`x509_cert_subject_distinguished_name`) has its EDIPI masked the same way. The HTTP access log records the request path WITHOUT its query string (`%m %R %H`; `%U` would keep the query string), and
 no Referer (it can carry one): an admin search such as `users?q=cac_edipi:<EDIPI>` would otherwise write the number to the
 log. Admin-API query strings of ALLOWED requests are audited instead by the extension, `STIG-ADMIN-QUERY realm user client
-METHOD path?query`: a parameter or `q=` term naming a concealed attribute keeps its name with `<concealed>` for the
-value, and every other run of four or more digits becomes `####`. A refused request is logged by its refusal line,
+METHOD path?query`: a `q=` naming a concealed attribute anywhere (as decoded by the extension or by Keycloak, quotes and
+case ignored) is logged as `q=<concealed>`; a parameter named after, or naming, a concealed attribute gets `<concealed>`; a
+value that does not decode cleanly gets `<concealed>`; every other run of four or more digits becomes `####`. A refused request is logged by its refusal line,
 without the query. Card labels use a dedicated subkey derived from the realm's
 active HMAC key (`stig-card-label-v1`): activating a new HMAC key changes every label, so correlation holds within one
 key's lifetime. **Never enable DEBUG (or TRACE) for
