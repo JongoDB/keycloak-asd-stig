@@ -64,14 +64,17 @@ final class AccountsPolicy {
             throw new IllegalStateException(e);
         }
     }
-    /** The sign-in methods a create asks for ("signIn": a string or a list), sorted; null when invalid. Allowed:
-     *  password alone (the default), entra, cac, or entra and cac together. */
+    /** The sign-in methods a create asks for, sorted; null when invalid. "signIn" absent: password (set-up mail); a
+     *  string: "password", "entra" or "cac"; a list: entra and/or cac, in any order, each once - an empty list, a
+     *  duplicate, "password" or anything else in a list is invalid. */
     static java.util.List<String> signInMethods(Object v) {
         java.util.TreeSet<String> m = new java.util.TreeSet<>();
         if (v == null) m.add("password");
         else if (v instanceof String s) m.add(s.trim());
-        else if (v instanceof java.util.Collection<?> c && !c.isEmpty() && c.size() <= 3) {
-            for (Object x : c) { if (!(x instanceof String s)) return null; m.add(s.trim()); }
+        else if (v instanceof java.util.Collection<?> c && !c.isEmpty() && c.size() <= 2) {
+            for (Object x : c) {
+                if (!(x instanceof String s) || !m.add(s.trim()) || s.trim().equals("password")) return null;
+            }
         } else return null;
         java.util.List<String> out = new java.util.ArrayList<>(m);
         if (out.equals(java.util.List.of("password")) || out.equals(java.util.List.of(SIGN_IN_CARD))

@@ -290,3 +290,7 @@ realm id + ":" + EDIPI (admin-only and concealed). The first provider sign-in th
 methods say both and the digest is of the card the account holds now. A card bound later, changed since, or bound by any
 other path keeps the refusal. Plain string forms are unchanged.
 
+`signIn` forms: absent (password, set-up mail; `lifespan` optional), `"password"`, `"entra"`, `"cac"`, or a list of
+`entra` and/or `cac` in any order, each once. An empty list, a duplicate, `password` in a list: 400. A `lifespan` with
+any form but password: 400 (there is no set-up mail to time).
+

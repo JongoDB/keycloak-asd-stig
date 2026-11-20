@@ -244,6 +244,9 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                         + AccountsPolicy.SIGN_IN_CARD + " or [" + AccountsPolicy.SIGN_IN_PROVIDER + ", " + AccountsPolicy.SIGN_IN_CARD + "]");
             }
             String signIn = String.join(",", methods);
+            // a set-up link's lifetime means nothing without a set-up mail: refused rather than silently ignored
+            if (!methods.equals(List.of("password")) && (lifespanB != null))
+                return err(Response.Status.BAD_REQUEST, "lifespan is only for a password account's set-up mail");
             boolean viaProvider = methods.contains(AccountsPolicy.SIGN_IN_PROVIDER);
             boolean viaCard = methods.contains(AccountsPolicy.SIGN_IN_CARD);
             // "signIn": "cac": the card is bound HERE, at creation only, to a brand-new account - stig-accounts never

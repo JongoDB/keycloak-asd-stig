@@ -118,6 +118,10 @@ public final class PendingInviteLinkTest {
         t("signIn: [entra, cac] = both, sorted", AccountsPolicy.signInMethods(List.of("entra", "cac")), List.of("cac", "entra"));
         t("signIn: [password, cac] refused", AccountsPolicy.signInMethods(List.of("password", "cac")), null);
         t("signIn: [] refused", AccountsPolicy.signInMethods(List.of()), null);
+        t("signIn: [cac, entra] (the other order) = both", AccountsPolicy.signInMethods(List.of("cac", "entra")), List.of("cac", "entra"));
+        t("signIn: [entra, entra] (a duplicate) refused", AccountsPolicy.signInMethods(List.of("entra", "entra")), null);
+        t("signIn: [password] (password in a list) refused", AccountsPolicy.signInMethods(List.of("password")), null);
+        t("signIn: [entra] (one in a list) = entra", AccountsPolicy.signInMethods(List.of("entra")), List.of("entra"));
         t("signIn: [fido] refused", AccountsPolicy.signInMethods(List.of("fido")), null);
         t("signIn: a number refused", AccountsPolicy.signInMethods(3), null);
         t("card digest: not the EDIPI, stable", AccountsPolicy.cardDigest("r", "1234567890").equals(AccountsPolicy.cardDigest("r", "1234567890"))
