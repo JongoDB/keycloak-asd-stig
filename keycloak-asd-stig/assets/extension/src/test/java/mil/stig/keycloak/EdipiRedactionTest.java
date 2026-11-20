@@ -82,6 +82,26 @@ public final class EdipiRedactionTest {
                 && CardLabel.subkey(k1).length == 32 && java.util.Arrays.equals(CardLabel.subkey(k1), CardLabel.subkey(k1)), "");
         t("... so a tag under the subkey differs from one under the raw realm key", !CardLabel.tag(CardLabel.subkey(k1), "1234567890").equals(CardLabel.tag(k1, "1234567890")), "");
         t("an admin query is audited with its EDIPIs masked", AccountsPolicy.redactEdipis("q=cac_edipi:1234567890&exact=true").equals("q=cac_edipi:******7890&exact=true"), "");
+        t("maskedQuery: a partial EDIPI search (9 digits)", AdminApiGuardFilter.maskedQuery("q=cac_edipi:123456789", AdminAttributeConcealmentFilter.DEFAULT).equals("q=cac_edipi:<concealed>"),
+                AdminApiGuardFilter.maskedQuery("q=cac_edipi:123456789", AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: an encoded full EDIPI search", AdminApiGuardFilter.maskedQuery("q=cac_edipi%3A1234567890&exact=true", AdminAttributeConcealmentFilter.DEFAULT).equals("q=cac_edipi:<concealed>&exact=true"),
+                AdminApiGuardFilter.maskedQuery("q=cac_edipi%3A1234567890&exact=true", AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: another concealed attribute's value", AdminApiGuardFilter.maskedQuery("q=entra_oid:0a1b2c3d-1111", AdminAttributeConcealmentFilter.DEFAULT).equals("q=entra_oid:<concealed>"),
+                AdminApiGuardFilter.maskedQuery("q=entra_oid:0a1b2c3d-1111", AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a concealed term among ordinary ones", AdminApiGuardFilter.maskedQuery("q=firstName:Ann+cac_upn:x%40mil", AdminAttributeConcealmentFilter.DEFAULT).equals("q=firstName:Ann cac_upn:<concealed>"),
+                AdminApiGuardFilter.maskedQuery("q=firstName:Ann+cac_upn:x%40mil", AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a concealed attribute as a parameter key", AdminApiGuardFilter.maskedQuery("cac_edipi=1234", AdminAttributeConcealmentFilter.DEFAULT).equals("cac_edipi=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("cac_edipi=1234", AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: any digit run of four or more", AdminApiGuardFilter.maskedQuery("search=1234567&max=100", AdminAttributeConcealmentFilter.DEFAULT).equals("search=####&max=100"),
+                AdminApiGuardFilter.maskedQuery("search=1234567&max=100", AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: digits inside a value", AdminApiGuardFilter.maskedQuery("username=bob12345&first=0", AdminAttributeConcealmentFilter.DEFAULT).equals("username=bob####&first=0"),
+                AdminApiGuardFilter.maskedQuery("username=bob12345&first=0", AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a concealed name inside another value (any case)", AdminApiGuardFilter.maskedQuery("search=CAC_EDIPI%3A99", AdminAttributeConcealmentFilter.DEFAULT).equals("search=<concealed>"),
+                AdminApiGuardFilter.maskedQuery("search=CAC_EDIPI%3A99", AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: an ordinary query unchanged", AdminApiGuardFilter.maskedQuery("briefRepresentation=true", AdminAttributeConcealmentFilter.DEFAULT).equals("briefRepresentation=true"),
+                AdminApiGuardFilter.maskedQuery("briefRepresentation=true", AdminAttributeConcealmentFilter.DEFAULT));
+        t("maskedQuery: a malformed escape still masked", AdminApiGuardFilter.maskedQuery("search=%zz1234", AdminAttributeConcealmentFilter.DEFAULT).equals("search=%zz####"),
+                AdminApiGuardFilter.maskedQuery("search=%zz1234", AdminAttributeConcealmentFilter.DEFAULT));
         System.out.printf("EdipiRedactionTest: %d/%d passed%n", run - failed, run);
         if (failed > 0) System.exit(1);
     }

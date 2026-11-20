@@ -84,15 +84,6 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
             }
         }
         if (auth == null || auth.getRealm() == null) return;
-        // the access log keeps the path only (a query string can carry an EDIPI: users?q=cac_edipi:...); the query is
-        // audited HERE instead, with every run of ten or more digits reduced to its last four, so admin searches stay
-        // auditable without the numbers
-        String query = req.getUriInfo().getRequestUri().getQuery();
-        if (query != null && !query.isEmpty()) {
-            LOG.infof("STIG-ADMIN-QUERY realm=%s user=%s client=%s %s %s?%s", auth.getRealm().getName(),
-                    auth.getUser() == null ? "?" : auth.getUser().getUsername(), auth.getClient() == null ? "?" : auth.getClient().getClientId(),
-                    logSafe(req.getMethod()), path, logSafe(AccountsPolicy.redactEdipis(query)));
-        }
         ClientModel client = auth.getClient();
         String profile = client == null ? null : client.getAttribute(AdminApiStepUp.PROFILE_ATTR);
         String opsAttr = client == null ? null : client.getAttribute(AdminApiStepUp.OPS_ATTR);
@@ -104,7 +95,9 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
                         auth.getRealm().getName(), client.getClientId(), logSafe(req.getMethod()), path,
                         profile != null ? AdminApiStepUp.PROFILE_ATTR : AdminApiStepUp.OPS_ATTR);
                 req.abortWith(forbidden());
+                return;
             }
+            auditQuery(req, auth, path);
             return;
         }
         if (StigAdministrators.unvettedAdministrator(session, auth.getRealm(), auth.getUser())) {
@@ -145,6 +138,59 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
                         logSafe(req.getMethod()), path);
                 req.abortWith(forbidden());
             }
+            if (v == AdminApiStepUp.Verdict.STEP_UP || v == AdminApiStepUp.Verdict.REFUSE) return;   // refused: logged without the query
+        }
+        auditQuery(req, auth, path);
+    }
+
+    /** An ALLOWED admin request's query string, audited (STIG-ADMIN-QUERY) as maskedQuery() renders it: the access log
+     *  records the path only, since a query can carry an EDIPI (users?q=cac_edipi:...) or another concealed value.
+     *  Refused requests are logged by their refusal line, without the query. */
+    private static void auditQuery(ContainerRequestContext req, AdminAuth auth, String path) {
+        String query = req.getUriInfo().getRequestUri().getRawQuery();
+        if (query == null || query.isEmpty()) return;
+        LOG.infof("STIG-ADMIN-QUERY realm=%s user=%s client=%s %s %s?%s", auth.getRealm().getName(),
+                auth.getUser() == null ? "?" : auth.getUser().getUsername(), auth.getClient() == null ? "?" : auth.getClient().getClientId(),
+                logSafe(req.getMethod()), path, logSafe(maskedQuery(query, AdminAttributeConcealmentFilter.CONCEALED)));
+    }
+
+    static final String CONCEALED_MASK = "<concealed>";
+
+    /** A raw query string for the audit line: each parameter decoded; one NAMING a concealed attribute (as its key, or as
+     *  a `q=` term `attr:value`) keeps the name with a fixed mask instead of its value; in everything else every run of
+     *  four or more digits becomes "####" (a partial EDIPI search, an id). Pure; unit-tested. */
+    static String maskedQuery(String rawQuery, List<String> concealed) {
+        java.util.function.Predicate<String> hidden = k -> k != null && concealed.stream().anyMatch(a -> a.equalsIgnoreCase(k.trim()));
+        List<String> out = new java.util.ArrayList<>();
+        for (String pair : rawQuery.split("&", -1)) {
+            int i = pair.indexOf('=');
+            String k = dec(i < 0 ? pair : pair.substring(0, i)), v = i < 0 ? null : dec(pair.substring(i + 1));
+            if (hidden.test(k)) { out.add(digits(k) + "=" + CONCEALED_MASK); continue; }
+            if (v == null) { out.add(digits(k)); continue; }
+            if ("q".equals(k)) {
+                List<String> terms = new java.util.ArrayList<>();
+                for (String t : v.trim().split("\\s+")) {
+                    int c = t.indexOf(':');
+                    String ak = c < 0 ? t : t.substring(0, c);
+                    terms.add(hidden.test(ak) ? digits(ak) + ":" + CONCEALED_MASK : digits(t));
+                }
+                out.add("q=" + String.join(" ", terms));
+                continue;
+            }
+            // a concealed name inside any other value (e.g. search=cac_edipi...) hides that value too
+            String lv = v.toLowerCase(Locale.ROOT);
+            out.add(digits(k) + "=" + (concealed.stream().anyMatch(a -> lv.contains(a.toLowerCase(Locale.ROOT))) ? CONCEALED_MASK : digits(v)));
+        }
+        return String.join("&", out);
+    }
+
+    private static String digits(String s) { return s == null ? null : s.replaceAll("[0-9]{4,}", "####"); }
+
+    private static String dec(String s) {
+        try {
+            return java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            return s;                          // malformed escape: kept raw (still masked)
         }
     }
 
