@@ -109,10 +109,10 @@ public final class PendingInviteLinkTest {
                 new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "upn", "entra_vouched_acct"))) != null, true);
 
         // both on one account: the create's own card binding is accepted, no other
-        t("a card bound by the SAME create for an account invited for both: bound", bound("a@example.org",
-                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, "1234567890", NOW, "pending", List.of(), true))), "1");
-        t("a card bound any other way (or changed since): refused", why("a@example.org",
+        t("any card binding refuses (an Entra + card invite only NAMES its card)", why("a@example.org",
                 List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, "1234567890", NOW, "pending", List.of(), false))).contains("card"), true);
+        t("an account already signed into (a session): refused", why("a@example.org",
+                List.of(new Candidate("1", "a", "a@example.org", true, "m " + NOW, null, false, null, NOW, "pending", List.of(), true))).contains("signed into"), true);
         t("signIn: a string", AccountsPolicy.signInMethods("entra"), List.of("entra"));
         t("signIn: absent = password", AccountsPolicy.signInMethods(null), List.of("password"));
         t("signIn: [entra, cac] = both, sorted", AccountsPolicy.signInMethods(List.of("entra", "cac")), List.of("cac", "entra"));
@@ -124,8 +124,10 @@ public final class PendingInviteLinkTest {
         t("signIn: [entra] (one in a list) = entra", AccountsPolicy.signInMethods(List.of("entra")), List.of("entra"));
         t("signIn: [fido] refused", AccountsPolicy.signInMethods(List.of("fido")), null);
         t("signIn: a number refused", AccountsPolicy.signInMethods(3), null);
-        t("card digest: not the EDIPI, stable", AccountsPolicy.cardDigest("r", "1234567890").equals(AccountsPolicy.cardDigest("r", "1234567890"))
-                && !AccountsPolicy.cardDigest("r", "1234567890").contains("1234567890"), true);
+        t("pending card: live within 7 days", AccountsPolicy.pendingExpired(NOW - DAY, null, NOW), false);
+        t("pending card: expired after 7 days (Keycloak's time)", AccountsPolicy.pendingExpired(NOW - 8 * DAY, null, NOW), true);
+        t("pending card: expired after 7 days (the marker's time)", AccountsPolicy.pendingExpired(NOW - DAY, NOW - 8 * DAY, NOW), true);
+        t("pending card: no time known = expired (never bound)", AccountsPolicy.pendingExpired(null, null, NOW), true);
 
         // stig-accounts: signIn cac
         t("edipi: ten digits", AccountsPolicy.validEdipi("1234567890"), true);

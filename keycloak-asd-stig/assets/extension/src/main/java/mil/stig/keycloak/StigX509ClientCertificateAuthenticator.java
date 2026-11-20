@@ -2,7 +2,8 @@
  * Derived from Keycloak 26.8.2 org.keycloak.authentication.authenticators.x509.X509ClientCertificateAuthenticator
  * Copyright Red Hat, Inc. and/or its affiliates and other contributors, Apache License 2.0
  * (http://www.apache.org/licenses/LICENSE-2.0). Changed: the brute-force (password lockout) check is removed, and the local
- * CRL step checks only the issuing CA's CRL, whose signature is verified once per file version (IssuerCrlCheck).
+ * CRL step checks only the issuing CA's CRL, whose signature is verified once per file version (IssuerCrlCheck); the chain
+ * validation is a method of its own, also used by PresentCardRequiredAction.
  */
 package mil.stig.keycloak;
 
@@ -91,30 +92,7 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
 
             // Validate X509 client certificate
             try {
-                // STIG: with local CRL files, the CRL step is IssuerCrlCheck (the issuing CA's CRL, signature verified once
-                // per file version) instead of Keycloak's (every configured CRL re-verified on every sign-in). Keycloak's
-                // validator still runs every other check, OCSP included, on a copy of the configuration with CRL off.
-                boolean issuerCrl = IssuerCrlCheck.handles(config);
-                X509AuthenticatorConfigModel validatorConfig = config;
-                if (issuerCrl) {
-                    AuthenticatorConfigModel copy = new AuthenticatorConfigModel();
-                    copy.setId(config.getId());
-                    copy.setAlias(config.getAlias());
-                    copy.setConfig(new HashMap<>(config.getConfig()));   // never mutate the realm's cached model
-                    validatorConfig = new X509AuthenticatorConfigModel(copy).setCRLEnabled(false);
-                }
-                CertificateValidator.CertificateValidatorBuilder builder = certificateValidationParameters(context.getSession(), validatorConfig);
-                CertificateValidator validator = builder.build(certs);
-                validator.validateTrust()
-                         .validateCASubjectDN()
-                         .validateTimestamps()
-                         .validateKeyUsage(isLegacyCriticalBehavior())
-                         .validateExtendedKeyUsage(isLegacyCriticalBehavior())
-                         .validatePolicy();
-                if (issuerCrl) {
-                    IssuerCrlCheck.check(context.getSession(), certs, config.getCRLRelativePath(), config.getCrlAbortIfNonUpdated());
-                }
-                validator.checkRevocationStatus();
+                validate(context.getSession(), config, certs);
             } catch(Exception e) {
                 logger.error(e.getMessage(), e);
                 // TODO use specific locale to load error messages
@@ -279,6 +257,43 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
             return true;
         }
         return false;
+    }
+
+    /** Every check a card sign-in makes on the chain (trust, CA subject, validity, key usage, policy, revocation). */
+    void validate(org.keycloak.models.KeycloakSession session, X509AuthenticatorConfigModel config, X509Certificate[] certs) throws Exception {
+                // STIG: with local CRL files, the CRL step is IssuerCrlCheck (the issuing CA's CRL, signature verified once
+                // per file version) instead of Keycloak's (every configured CRL re-verified on every sign-in). Keycloak's
+                // validator still runs every other check, OCSP included, on a copy of the configuration with CRL off.
+                boolean issuerCrl = IssuerCrlCheck.handles(config);
+                X509AuthenticatorConfigModel validatorConfig = config;
+                if (issuerCrl) {
+                    AuthenticatorConfigModel copy = new AuthenticatorConfigModel();
+                    copy.setId(config.getId());
+                    copy.setAlias(config.getAlias());
+                    copy.setConfig(new HashMap<>(config.getConfig()));   // never mutate the realm's cached model
+                    validatorConfig = new X509AuthenticatorConfigModel(copy).setCRLEnabled(false);
+                }
+                CertificateValidator.CertificateValidatorBuilder builder = certificateValidationParameters(session, validatorConfig);
+                CertificateValidator validator = builder.build(certs);
+                validator.validateTrust()
+                         .validateCASubjectDN()
+                         .validateTimestamps()
+                         .validateKeyUsage(isLegacyCriticalBehavior())
+                         .validateExtendedKeyUsage(isLegacyCriticalBehavior())
+                         .validatePolicy();
+                if (issuerCrl) {
+                    IssuerCrlCheck.check(session, certs, config.getCRLRelativePath(), config.getCrlAbortIfNonUpdated());
+                }
+        validator.checkRevocationStatus();
+    }
+
+    /** For the present-card required action (PresentCardRequiredAction): the chain validated exactly as a card sign-in
+     *  validates it, and the identity the realm's mapping extracts from it (e.g. the EDIPI); throws when not valid. */
+    String validatedIdentity(org.keycloak.models.KeycloakSession session, AuthenticatorConfigModel cfg, X509Certificate[] certs) throws Exception {
+        X509AuthenticatorConfigModel config = new X509AuthenticatorConfigModel(cfg);
+        validate(session, config, certs);
+        Object id = getUserIdentityExtractor(config).extractUserIdentity(certs);
+        return id == null ? null : id.toString();
     }
 
     @Override

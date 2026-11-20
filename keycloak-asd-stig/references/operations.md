@@ -284,11 +284,23 @@ the hourly limit, which a 409 also spends). The EDIPI never appears in full in a
 
 ### Both on one account (`"signIn": ["entra", "cac"]`)
 
-A list asks for both: the create binds the card (as above) AND marks the account pending for the provider, records
-`stig_signin_methods` = `cac,entra` (admin-only; every create records its methods) and `stig_card_at_create` = SHA-256 of
-realm id + ":" + EDIPI (admin-only and concealed). The first provider sign-in then accepts that ONE card binding: the
-methods say both and the digest is of the card the account holds now. A card bound later, changed since, or bound by any
-other path keeps the refusal. Plain string forms are unchanged.
+The create does NOT bind the card. It only NAMES it: `<card attribute>_pending` (e.g. `cac_edipi_pending`, admin-only and
+concealed), reserved while live (no other create may name a card that is bound anywhere or named by a live invite: 409).
+After the person's first provider sign-in has bound the provider identity, the required action `stig-present-card`
+(register and enable it; `PresentCardRequiredAction`) asks them to present their card in the same session. The card is
+validated exactly as a card sign-in validates it (trust, CA, validity, key usage, policy, revocation) and its identity
+extracted by the realm's own X.509 mapping; it is bound only if that identity EQUALS the named value and no account holds
+it. A different card, or one bound elsewhere, is refused (audited) and the named value cleared: the account stays
+provider-only. That proves one human holds both - a delegate who names their OWN card for someone else's account gets
+nothing, since the account holder cannot present it. No card reader: the person may skip (asked again at each sign-in);
+after 7 days the named value is ignored, never bound, free for another invite, and the operator's tooling reports it.
+
+The provider binding itself refuses an account with any card binding, and an account that already has a session
+(signed into by any means before the provider link).
+
+**Accepted risk, card-only creates (`"signIn": "cac"`):** the card IS bound at create. A delegate who names their own
+card gets an account inside their own delegation and nothing more, attributed to them by `stig_created_by`; a victim's
+card gives only the victim access.
 
 `signIn` forms: absent (password, set-up mail; `lifespan` optional), `"password"`, `"entra"`, `"cac"`, or a list of
 `entra` and/or `cac` in any order, each once. An empty list, a duplicate, `password` in a list: 400. A `lifespan` with

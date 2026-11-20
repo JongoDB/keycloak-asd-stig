@@ -304,8 +304,13 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                     @Override protected void commitImpl() { session.singleUseObjects().remove(lock); }
                     @Override protected void rollbackImpl() { session.singleUseObjects().remove(lock); }
                 });
-                if (session.users().searchForUserByUserAttributeStream(realm, cardAttr, edipi).findAny().isPresent()) {
-                    refused("create", "card " + AccountsPolicy.maskEdipi(edipi) + " already bound: " + username);
+                // bound anywhere, or RESERVED by a live pending invite (an expired one is free)
+                long now = Time.currentTimeMillis();
+                if (session.users().searchForUserByUserAttributeStream(realm, cardAttr, edipi).findAny().isPresent()
+                        || session.users().searchForUserByUserAttributeStream(realm, cardAttr + AccountsPolicy.PENDING_SUFFIX, edipi)
+                               .anyMatch(x -> !AccountsPolicy.pendingExpired(x.getCreatedTimestamp(),
+                                       PendingInviteLink.markerTime(x.getFirstAttribute(CREATED_BY)), now))) {
+                    refused("create", "card " + AccountsPolicy.maskEdipi(edipi) + " already bound or reserved by a pending invite: " + username);
                     return err(Response.Status.CONFLICT, conflict);
                 }
             }
@@ -317,9 +322,14 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                 SETUP_ACTIONS.forEach(u::addRequiredAction);
             }
             if (viaProvider) u.setSingleAttribute(PendingInviteLink.PENDING_MARKER, PendingInviteLink.PENDING_VALUE);
-            if (viaCard) u.setSingleAttribute(cardAttr, edipi);       // server-side: the delegate never writes it
-            // both: the first provider sign-in accepts THIS card binding (and no other) on a pending invite
-            if (viaCard && viaProvider) u.setSingleAttribute(AccountsPolicy.CARD_AT_CREATE, AccountsPolicy.cardDigest(realm.getId(), edipi));
+            // a card account: the card is bound here, server-side (the delegate never writes the attribute). Accepted
+            // risk: a delegate may name their OWN card for a new account - it reaches nothing beyond the delegation they
+            // already hold, and stig_created_by attributes the account to them.
+            // Entra + card: the card is NOT bound here. It is only NAMED (pending), and bound when the account holder,
+            // after their first Entra sign-in, presents that very card (PresentCardRequiredAction) - so a delegate who
+            // names their own card for someone else's account gets nothing.
+            if (viaCard && !viaProvider) u.setSingleAttribute(cardAttr, edipi);
+            if (viaCard && viaProvider) u.setSingleAttribute(cardAttr + AccountsPolicy.PENDING_SUFFIX, edipi);
             u.setSingleAttribute(AccountsPolicy.SIGNIN_METHODS, signIn);
             u.joinGroup(g);
             u.setSingleAttribute(CREATED_BY, caller() + " " + Time.currentTimeMillis());   // read by the operator's tooling

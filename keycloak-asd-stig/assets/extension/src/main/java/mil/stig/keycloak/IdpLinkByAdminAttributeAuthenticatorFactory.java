@@ -122,7 +122,8 @@ public class IdpLinkByAdminAttributeAuthenticatorFactory extends AbstractIdpAuth
                     u.getFirstAttribute(pc.markerAttr()), u.getFirstAttribute(id.adminAttr),
                     u.credentialManager().getStoredCredentialsStream().findAny().isPresent(),
                     u.getFirstAttribute(pc.cardAttr()), u.getCreatedTimestamp(), u.getFirstAttribute(PendingInviteLink.PENDING_MARKER),
-                    u.getRequiredActionsStream().collect(Collectors.toList()), cardFromCreate(realm, u, pc.cardAttr())));
+                    u.getRequiredActionsStream().collect(Collectors.toList()),
+                    session.sessions().getUserSessionsStream(realm, u).findAny().isPresent()));
         }
         PendingInviteLink.Result r = PendingInviteLink.decide(pc, upn, cands, Time.currentTimeMillis());
         if (r.id() == null) {
@@ -140,6 +141,9 @@ public class IdpLinkByAdminAttributeAuthenticatorFactory extends AbstractIdpAuth
         // just above: no account carries it), fixed from now on; the pending marker goes
         user.setSingleAttribute(id.adminAttr, vouched);
         user.removeAttribute(PendingInviteLink.PENDING_MARKER);
+        // an Entra + card invite: now that the provider vouched for this person, ask them to present the card the invite
+        // named (bound only if it is that card: PresentCardRequiredAction)
+        if (PresentCardRequiredAction.livePending(realm, user, Time.currentTimeMillis()) != null) user.addRequiredAction(PresentCardRequiredAction.ID);
         audit(context, realm, user, alias, id.adminAttr, vouched);
         LOG.infof("STIG-IDP-PENDING-INVITE-BOUND realm=%s idp=%s user=%s principal=%s: %s set by the first sign-in",
                 realm.getName(), alias, user.getUsername(), principal, id.adminAttr);
@@ -147,17 +151,6 @@ public class IdpLinkByAdminAttributeAuthenticatorFactory extends AbstractIdpAuth
                 new ExistingUserInfo(user.getId(), id.adminAttr, vouched).serialize());
         context.setUser(user);
         context.success();
-    }
-
-    /** The account's card binding is the one its stig-accounts create bound for an account invited for both. */
-    static boolean cardFromCreate(RealmModel realm, UserModel u, String cardAttr) {
-        String card = u.getFirstAttribute(cardAttr), digest = u.getFirstAttribute(AccountsPolicy.CARD_AT_CREATE),
-               methods = u.getFirstAttribute(AccountsPolicy.SIGNIN_METHODS);
-        if (card == null || digest == null || methods == null) return false;
-        List<String> ms = List.of(methods.split(","));
-        return ms.contains(AccountsPolicy.SIGN_IN_CARD) && ms.contains(AccountsPolicy.SIGN_IN_PROVIDER)
-                && java.security.MessageDigest.isEqual(digest.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                        AccountsPolicy.cardDigest(realm.getId(), card.trim()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     /** An admin event (UPDATE USER, attributed to the account itself, from the sign-in's address) recording the binding. */

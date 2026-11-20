@@ -45,6 +45,8 @@ Use the card's UPN exactly as it appears. Many cards use 16 digits (the EDIPI pl
   `operations.md` section 10.
 - **New, optional: card accounts from `stig-accounts`** (`"signIn": "cac", "edipi"`): the card is bound at creation,
   server-side, to a brand-new account; off unless the realm attribute `stig.accounts.card-attribute` is set.
+- **New: provider + card invites** (`"signIn": ["entra", "cac"]`): the card is only named at create and bound when its
+  holder presents it after the first provider sign-in (required action `stig-present-card`; register and enable it).
 - **New: an admin-API client profile** (`stig.admin-api.profile=account-onboarding` on a client) holds every token that
   client issues to the account-administration calls and requires a recent authentication for writes (401 with an
   RFC 9470 step-up challenge otherwise). Clients without the attribute are unaffected. `operations.md` section 9.

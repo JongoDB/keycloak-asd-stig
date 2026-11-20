@@ -49,20 +49,16 @@ final class AccountsPolicy {
     /** Admin-only attribute stig-accounts writes on every create: the sign-in methods the create intended, sorted,
      *  comma-separated (password | cac | entra | cac,entra). */
     static final String SIGNIN_METHODS = "stig_signin_methods";
-    /** Admin-only (and concealed) attribute: the digest of the card a create bound for an account that ALSO signs in
-     *  through the provider. The first provider sign-in accepts that card binding only while it is still this one. */
-    static final String CARD_AT_CREATE = "stig_card_at_create";
-    /** SHA-256 (hex) of realm id + ":" + EDIPI: not the EDIPI itself (only ten digits, so it stays concealed too). */
-    static String cardDigest(String realmId, String edipi) {
-        try {
-            byte[] d = java.security.MessageDigest.getInstance("SHA-256")
-                    .digest((realmId + ":" + edipi).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder b = new StringBuilder();
-            for (byte x : d) b.append(String.format("%02x", x));
-            return b.toString();
-        } catch (java.security.NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
-        }
+    /** Suffix of the admin-only (and concealed) attribute holding the card an Entra + card invite NAMED, e.g.
+     *  cac_edipi_pending: never bound at create; bound only when the account holder presents that very card after
+     *  their first provider sign-in (PresentCardRequiredAction). Reserved while live: no other create may name it. */
+    static final String PENDING_SUFFIX = "_pending";
+    static final int PENDING_CARD_DAYS = 7;
+    /** A pending card is live for 7 days from the account's creation (Keycloak's time and the delegate marker's, the
+     *  older counts); after that it is ignored - never bound, and free for another create. */
+    static boolean pendingExpired(Long createdMs, Long markerMs, long nowMs) {
+        long oldest = Math.min(createdMs == null ? Long.MAX_VALUE : createdMs, markerMs == null ? Long.MAX_VALUE : markerMs);
+        return oldest == Long.MAX_VALUE || nowMs - oldest > PENDING_CARD_DAYS * 86_400_000L;
     }
     /** The sign-in methods a create asks for, sorted; null when invalid. "signIn" absent: password (set-up mail); a
      *  string: "password", "entra" or "cac"; a list: entra and/or cac, in any order, each once - an empty list, a

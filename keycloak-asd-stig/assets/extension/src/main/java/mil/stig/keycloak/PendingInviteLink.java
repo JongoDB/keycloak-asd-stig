@@ -24,9 +24,9 @@ import java.util.regex.Pattern;
  *     stig-accounts' signIn "entra"), its e-mail is in the configured domain, and it owes no password, OTP or passkey
  *     set-up (a password-type invite still in set-up is never claimed through the provider);
  *   - that account: carries the delegate-creation marker (stig_created_by), is enabled, has NO administrator-set
- *     binding yet, NO stored credential (password, OTP, passkey) and NO card binding - except the one card the same
- *     stig-accounts create bound for an account invited for BOTH (stig_signin_methods cac,entra and the digest of
- *     exactly this card in stig_card_at_create), and was created no more than
+ *     binding yet, NO stored credential (password, OTP, passkey), NO card binding and no session (it has never been
+ *     signed into: an invite for Entra AND a card only NAMES the card, which PresentCardRequiredAction binds after this
+ *     step, once the person presents that card), and was created no more than
  *     max-age days ago (by Keycloak's creation time AND by the marker's own time: the older one counts).
  * After binding, the binding is the admin-set attribute like any other: a different object id for the account is
  * refused from then on (by this step and by the post-broker match).
@@ -48,7 +48,7 @@ final class PendingInviteLink {
     /** What the rules need to know about one candidate account. */
     record Candidate(String id, String username, String email, boolean enabled, String createdBy, String binding,
                      boolean hasCredential, String card, Long createdMs, String pending, java.util.List<String> requiredActions,
-                     boolean cardFromCreate) {
+                     boolean hasSession) {
         Candidate(String id, String username, String email, boolean enabled, String createdBy, String binding, boolean hasCredential,
                   String card, Long createdMs, String pending, java.util.List<String> requiredActions) {
             this(id, username, email, enabled, createdBy, binding, hasCredential, card, createdMs, pending, requiredActions, false);
@@ -172,9 +172,9 @@ final class PendingInviteLink {
         if (!a.enabled()) return Result.refuse("the account is disabled");
         if (a.binding() != null && !a.binding().isBlank()) return Result.refuse("the account is already bound to another identity");
         if (a.hasCredential()) return Result.refuse("the account already has a credential");
-        // a card binding refuses - unless it is the one the same stig-accounts create bound for an account that signs in
-        // with BOTH (cardFromCreate: the create recorded both methods and this very card's digest)
-        if (a.card() != null && !a.card().isBlank() && !a.cardFromCreate()) return Result.refuse("the account has a card binding");
+        if (a.card() != null && !a.card().isBlank()) return Result.refuse("the account has a card binding");
+        // signed into already (by any means) before the provider binding: never bound to the provider afterwards
+        if (a.hasSession()) return Result.refuse("the account has already been signed into");
         long limit = c.maxDays() * 86_400_000L;
         Long t1 = a.createdMs(), t2 = markerTime(a.createdBy()), t3 = null;
         String pv = a.pending() == null ? "" : a.pending().trim();
