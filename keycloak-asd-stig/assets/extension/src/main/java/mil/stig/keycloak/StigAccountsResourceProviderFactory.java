@@ -56,6 +56,11 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
  *                                    being set up (no credential, set-up actions pending; else 409); once per 15 min. 204
  *   POST /users/{id}/disable         disable a member and end its sessions (back-channel). 204. There is NO enable:
  *                                    re-enabling is for realm administrators only. At most 20 per caller in any 60 minutes.
+ *                                    "signIn": "entra" - an account for the realm's external identity provider (no
+ *                                    set-up, no mail; its first provider sign-in binds it: PendingInviteLink).
+ *                                    "signIn": "cac", "edipi": "<10 digits>" - a card account: the card attribute is
+ *                                    bound here, server-side, to a brand-new account (never an existing one); no
+ *                                    password/OTP set-up, no mail; 409 when that card is bound to any account.
  *   An optional `reference` (body field of POST /users, or ?reference= on the others; 1-64 of [A-Za-z0-9._:-], e.g.
  *   the request the call fulfils) is recorded in the admin event and the audit log line. Invalid: 400.
  *   anything else                    403
@@ -227,6 +232,39 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (!AccountsPolicy.validName(first) || !AccountsPolicy.validName(last) || !profileNameValid(first, "firstName") || !profileNameValid(last, "lastName")) {
                 return err(Response.Status.BAD_REQUEST, "firstName and lastName are required: a person's name, no links or markup");
             }
+            // "signIn": "entra" - an account that will sign in only through the realm's external identity provider:
+            // no password or OTP set-up, no set-up mail; the provider's FIRST sign-in binds it (PendingInviteLink).
+            // Allowed only when the realm names the provider's domain (stig.accounts.entra-domain) and the address is in it.
+            // "signIn": "password" (default) | "entra" | "cac" | ["entra", "cac"] (both on one account: the card is bound
+            // here, the provider's first sign-in binds the rest)
+            Object signInB = body == null ? null : body.get("signIn");
+            List<String> methods = AccountsPolicy.signInMethods(signInB);
+            if (methods == null) {
+                return err(Response.Status.BAD_REQUEST, "signIn must be password, " + AccountsPolicy.SIGN_IN_PROVIDER + ", "
+                        + AccountsPolicy.SIGN_IN_CARD + " or [" + AccountsPolicy.SIGN_IN_PROVIDER + ", " + AccountsPolicy.SIGN_IN_CARD + "]");
+            }
+            String signIn = String.join(",", methods);
+            // a set-up link's lifetime means nothing without a set-up mail: refused rather than silently ignored
+            if (!methods.equals(List.of("password")) && (lifespanB != null))
+                return err(Response.Status.BAD_REQUEST, "lifespan is only for a password account's set-up mail");
+            boolean viaProvider = methods.contains(AccountsPolicy.SIGN_IN_PROVIDER);
+            boolean viaCard = methods.contains(AccountsPolicy.SIGN_IN_CARD);
+            // "signIn": "cac": the card is bound HERE, at creation only, to a brand-new account - stig-accounts never
+            // binds a card to an existing account, and the plain admin API still refuses a delegate (cac-identity-guard)
+            Object edipiB = body == null ? null : body.get("edipi");
+            if (edipiB != null && !viaCard) return err(Response.Status.BAD_REQUEST, "edipi is only for signIn " + AccountsPolicy.SIGN_IN_CARD);
+            String edipi = edipiB instanceof String es ? es.trim() : null;
+            String cardAttr = viaCard ? AccountsPolicy.cardAttribute(realm.getAttribute(AccountsPolicy.CARD_ATTRIBUTE)) : null;
+            if (viaCard && !AccountsPolicy.validEdipi(edipi)) return err(Response.Status.BAD_REQUEST, "edipi must be exactly 10 digits");
+            if (viaCard && cardAttr == null) {
+                refused("create", "signIn cac: the realm's " + AccountsPolicy.CARD_ATTRIBUTE + " is unset or malformed");
+                return err(Response.Status.FORBIDDEN, "this realm does not create card accounts");
+            }
+            if (viaProvider && !AccountsPolicy.providerDomainMatches(email, realm.getAttribute(AccountsPolicy.PROVIDER_DOMAIN))) {
+                refused("create", "signIn " + signIn + " for " + email + ": the realm's " + AccountsPolicy.PROVIDER_DOMAIN + " is "
+                        + realm.getAttribute(AccountsPolicy.PROVIDER_DOMAIN));
+                return err(Response.Status.FORBIDDEN, "this address cannot sign in through the identity provider");
+            }
             String domains = emailDomains();
             if (!AccountsPolicy.emailDomainAllowed(email, domains)) {
                 refused("create", "e-mail domain of " + email + " not in " + domains);
@@ -247,22 +285,68 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                 refused("create", "more than " + AccountsPolicy.CREATE_PER_HOUR + " accounts in an hour");
                 return err(Response.Status.TOO_MANY_REQUESTS, "too many accounts created this hour");
             }
+            String conflict = viaCard ? AccountsPolicy.CARD_CONFLICT : "username or e-mail address already in use";
             if (session.users().getUserByUsername(realm, username) != null || session.users().getUserByEmail(realm, email) != null) {
                 refused("create", "username or e-mail address already in use: " + username);
-                return err(Response.Status.CONFLICT, "username or e-mail address already in use");
+                return err(Response.Status.CONFLICT, conflict);
+            }
+            if (viaCard) {
+                // one card, one account (cac-identity-guard's rule: no account in the realm may hold the value), and
+                // two concurrent creates with the same card cannot both pass: the card is claimed atomically first
+                String lock = "stig-accounts-card:" + realm.getId() + ":" + edipi;
+                if (!session.singleUseObjects().putIfAbsent(lock, 60)) {
+                    refused("create", "card " + AccountsPolicy.maskEdipi(edipi) + " is being bound by another create: " + username);
+                    return err(Response.Status.CONFLICT, conflict);
+                }
+                // the claim is held until this transaction ends (committed: the card is on the account, which the search
+                // below finds from then on; rolled back: free again) - never longer than its 60 s
+                session.getTransactionManager().enlistAfterCompletion(new org.keycloak.models.AbstractKeycloakTransaction() {
+                    @Override protected void commitImpl() { session.singleUseObjects().remove(lock); }
+                    @Override protected void rollbackImpl() { session.singleUseObjects().remove(lock); }
+                });
+                // bound anywhere, or RESERVED by a live pending invite (an expired one is free)
+                long now = Time.currentTimeMillis();
+                if (session.users().searchForUserByUserAttributeStream(realm, cardAttr, edipi).findAny().isPresent()
+                        || session.users().searchForUserByUserAttributeStream(realm, cardAttr + AccountsPolicy.PENDING_SUFFIX, edipi)
+                               .anyMatch(x -> !AccountsPolicy.pendingExpired(x.getCreatedTimestamp(),
+                                       PendingInviteLink.markerTime(x.getFirstAttribute(CREATED_BY)), now))) {
+                    refused("create", "card " + AccountsPolicy.maskEdipi(edipi) + " already bound or reserved by a pending invite: " + username);
+                    return err(Response.Status.CONFLICT, conflict);
+                }
             }
             UserModel u = session.users().addUser(realm, username);
             u.setEnabled(true); u.setEmail(email); u.setEmailVerified(false); u.setFirstName(first); u.setLastName(last);
-            SETUP_ACTIONS.forEach(u::addRequiredAction);
+            if (viaProvider || viaCard) {
+                u.addRequiredAction("TERMS_AND_CONDITIONS");          // no password, no OTP: the provider / the card signs in
+            } else {
+                SETUP_ACTIONS.forEach(u::addRequiredAction);
+            }
+            if (viaProvider) u.setSingleAttribute(PendingInviteLink.PENDING_MARKER, PendingInviteLink.PENDING_VALUE);
+            // a card account: the card is bound here, server-side (the delegate never writes the attribute). Accepted
+            // risk: a delegate may name their OWN card for a new account - it reaches nothing beyond the delegation they
+            // already hold, and stig_created_by attributes the account to them.
+            // Entra + card: the card is NOT bound here. It is only NAMED (pending), and bound when the account holder,
+            // after their first Entra sign-in, presents that very card (PresentCardRequiredAction) - so a delegate who
+            // names their own card for someone else's account gets nothing.
+            if (viaCard && !viaProvider) u.setSingleAttribute(cardAttr, edipi);
+            if (viaCard && viaProvider) u.setSingleAttribute(cardAttr + AccountsPolicy.PENDING_SUFFIX, edipi);
+            u.setSingleAttribute(AccountsPolicy.SIGNIN_METHODS, signIn);
             u.joinGroup(g);
             u.setSingleAttribute(CREATED_BY, caller() + " " + Time.currentTimeMillis());   // read by the operator's tooling
             Map<String, Object> rep = new LinkedHashMap<>();
             rep.put("id", u.getId()); rep.put("username", username); rep.put("email", email); rep.put("group", g.getId());
+            if (viaProvider || viaCard) rep.put("signIn", methods.size() == 1 ? methods.get(0) : methods);
+            if (viaCard) rep.put("card", AccountsPolicy.maskEdipi(edipi));
             if (ref != null) rep.put("reference", ref);
             adminEvent.operation(OperationType.CREATE).resource(ResourceType.USER).resourcePath("users", u.getId()).representation(rep).success();
-            LOG.infof("STIG-ACCOUNTS created realm=%s caller=%s user=%s group=%s%s", realm.getName(), caller(), username, groupPath, refSuffix(ref));
-            boolean sent = sendSetup(u, lifespan, ref);
-            Map<String, Object> out = new LinkedHashMap<>(rep); out.put("setupEmail", sent ? "sent" : "failed");
+            LOG.infof("STIG-ACCOUNTS created realm=%s caller=%s user=%s group=%s%s%s", realm.getName(), caller(), username, groupPath,
+                    (viaCard || viaProvider ? " signIn=" + signIn : "") + (viaCard ? " card=" + AccountsPolicy.maskEdipi(edipi) : ""), refSuffix(ref));
+            Map<String, Object> out = new LinkedHashMap<>(rep);
+            if (viaProvider || viaCard) {
+                out.put("setupEmail", "none");                       // nothing to set up: the provider / the card signs in
+            } else {
+                out.put("setupEmail", sendSetup(u, lifespan, ref) ? "sent" : "failed");
+            }
             return Response.status(Response.Status.CREATED).entity(out).type(MediaType.APPLICATION_JSON).build();
         }
 
@@ -277,6 +361,13 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (lifespan < 0) return err(Response.Status.BAD_REQUEST, "lifespan must be 300..86400 seconds");
             if (u.getEmail() == null || u.getEmail().isBlank()) return err(Response.Status.BAD_REQUEST, "the account has no e-mail address");
             // only while the account is still being set up: no password, OTP or WebAuthn yet, set-up actions pending
+            if (u.getFirstAttribute(PendingInviteLink.PENDING_MARKER) != null) {
+                return err(Response.Status.CONFLICT, "the account signs in through the identity provider: there is no set-up mail");
+            }
+            String ca = AccountsPolicy.cardAttribute(realm.getAttribute(AccountsPolicy.CARD_ATTRIBUTE));
+            if (ca != null && u.getFirstAttribute(ca) != null) {
+                return err(Response.Status.CONFLICT, "the account signs in with a card: there is no set-up mail");
+            }
             boolean hasCredential = u.credentialManager().getStoredCredentialsStream().findAny().isPresent();
             List<String> pending = u.getRequiredActionsStream().collect(Collectors.toList());
             if (hasCredential || !pending.contains("UPDATE_PASSWORD") || !pending.contains("CONFIGURE_TOTP")) {

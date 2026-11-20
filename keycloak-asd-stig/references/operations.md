@@ -10,6 +10,7 @@
 7. Upgrading Keycloak
 8. Delegated account creation: allowed e-mail domains (stig-accounts)
 9. Account administration from another application's page (admin-API client profile, step-up)
+10. First sign-in through an identity provider binds a pending invite (optional)
 
 ## 1. Break-glass / admin recovery
 After hardening, the admin realm has no password grant (ROPC denied), the bootstrap admin is deleted, and
@@ -210,3 +211,113 @@ sends `Access-Control-Expose-Headers: WWW-Authenticate`, without which a browser
 `max_age`) cross-origin. Tell it apart from an EXPIRED token: that 401 comes from Keycloak itself, before the profile
 is checked, and carries no `insufficient_user_authentication` challenge - get a new token silently and retry. Record the application origin
 as an admin-API client in your V-222574 (separate admin interface) assessment.
+
+## 10. First sign-in through an identity provider binds a pending invite (optional)
+
+Off by default. With it on, a delegated user manager invites a person who signs in through the realm's external
+identity provider (for example the organisation's Microsoft Entra tenant) WITHOUT copying the provider's object id: the
+person's FIRST sign-in binds it.
+
+**How to switch it on.** In the realm's first-broker-login flow, the `idp-link-by-admin-attribute` execution's
+configuration gains `stig.pending-invite-domain` (the provider's UPN domain; empty = off) and optionally
+`stig.pending-invite-max-age-days` (1..30, default 7), `stig.vouched-upn-attribute` (default `entra_vouched_upn`),
+`stig.card-attribute` (default `cac_edipi`) and `stig.created-by-attribute` (default `stig_created_by`). Add an
+identity-provider mapper copying the provider's principal-name claim (Entra: `preferred_username`, the UPN) into the
+vouched-UPN attribute. Set the realm attribute `stig.accounts.entra-domain` to the same domain so `stig-accounts` can make
+such invites. A malformed domain or max age switches the binding off (fail closed).
+
+**When it binds.** Only after the usual checks passed (the configured provider alias and tenant, no mapper writing the
+binding attribute, a vouched object id) and NO account carries that object id; then ALL of these, or the sign-in is
+refused exactly as without the option:
+- the vouched principal name is `local@<domain>` (the provider's UPN claim, never its e-mail claim);
+- exactly one account has it as username or e-mail (case-insensitive);
+- that account was invited FOR the provider: it carries the `entra_pending` marker (only `stig-accounts`' `"signIn":
+  "entra"` sets it), its e-mail is in the domain, and it owes no password, OTP or passkey set-up - a password-type
+  invite still in set-up is never claimed through the provider;
+- it carries the delegate-creation marker, is enabled, has no binding, no stored credential and no card binding, and is
+  at most the configured number of days old (Keycloak's creation time, the delegate marker's and the pending marker's;
+  the oldest counts; any time in the future refuses).
+
+**Guests are never bound.** A guest of the tenant (B2B from another tenant, e-mail one-time passcode, a Microsoft
+account) carries the tenant's `tid` but its HOME sign-in name as `preferred_username`, which may well be in the domain.
+Entra marks it with the `idp` claim (absent for the tenant's members, or naming the tenant itself) and the optional `acct`
+claim (1 for a guest): map `idp` into `stig.vouched-idp-attribute` (default `entra_vouched_idp`) and `acct` into
+`stig.vouched-acct-attribute` (default `entra_vouched_acct`; ask the provider to send that optional claim); a guest is refused. The binding also refuses unless the
+mappers are pinned: EXACTLY ONE mapper in the realm writes the UPN attribute, and it is this provider's attribute importer
+of `preferred_username`; the same for the idp attribute from `idp` and the acct attribute from `acct`. Only use a domain that is one of the tenant's VERIFIED domains - only then does the tenant own every
+UPN in it.
+
+The marker's value is fixed (`entra_pending` = `pending`), so tooling finds pending invites with an exact attribute search
+(`q=entra_pending:pending`); their age comes from Keycloak's creation time and the delegate marker's.
+
+**The binding stands even if a later step fails.** The binding is written during the first-broker step; if a later step
+of the sign-in then refuses (the post-broker checks, an administrator's MFA, the session limit, the terms not accepted),
+the account stays bound to that identity and the person simply signs in again. It is never bound to anyone else.
+
+The binding happens once: a cluster-wide single-use slot per account admits one binding sign-in (a racing second one is
+refused), and the binding sets the attribute and removes the pending marker, after which the account no longer
+qualifies.
+
+On success the binding attribute is set, the `entra_pending` marker removed, an admin event recorded (UPDATE USER,
+attributed to the account, with the binding in its representation, which the concealment filter hides from
+non-administrators) and `STIG-IDP-PENDING-INVITE-BOUND` logged. From then on the binding is fixed like an administrator-set
+one: a different object id is refused. Nothing is ever created from a provider sign-in.
+
+**Inviting.** `stig-accounts` `POST /users` takes `"signIn": "entra"`: the account gets only the terms required
+action (no password or OTP set-up), no set-up mail (`setupEmail: none`), and the `entra_pending` marker; it is refused
+(403) unless the address is exactly in the realm's `stig.accounts.entra-domain`. `setup-email` answers 409 for it.
+The trust added: the provider's tenant owns its UPN domain, and a user manager's invite of that address is the
+authorization; the identity is pinned on first use.
+
+### Card accounts (`"signIn": "cac"`)
+
+`stig-accounts` `POST /users` with `"signIn": "cac", "edipi": "<10 digits>"` creates an account whose card is bound at
+creation, server-side: the extension writes the realm's card attribute (realm attribute `stig.accounts.card-attribute`,
+e.g. `cac_edipi`; unset or malformed = no card accounts, 403). Only on create, for a brand-new account: a username or
+e-mail already in use, or a card already bound to ANY account (the cac-identity-guard uniqueness rule; two concurrent
+creates with one card cannot both pass), is a 409 with one generic message. Malformed EDIPI, or an `edipi` with another
+`signIn`: 400. The account gets the terms action only, no set-up mail; `setup-email` answers 409. Every other rule of the
+endpoint applies unchanged (the caller's groups, e-mail domains, the admin-API profile's step-up and `create` operation,
+the hourly limit, which a 409 also spends). The EDIPI never appears in full in a log line, an admin event or the answer
+(`******1234`). Binding a card to an EXISTING account stays with realm administrators (cac-identity-guard).
+
+### Both on one account (`"signIn": ["entra", "cac"]`)
+
+The create does NOT bind the card. It only NAMES it: `<card attribute>_pending` (e.g. `cac_edipi_pending`, admin-only and
+concealed), reserved while live (no other create may name a card that is bound anywhere or named by a live invite: 409).
+After the person's first provider sign-in has bound the provider identity, the required action `stig-present-card`
+(register and enable it; `PresentCardRequiredAction`) asks them to present their card in the same session. The card is
+validated exactly as a card sign-in validates it (trust, CA, validity, key usage, policy, revocation) and its identity
+extracted by the realm's own X.509 mapping; it is bound only if that identity EQUALS the named value and no account holds
+it. A different card, or one bound elsewhere, is refused (audited) and the named value cleared: the account stays
+provider-only. That proves one human holds both - a delegate who names their OWN card for someone else's account gets
+nothing, since the account holder cannot present it. No card reader: the person may skip (asked again at each sign-in);
+after 7 days the named value is ignored, never bound, free for another invite, and the operator's tooling reports it.
+
+The provider binding itself refuses an account with any card binding, and an account that already has a session
+(signed into by any means before the provider link).
+
+**Accepted risk, card-only creates (`"signIn": "cac"`):** the card IS bound at create. A delegate who names their own
+card gets an account inside their own delegation and nothing more, attributed to them by `stig_created_by`; a victim's
+card gives only the victim access.
+
+`signIn` forms: absent (password, set-up mail; `lifespan` optional), `"password"`, `"entra"`, `"cac"`, or a list of
+`entra` and/or `cac` in any order, each once. An empty list, a duplicate, `password` in a list: 400. A `lifespan` with
+any form but password: 400 (there is no set-up mail to time).
+
+The present-card step binds only when `stig.accounts.card-attribute` equals the browser flow's X.509 step's
+`x509-cert-auth.mapper-selection.user-attribute-name`, and every X.509 step in that flow carries the same configuration
+(else nothing is bound and `STIG-CARD-PRESENT-MISCONFIGURED` is logged). Log lines of the card sign-in, the issuer-CRL
+check and the step never carry a full EDIPI (last four digits). Accepted risk: the generic 409 tells a delegate whether an
+EDIPI is bound or reserved; it is capped by the hourly create limit and every attempt is logged with the caller.
+
+**EDIPIs in events and logs.** A card sign-in's login event never carries the card's identity: until an account is
+matched, its `username` detail (and the attempted username the login page may echo) is `card:******NNNN#xxxxxxxx` - the
+last four digits and an 8-hex keyed hash (HMAC-SHA-256 under the realm's active HMAC key), so repeated attempts by one card
+correlate without the number; once an account is matched, it is that account's username. The certificate subject the event
+records (`x509_cert_subject_distinguished_name`) has its EDIPI masked the same way. The HTTP access log records the request path WITHOUT its query string (`%m %R %H`; `%U` would keep the query string): an admin search such as
+`users?q=cac_edipi:<EDIPI>` (the operator's uniqueness check) would otherwise write the number to the log. **Never enable DEBUG (or TRACE) for
+`org.keycloak.authentication.authenticators.x509` or `org.keycloak.services.x509` in production**: Keycloak's own debug
+lines print certificate subjects and identities. Keep those categories at INFO or above (e.g.
+`KC_LOG_LEVEL=INFO,org.keycloak.authentication.authenticators.x509:info,org.keycloak.services.x509:info`).
+
