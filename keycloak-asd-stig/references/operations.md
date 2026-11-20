@@ -315,8 +315,12 @@ EDIPI is bound or reserved; it is capped by the hourly create limit and every at
 matched, its `username` detail (and the attempted username the login page may echo) is `card:******NNNN#xxxxxxxx` - the
 last four digits and an 8-hex keyed hash (HMAC-SHA-256 under the realm's active HMAC key), so repeated attempts by one card
 correlate without the number; once an account is matched, it is that account's username. The certificate subject the event
-records (`x509_cert_subject_distinguished_name`) has its EDIPI masked the same way. The HTTP access log records the request path WITHOUT its query string (`%m %R %H`; `%U` would keep the query string): an admin search such as
-`users?q=cac_edipi:<EDIPI>` (the operator's uniqueness check) would otherwise write the number to the log. **Never enable DEBUG (or TRACE) for
+records (`x509_cert_subject_distinguished_name`) has its EDIPI masked the same way. The HTTP access log records the request path WITHOUT its query string (`%m %R %H`; `%U` would keep the query string), and
+no Referer (it can carry one): an admin search such as `users?q=cac_edipi:<EDIPI>` would otherwise write the number to the
+log. Admin-API query strings are audited instead by the extension, `STIG-ADMIN-QUERY realm user client METHOD path?query`,
+with every run of ten or more digits reduced to its last four. Card labels use a dedicated subkey derived from the realm's
+active HMAC key (`stig-card-label-v1`): activating a new HMAC key changes every label, so correlation holds within one
+key's lifetime. **Never enable DEBUG (or TRACE) for
 `org.keycloak.authentication.authenticators.x509` or `org.keycloak.services.x509` in production**: Keycloak's own debug
 lines print certificate subjects and identities. Keep those categories at INFO or above (e.g.
 `KC_LOG_LEVEL=INFO,org.keycloak.authentication.authenticators.x509:info,org.keycloak.services.x509:info`).

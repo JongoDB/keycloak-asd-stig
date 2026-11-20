@@ -84,6 +84,15 @@ public class AdminApiGuardFilter implements ContainerRequestFilter {
             }
         }
         if (auth == null || auth.getRealm() == null) return;
+        // the access log keeps the path only (a query string can carry an EDIPI: users?q=cac_edipi:...); the query is
+        // audited HERE instead, with every run of ten or more digits reduced to its last four, so admin searches stay
+        // auditable without the numbers
+        String query = req.getUriInfo().getRequestUri().getQuery();
+        if (query != null && !query.isEmpty()) {
+            LOG.infof("STIG-ADMIN-QUERY realm=%s user=%s client=%s %s %s?%s", auth.getRealm().getName(),
+                    auth.getUser() == null ? "?" : auth.getUser().getUsername(), auth.getClient() == null ? "?" : auth.getClient().getClientId(),
+                    logSafe(req.getMethod()), path, logSafe(AccountsPolicy.redactEdipis(query)));
+        }
         ClientModel client = auth.getClient();
         String profile = client == null ? null : client.getAttribute(AdminApiStepUp.PROFILE_ATTR);
         String opsAttr = client == null ? null : client.getAttribute(AdminApiStepUp.OPS_ATTR);

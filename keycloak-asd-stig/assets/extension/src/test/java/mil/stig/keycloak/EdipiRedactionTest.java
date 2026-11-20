@@ -78,6 +78,10 @@ public final class EdipiRedactionTest {
         t("... differs for another card", !CardLabel.tag(k1, "1234567890").equals(CardLabel.tag(k1, "1234567891")), "");
         t("... differs under another realm's key", !CardLabel.tag(k1, "1234567890").equals(CardLabel.tag(k2, "1234567890")), "");
         t("... 8 hex, never the number", CardLabel.tag(k1, "1234567890").matches("[0-9a-f]{8}") && !TEN.matcher(CardLabel.tag(k1, "1234567890")).find(), "");
+        t("the label key is a dedicated subkey, not the realm key itself", !java.util.Arrays.equals(CardLabel.subkey(k1), k1)
+                && CardLabel.subkey(k1).length == 32 && java.util.Arrays.equals(CardLabel.subkey(k1), CardLabel.subkey(k1)), "");
+        t("... so a tag under the subkey differs from one under the raw realm key", !CardLabel.tag(CardLabel.subkey(k1), "1234567890").equals(CardLabel.tag(k1, "1234567890")), "");
+        t("an admin query is audited with its EDIPIs masked", AccountsPolicy.redactEdipis("q=cac_edipi:1234567890&exact=true").equals("q=cac_edipi:******7890&exact=true"), "");
         System.out.printf("EdipiRedactionTest: %d/%d passed%n", run - failed, run);
         if (failed > 0) System.exit(1);
     }

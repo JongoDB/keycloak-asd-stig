@@ -588,7 +588,7 @@
   },
   "V-222447": {
    "disposition": "SHARED",
-   "implementation": "HTTP access log enabled (--http-access-log-enabled) with a pattern capturing method, URI, Referer and User-Agent.",
+   "implementation": "HTTP access log enabled (--http-access-log-enabled) with a pattern capturing method, request path and User-Agent; query strings are audited by the extension (STIG-ADMIN-QUERY, EDIPIs masked), and the Referer is not recorded (it can carry query strings).",
    "checks": [
     "deploy.access_log"
    ],
