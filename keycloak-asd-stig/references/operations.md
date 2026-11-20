@@ -10,6 +10,7 @@
 7. Upgrading Keycloak
 8. Delegated account creation: allowed e-mail domains (stig-accounts)
 9. Account administration from another application's page (admin-API client profile, step-up)
+10. First sign-in through an identity provider binds a pending invite (optional)
 
 ## 1. Break-glass / admin recovery
 After hardening, the admin realm has no password grant (ROPC denied), the bootstrap admin is deleted, and
@@ -210,3 +211,38 @@ sends `Access-Control-Expose-Headers: WWW-Authenticate`, without which a browser
 `max_age`) cross-origin. Tell it apart from an EXPIRED token: that 401 comes from Keycloak itself, before the profile
 is checked, and carries no `insufficient_user_authentication` challenge - get a new token silently and retry. Record the application origin
 as an admin-API client in your V-222574 (separate admin interface) assessment.
+
+## 10. First sign-in through an identity provider binds a pending invite (optional)
+
+Off by default. With it on, a delegated user manager invites a person who signs in through the realm's external
+identity provider (for example the organisation's Microsoft Entra tenant) WITHOUT copying the provider's object id: the
+person's FIRST sign-in binds it.
+
+**How to switch it on.** In the realm's first-broker-login flow, the `idp-link-by-admin-attribute` execution's
+configuration gains `stig.pending-invite-domain` (the provider's UPN domain; empty = off) and optionally
+`stig.pending-invite-max-age-days` (1..30, default 7), `stig.vouched-upn-attribute` (default `entra_vouched_upn`),
+`stig.card-attribute` (default `cac_edipi`) and `stig.created-by-attribute` (default `stig_created_by`). Add an
+identity-provider mapper copying the provider's principal-name claim (Entra: `preferred_username`, the UPN) into the
+vouched-UPN attribute. Set the realm attribute `stig.accounts.entra-domain` to the same domain so `stig-accounts` can make
+such invites. A malformed domain or max age switches the binding off (fail closed).
+
+**When it binds.** Only after the usual checks passed (the configured provider alias and tenant, no mapper writing the
+binding attribute, a vouched object id) and NO account carries that object id; then ALL of these, or the sign-in is
+refused exactly as without the option:
+- the vouched principal name is `local@<domain>` (the provider's UPN claim, never its e-mail claim);
+- exactly one account has it as username or e-mail (case-insensitive);
+- that account carries the delegate-creation marker, is enabled, has no binding, no stored credential and no card
+  binding, and is at most the configured number of days old (Keycloak's creation time and the marker's time; the older
+  counts; a time in the future refuses).
+
+On success the binding attribute is set, the `entra_pending` marker removed, an admin event recorded (UPDATE USER,
+attributed to the account, with the binding in its representation, which the concealment filter hides from
+non-administrators) and `STIG-IDP-PENDING-INVITE-BOUND` logged. From then on the binding is fixed like an administrator-set
+one: a different object id is refused. Nothing is ever created from a provider sign-in.
+
+**Inviting.** `stig-accounts` `POST /users` takes `"signIn": "entra"`: the account gets only the terms required
+action (no password or OTP set-up), no set-up mail (`setupEmail: none`), and the `entra_pending` marker; it is refused
+(403) unless the address is exactly in the realm's `stig.accounts.entra-domain`. `setup-email` answers 409 for it.
+The trust added: the provider's tenant owns its UPN domain, and a user manager's invite of that address is the
+authorization; the identity is pinned on first use.
+

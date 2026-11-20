@@ -227,6 +227,21 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (!AccountsPolicy.validName(first) || !AccountsPolicy.validName(last) || !profileNameValid(first, "firstName") || !profileNameValid(last, "lastName")) {
                 return err(Response.Status.BAD_REQUEST, "firstName and lastName are required: a person's name, no links or markup");
             }
+            // "signIn": "entra" - an account that will sign in only through the realm's external identity provider:
+            // no password or OTP set-up, no set-up mail; the provider's FIRST sign-in binds it (PendingInviteLink).
+            // Allowed only when the realm names the provider's domain (stig.accounts.entra-domain) and the address is in it.
+            Object signInB = body == null ? null : body.get("signIn");
+            if (signInB != null && !(signInB instanceof String)) return err(Response.Status.BAD_REQUEST, "signIn must be a string");
+            String signIn = signInB == null ? "password" : ((String) signInB).trim();
+            if (!signIn.equals("password") && !signIn.equals(AccountsPolicy.SIGN_IN_PROVIDER)) {
+                return err(Response.Status.BAD_REQUEST, "signIn must be password or " + AccountsPolicy.SIGN_IN_PROVIDER);
+            }
+            boolean viaProvider = signIn.equals(AccountsPolicy.SIGN_IN_PROVIDER);
+            if (viaProvider && !AccountsPolicy.providerDomainMatches(email, realm.getAttribute(AccountsPolicy.PROVIDER_DOMAIN))) {
+                refused("create", "signIn " + signIn + " for " + email + ": the realm's " + AccountsPolicy.PROVIDER_DOMAIN + " is "
+                        + realm.getAttribute(AccountsPolicy.PROVIDER_DOMAIN));
+                return err(Response.Status.FORBIDDEN, "this address cannot sign in through the identity provider");
+            }
             String domains = emailDomains();
             if (!AccountsPolicy.emailDomainAllowed(email, domains)) {
                 refused("create", "e-mail domain of " + email + " not in " + domains);
@@ -253,16 +268,26 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             }
             UserModel u = session.users().addUser(realm, username);
             u.setEnabled(true); u.setEmail(email); u.setEmailVerified(false); u.setFirstName(first); u.setLastName(last);
-            SETUP_ACTIONS.forEach(u::addRequiredAction);
+            if (viaProvider) {
+                u.addRequiredAction("TERMS_AND_CONDITIONS");          // no password, no OTP: the provider signs them in
+                u.setSingleAttribute(PendingInviteLink.PENDING_MARKER, String.valueOf(Time.currentTimeMillis()));
+            } else {
+                SETUP_ACTIONS.forEach(u::addRequiredAction);
+            }
             u.joinGroup(g);
             u.setSingleAttribute(CREATED_BY, caller() + " " + Time.currentTimeMillis());   // read by the operator's tooling
             Map<String, Object> rep = new LinkedHashMap<>();
             rep.put("id", u.getId()); rep.put("username", username); rep.put("email", email); rep.put("group", g.getId());
+            if (viaProvider) rep.put("signIn", signIn);
             if (ref != null) rep.put("reference", ref);
             adminEvent.operation(OperationType.CREATE).resource(ResourceType.USER).resourcePath("users", u.getId()).representation(rep).success();
             LOG.infof("STIG-ACCOUNTS created realm=%s caller=%s user=%s group=%s%s", realm.getName(), caller(), username, groupPath, refSuffix(ref));
-            boolean sent = sendSetup(u, lifespan, ref);
-            Map<String, Object> out = new LinkedHashMap<>(rep); out.put("setupEmail", sent ? "sent" : "failed");
+            Map<String, Object> out = new LinkedHashMap<>(rep);
+            if (viaProvider) {
+                out.put("setupEmail", "none");                       // nothing to set up: the first provider sign-in binds it
+            } else {
+                out.put("setupEmail", sendSetup(u, lifespan, ref) ? "sent" : "failed");
+            }
             return Response.status(Response.Status.CREATED).entity(out).type(MediaType.APPLICATION_JSON).build();
         }
 
@@ -277,6 +302,9 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (lifespan < 0) return err(Response.Status.BAD_REQUEST, "lifespan must be 300..86400 seconds");
             if (u.getEmail() == null || u.getEmail().isBlank()) return err(Response.Status.BAD_REQUEST, "the account has no e-mail address");
             // only while the account is still being set up: no password, OTP or WebAuthn yet, set-up actions pending
+            if (u.getFirstAttribute(PendingInviteLink.PENDING_MARKER) != null) {
+                return err(Response.Status.CONFLICT, "the account signs in through the identity provider: there is no set-up mail");
+            }
             boolean hasCredential = u.credentialManager().getStoredCredentialsStream().findAny().isPresent();
             List<String> pending = u.getRequiredActionsStream().collect(Collectors.toList());
             if (hasCredential || !pending.contains("UPDATE_PASSWORD") || !pending.contains("CONFIGURE_TOTP")) {

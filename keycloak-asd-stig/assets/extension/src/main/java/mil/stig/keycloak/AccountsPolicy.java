@@ -24,6 +24,15 @@ final class AccountsPolicy {
     /** One allowlist entry: ".suffix" (any domain ending in it) or an exact domain. */
     static final Pattern DOMAIN_ENTRY = Pattern.compile("^\\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$");
     static final int CREATE_PER_HOUR = 20;
+    /** "signIn" value of a create for an account that signs in only through the realm's external identity provider. */
+    static final String SIGN_IN_PROVIDER = "entra";
+    /** Realm attribute: the one e-mail domain such accounts may have (the provider's own); unset = no such accounts. */
+    static final String PROVIDER_DOMAIN = "stig.accounts.entra-domain";
+    /** The address is exactly in the realm's provider domain (case-insensitive; no subdomain). Unset or blank: false. */
+    static boolean providerDomainMatches(String email, String domain) {
+        if (email == null || domain == null || domain.isBlank() || email.indexOf('@') < 0) return false;
+        return email.substring(email.lastIndexOf('@') + 1).equalsIgnoreCase(domain.trim());
+    }
     /** The rate window in seconds: a sliding hour (a slot frees itself this long after it was claimed). */
     static final int RATE_WINDOW = 3600;
     /** At most this many accounts disabled per caller in any 60 minutes (a stolen session cannot empty a tree at once). */

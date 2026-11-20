@@ -40,6 +40,9 @@ Use the card's UPN exactly as it appears. Many cards use 16 digits (the EDIPI pl
   disables per caller in any 60 minutes** (429 beyond). The earlier per-clock-hour window allowed up to 40 around an
   hour boundary. Optional `reference` on every call (recorded
   in the admin event); `operations.md` section 8.
+- **New, optional: the first identity-provider sign-in can bind a pending invite** (`stig.pending-invite-domain` on the
+  first-broker `idp-link-by-admin-attribute` execution; `stig-accounts` `"signIn": "entra"`). Off unless configured.
+  `operations.md` section 10.
 - **New: an admin-API client profile** (`stig.admin-api.profile=account-onboarding` on a client) holds every token that
   client issues to the account-administration calls and requires a recent authentication for writes (401 with an
   RFC 9470 step-up challenge otherwise). Clients without the attribute are unaffected. `operations.md` section 9.
