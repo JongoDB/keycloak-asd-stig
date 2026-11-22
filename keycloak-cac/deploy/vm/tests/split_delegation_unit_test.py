@@ -665,5 +665,8 @@ got = raises(lambda: M.sync_delegations(kA, kA.tree()), RuntimeError)
 check("[admin carrier] sync_delegations refuses a tree group that carries a realm-management role",
       isinstance(got, str) and "realm-management" in got and "/%s/administrator" % APP in got, got)
 check("[admin carrier] ... before writing anything", len(kA.log) == writes_before, kA.log[writes_before:][:3])
+got = raises(lambda: M.rollback_delegations(kA, kA.tree()), RuntimeError)
+check("[admin carrier] delegation-rollback refuses it too, before writing anything",
+      isinstance(got, str) and "realm-management" in got and len(kA.log) == writes_before, got)
 
 print("\n%d/%d passed" % (sum(res), len(res))); sys.exit(0 if all(res) else 1)

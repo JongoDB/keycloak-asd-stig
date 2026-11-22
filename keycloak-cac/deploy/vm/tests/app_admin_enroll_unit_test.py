@@ -15,9 +15,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 src = open(os.path.join(HERE, "..", "fgap", "app_admin_fgap.py")).read()
 F = {"__name__": "app_admin_fgap_enroll_unit"}
 exec(compile(src[:src.index("\nap = argparse.ArgumentParser")], "app_admin_fgap.py", "exec"), F)
-enroll_refusal, master_allowlist = F["enroll_refusal"], F["master_allowlist"]
+enroll_refusal, master_allowlist, default_role_ids = F["enroll_refusal"], F["master_allowlist"], F["default_role_ids"]
 
 APP, RM = "app-a", "rm-client-id"
+# default-roles-example -> offline_access, account view-profile, account manage-account -> manage-account-links
+COMPOSITES = {"dr": ["offline-access", "acct-view-profile", "acct-manage-account"], "acct-manage-account": ["acct-manage-links"]}
+DEFAULT_ACCOUNT = ["acct-view-profile", "acct-manage-account", "acct-manage-links"]
 res = []
 def check(n, ok, d=""):
     res.append(bool(ok)); print("%s  %-92s %s" % ("PASS" if ok else "FAIL", n, d), flush=True)
@@ -30,18 +33,26 @@ class FakeKC:
     def group(self, path, rm_roles=()):
         self.groups[path] = {"id": "g" + str(len(self.groups)), "path": path, "rm": list(rm_roles)}
     def user(self, uid, groups=(), direct=None, rm_direct=(), attrs=None, eff_other=None):
+        # every user holds the realm's default roles: account view-profile and manage-account (+ manage-account-links)
+        eff = {"account-id": list(DEFAULT_ACCOUNT)}
+        for k, v in (eff_other or {}).items():
+            eff[k] = eff.get(k, []) + list(v)
         self.users[uid] = {"groups": list(groups), "direct": dict(direct or {APP: ["viewer"]}),
-                           "rm_direct": list(rm_direct), "attrs": dict(attrs or {}), "eff_other": dict(eff_other or {})}
+                           "rm_direct": list(rm_direct), "attrs": dict(attrs or {}), "eff_other": eff}
         return {"id": uid, "username": uid}
     def api(self, method, path, obj=None, expect=(200, 201, 204)):
         assert method == "GET", path
+        if path == "":
+            return 200, {"realm": "example", "defaultRole": {"id": "dr", "name": "default-roles-example"}}
+        if path.startswith("/roles-by-id/"):
+            return 200, [{"id": c} for c in COMPOSITES.get(path.split("/")[2], [])]
         p = path.split("?")[0].split("/")
         u = self.users[p[2]]
         if path.endswith("/role-mappings/clients/%s/composite" % RM):       # effective: direct + via groups
             names = set(u["rm_direct"]) | {r for g in u["groups"] for r in self.groups[g]["rm"]}
             return 200, [{"name": n} for n in sorted(names)]
         if p[3:5] == ["role-mappings", "clients"] and path.endswith("/composite"):
-            return 200, [{"name": n} for n in u["eff_other"].get(p[5], [])]
+            return 200, [{"id": n, "name": n} for n in u["eff_other"].get(p[5], [])]
         if p[3:] == ["groups"]:
             qs = dict(x.split("=") for x in path.split("?")[1].split("&"))
             allg = [{"id": self.groups[g]["id"], "path": g} for g in u["groups"]]
@@ -64,12 +75,16 @@ kc.group("/staff", rm_roles=("view-users",))               # an ordinary-looking
 al = master_allowlist(kc)
 check("the allowlist is read from the master realm attribute for this realm", al == {"vetted-admin", "other-id"}, sorted(al))
 
-OTHER = [{"id": "app-b-id", "clientId": "app-b"}]
+OTHER = [{"id": "account-id", "clientId": "account"}, {"id": "app-b-id", "clientId": "app-b"}]
+DEFAULTS = default_role_ids(kc)
+check("the default role's grants are expanded through composites", {"acct-view-profile", "acct-manage-account", "acct-manage-links"} <= DEFAULTS, sorted(DEFAULTS))
 def why(u):
-    return enroll_refusal(kc, u, APP, RM, al, OTHER)
+    return enroll_refusal(kc, u, APP, RM, al, OTHER, DEFAULTS)
 
-check("an ordinary member of the app (direct app role, app groups only) may be enrolled",
-      why(kc.user("plain", groups=["/app-a/viewer"])) is None)
+r = why(kc.user("plain", groups=["/app-a/viewer"]))
+check("an ordinary member (app role, app groups, and the realm's default account roles) IS enrollable", r is None, r)
+r = why(kc.user("acct-extra", eff_other={"account-id": ["acct-delete-account"]}))
+check("REFUSED: an account-client role beyond the default roles", r and "account" in r, r)
 r = why(kc.user("via-group", groups=["/staff"]))
 check("REFUSED: a realm-management role that arrives only through a group (not a direct mapping)",
       r and "realm-management" in r and "view-users" in r, r)

@@ -31,8 +31,10 @@ Rules (reported by number only, so the CI log of this public repository never re
        are kept here);
   6    a GUID within 100 characters of a tenant/directory keyword that is not an obvious placeholder (fewer than 8
        distinct hex digits, e.g. 00000000-0000-4000-8000-000000000001). Use a placeholder in docs and tests.
-  7    an abbreviation of a private name left behind by a rename: identifiers such as l-c-2, l-c_<name>, c-y<...>user
-       (spelled here with hyphens so this file does not match itself).
+  7    an abbreviation of a private name left behind by a rename (case-blind; spelled here with hyphens so this file
+       does not match itself): l-c-2 glued or not; lower-case l-c_<name> (not the locale's l-c_all; upper-case L-C_* are POSIX locale categories); l-c-sec, l-c-t, l-c-x, l-c-m;
+       c-y<...>user (not cyber-user); no-c-y, no-d-a-i; lab.c-y.<tag>; c-y = ... . Checked only on plain UTF-8 text (not decoded base64,
+       binary data or PNG chunks), and ignored inside long base64-like runs, where random letters would trip it.
 
 Threat model and limits. This is a safety net against ACCIDENTAL leaks: a name pasted into a comment, test,
 default value, commit message, generated report or packaged archive, including in the encodings that tooling
@@ -74,9 +76,27 @@ TERMS = [re.compile(p, re.I) for p in (
     r"cy[\W_]*roid",
     r"stock[\W_]*span",
 )]
-# Abbreviations of the private names left behind by a rename (identifiers built from the first letters, see rule 7).
-# Word-bounded and checked only on decoded TEXT runs of letters, so random base64 or binary does not trip it.
-ABBREV = re.compile(r"(?<![A-Za-z0-9])(?:l[c]2|l[c]_[a-z]\w*|c[y][a-z]{0,6}user)(?![A-Za-z0-9])")
+# Rule 7: abbreviations of the private names left behind by a rename - identifiers built from their first letters
+# (the shapes are listed in the module docstring, spelled there so that this file does not match itself). Case-blind;
+# a match inside a long base64-like run (random encoded data) is ignored, see abbrev_hit().
+ABBREV = re.compile(r"l[c]2"
+                    r"|(?<![A-Za-z0-9])(?:(?-i:l[c]_(?!all\b)[a-z]\w*)"
+                    r"|c[y](?:user|[a-z]{0,6}(?<!ber)user)"
+                    r"|no(?:c[y]|d[a]i)"
+                    r")(?![A-Za-z0-9])"
+                    r"|(?<![A-Za-z0-9])l[c](?:sec|t|x|m)(?![A-Za-z])"
+                    r"|\blab\.c[y]\."
+                    r"|(?<![A-Za-z0-9_.])c[y]\s*=(?!=)",
+                    re.I)
+B64_LONG_RUN = re.compile(r"[A-Za-z0-9+/]{20,}+")
+
+
+def abbrev_hit(t):
+    """A rule-7 match outside long base64-like runs (>= 20 characters of [A-Za-z0-9+/]): those runs are blanked first,
+    in one linear pass, so random encoded data cannot trip it."""
+    return bool(ABBREV.search(B64_LONG_RUN.sub(" ", t)))
+
+
 GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 TENANT_WORD = re.compile(r"tenant|\btid\b|directory[\W_]*id|microsoftonline|entra[\W_]*id", re.I)
 KNOWN_PRIVATE_SHA256 = {
@@ -218,12 +238,12 @@ class Scanner:
                 seen.add(t)
                 yield t
 
-    def check_text(self, where, text):
+    def check_text(self, where, text, abbrev=True):
         for t in self.text_variants(text):
             for i, rx in enumerate(TERMS, 1):
                 if rx.search(t):
                     self.hit(where, "rule %d (private name)" % i)
-            if ABBREV.search(t):
+            if abbrev and abbrev_hit(t):
                 self.hit(where, "rule 7 (an abbreviation of a private name)")
             for m in GUID.finditer(t):
                 g = m.group(0).lower()
@@ -360,17 +380,17 @@ class Scanner:
             ctype = data[pos + 4:pos + 8]
             body = data[pos + 8:pos + 8 + length]
             if ctype == b"tEXt":
-                self.check_text(where + " (PNG tEXt)", body.decode("latin-1"))
+                self.check_text(where + " (PNG tEXt)", body.decode("latin-1"), False)
             elif ctype == b"zTXt" and b"\0" in body:
                 key, rest = body.split(b"\0", 1)
-                self.check_text(where + " (PNG zTXt)", key.decode("latin-1") + " " + self._zlib(rest[1:], 15)[0].decode("latin-1"))
+                self.check_text(where + " (PNG zTXt)", key.decode("latin-1") + " " + self._zlib(rest[1:], 15)[0].decode("latin-1"), False)
             elif ctype == b"iTXt" and body.count(b"\0") >= 4:
                 key, rest = body.split(b"\0", 1)
                 compressed, rest = rest[0:1] == b"\1", rest[2:]
                 _lang, _tkey, text = rest.split(b"\0", 2)
                 if compressed:
                     text = self._zlib(text, 15)[0]
-                self.check_text(where + " (PNG iTXt)", key.decode("latin-1") + " " + text.decode("utf-8", "replace"))
+                self.check_text(where + " (PNG iTXt)", key.decode("latin-1") + " " + text.decode("utf-8", "replace"), False)
             elif ctype == b"IEND":
                 break
             pos += 12 + length
@@ -469,8 +489,16 @@ class Scanner:
         if kind:
             self.scan_container(where, kind, data, depth)
             return
+        # rule 7 only on plain text: not inside decoded base64, binary data or anything that is not clean UTF-8,
+        # where three random letters would trip it
+        abbrev = "base64@" not in where and b"\x00" not in data and not data.startswith(PNG_SIG)
+        if abbrev:
+            try:
+                data.decode("utf-8")
+            except UnicodeDecodeError:
+                abbrev = False
         for text in self.decodings(data):
-            self.check_text(where, text)
+            self.check_text(where, text, abbrev)
         if data.startswith(PNG_SIG):
             self.scan_png_text(where, data)
         if QP_HEADER.search(data[:65536]):     # e-mail: soft line breaks and =XX escapes would split a name

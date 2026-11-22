@@ -167,15 +167,15 @@ try:
             check("%s: any other endpoint path or method -> 403" % who, (s1, s2, s3) == (403, 403, 403), "GET %s, DELETE %s, PUT %s" % (s1, s2, s3))
         else:
             # by design app-a creates no accounts - the operator invites; app-a lists members and moves them
-            plain_m = mk("t.acc.lcm%s" % STAMP, groups=[grp], actions=["UPDATE_PASSWORD", "CONFIGURE_TOTP"])
-            ep = [call(tok, "POST", EP + "/users", {"username": "t.acc.lcx%s" % STAMP, "email": "t.acc.lcx%s@%s" % (STAMP, MAILDOM),
+            plain_m = mk("t.acc.dgm%s" % STAMP, groups=[grp], actions=["UPDATE_PASSWORD", "CONFIGURE_TOTP"])
+            ep = [call(tok, "POST", EP + "/users", {"username": "t.acc.dgx%s" % STAMP, "email": "t.acc.dgx%s@%s" % (STAMP, MAILDOM),
                                                     "firstName": "T", "lastName": "X", "group": grp})[0],
                   call(tok, "POST", EP + "/users/%s/setup-email" % plain_m["id"])[0],
                   call(tok, "POST", EP + "/users/%s/disable" % plain_m["id"])[0],
                   call(tok, "GET", EP + "/users")[0]]
-            made_users.append("t.acc.lcx%s" % STAMP)
+            made_users.append("t.acc.dgx%s" % STAMP)
             check("%s: stig-accounts create / re-send / disable / anything -> 403 (no account powers at all)" % who, ep == [403, 403, 403, 403]
-                  and kc.api("GET", "/users/%s" % plain_m["id"])["enabled"] is True and not kc.api("GET", "/users?exact=true&username=t.acc.lcx%s" % STAMP),
+                  and kc.api("GET", "/users/%s" % plain_m["id"])["enabled"] is True and not kc.api("GET", "/users?exact=true&username=t.acc.dgx%s" % STAMP),
                   "HTTP %s" % ep)
             A_ = "/admin/realms/%s" % REALM
             role_g = M.group_by_path(kc, grp)

@@ -951,6 +951,14 @@ def membership_writers(app, gname):
     """The delegate client ids that may write membership of /<app>/<gname> ('' = the tree root), besides the user managers."""
     return sorted(cid for cid, groups in APP_DELEGATIONS.get(app, {}).items() if gname in groups)
 
+def refuse_admin_carriers(kc, apps):
+    """RuntimeError if any group of a configured application tree carries a realm-management role."""
+    carriers = [g["path"] for app in APP_CLIENTS for g in apps
+                if (g["path"] == "/" + app or g["path"].startswith("/%s/" % app)) and group_carries_admin(kc, g["path"])]
+    if carriers:
+        raise RuntimeError("REFUSED: %s carr%s a realm-management role (directly or by composite): no delegation may "
+                           "reach it; remove that mapping or composite first" % (", ".join(carriers), "ies" if len(carriers) == 1 else "y"))
+
 def sync_delegations(kc, apps):
     """Converge every application tree to the split delegation (above). Migration-safe order for a realm still holding
     the earlier single permission (`delegated: /<app>` with manage-membership over the whole tree):
@@ -962,13 +970,11 @@ def sync_delegations(kc, apps):
          that aggregate still carried tree-wide manage-membership;
       4. `membership:` permissions of groups no longer in the tree are deleted.
     Idempotent: a converged realm gets no write. Any failure raises or exits before the next step.
-    Refused, before any write, while a tree group carries a realm-management role (an app role that is a composite of
-    one, or a mapping on the group or its root): its delegates and app managers would hand out administrator rights."""
-    carriers = [g["path"] for app in APP_CLIENTS for g in apps
-                if (g["path"] == "/" + app or g["path"].startswith("/%s/" % app)) and group_carries_admin(kc, g["path"])]
-    if carriers:
-        raise RuntimeError("REFUSED: %s carr%s a realm-management role (directly or by composite): no delegation may "
-                           "reach it; remove that mapping or composite first" % (", ".join(carriers), "ies" if len(carriers) == 1 else "y"))
+    Refused while a tree group carries a realm-management role (an app role that is a composite of one, or a mapping
+    on the group or its root): its delegates and app managers would hand out administrator rights. The check runs
+    before this function writes any permission, policy or aggregate; the role groups themselves (app_groups) already
+    exist by then."""
+    refuse_admin_carriers(kc, apps)
     ap = kc.api("GET", "/clients?clientId=admin-permissions")[0]
     base = "/clients/%s/authz/resource-server" % ap["id"]
     um = ensure_um_policy(kc, base)
@@ -1021,6 +1027,7 @@ def rollback_delegations(kc, apps):
     IS the escalation. Order: every delegation that did not exist before (the reader delegate) leaves the tree's
     aggregate first, then the tree permission regains manage-membership (still intersected with the per-group ones,
     so nobody widens), and only then are the per-group permissions and their aggregates deleted."""
+    refuse_admin_carriers(kc, apps)            # as sync_delegations: before any permission or policy is written
     ap = kc.api("GET", "/clients?clientId=admin-permissions")[0]
     base = "/clients/%s/authz/resource-server" % ap["id"]
     um = ensure_um_policy(kc, base)

@@ -122,7 +122,7 @@ try:
         check("refused: " + name, any(needle in e for e in errs), (errs or ["(accepted)"])[0][:70])
     refused("a wildcard redirect URI", lambda c: c.update(redirect_uris=["https://zz.example.mil/*"]), "wildcard")
     refused("an http redirect URI", lambda c: c.update(redirect_uris=["http://zz.example.mil/cb"]), "must use https")
-    refused("a localhost redirect URI", lambda c: c.update(redirect_uris=["https://localhost:3002/cb"]), "localhost")
+    refused("a localhost redirect URI", lambda c: c.update(redirect_uris=["https://localhost:8081/cb"]), "localhost")
     refused("a 127.0.0.1 redirect URI", lambda c: c.update(redirect_uris=["https://127.0.0.1/cb"]), "IP literal")
     refused("a *.localhost redirect URI", lambda c: c.update(redirect_uris=["https://app.localhost/cb"]), "localhost")
     refused("a [::1] post-logout URI", lambda c: c.update(post_logout_redirect_uris=["https://[::1]/out"]), "IP literal")
@@ -138,7 +138,7 @@ try:
     for host in ("127.0.0.1.", "0x7f000001", "017700000001", "[::ffff:7f00:1]", "[0:0:0:0:0:0:0:1]", "10.1"):
         refused("IP literal %s (the public validator's spellings)" % host, lambda c, h=host: c.update(redirect_uris=["https://%s/cb" % h]), "IP")
     # localhost: never on the production IdP (no --allow-dev: the option does not exist)
-    for u in ("https://localhost:3002/cb", "http://localhost:3002/cb", "https://LOCALHOST/cb", "https://localhost./cb",
+    for u in ("https://localhost:8081/cb", "http://localhost:8081/cb", "https://LOCALHOST/cb", "https://localhost./cb",
               "https://app.localhost/cb", "https://localhost.localdomain/cb"):
         refused("localhost %s" % u, lambda c, u=u: c.update(redirect_uris=[u]), "localhost")
     check("add-client has no --allow-dev option", "--allow-dev" not in open(a.admin).read())
@@ -331,7 +331,7 @@ try:
     run(M.add_client, kc5, raw(GOOD), args())
     drift, out, ex = run(M.check_clients, kc5)
     check("check-clients: live = host file -> no drift", drift == [] and "ok    zz-unit" in out, drift)
-    cu5 = next(iter(kc5.clients)); kc5.clients[cu5]["redirectUris"] = ["https://localhost:3002/cb"]
+    cu5 = next(iter(kc5.clients)); kc5.clients[cu5]["redirectUris"] = ["https://localhost:8081/cb"]
     drift, out, ex = run(M.check_clients, kc5)
     check("check-clients: a live change the file would undo -> drift naming the field", drift and "redirectUris" in out)
     kc5.clients[cu5]["redirectUris"] = GOOD["redirect_uris"]

@@ -127,14 +127,30 @@ def paged_get(kc, path, size=500):
             return out
         first += size
 
-def enroll_refusal(kc, u, app, rm_id, allowlisted, other_clients=()):
+def default_role_ids(kc):
+    """Every role id the realm's default role (default-roles-<realm>) grants, composites expanded: what EVERY user holds
+    (e.g. account:view-profile, manage-account and its manage-account-links), so it says nothing about a person."""
+    _, realm = kc.api("GET", "")
+    start = ((realm or {}).get("defaultRole") or {}).get("id")
+    seen, todo = set(), [start] if start else []
+    while todo:
+        rid = todo.pop()
+        if rid in seen:
+            continue
+        seen.add(rid)
+        _, comps = kc.api("GET", "/roles-by-id/%s/composites" % rid)
+        todo += [c["id"] for c in comps or [] if c.get("id") and c["id"] not in seen]
+    return seen
+
+def enroll_refusal(kc, u, app, rm_id, allowlisted, other_clients=(), defaults=frozenset()):
     """Why the account `u` must NOT be moved under the app's delegation (None = it may be). Moving it into /<app>/<ROLE>
     puts it in reach of the app's administrator, so anything that makes it more than an ordinary member of this one
     application refuses it - judged on EFFECTIVE roles (groups and composites included), not direct mappings only:
       - any realm-management role, however it arrives (an IdP administrator or user manager);
       - membership of any group outside /<app> (the /roles/* role catalogue, another application's tree, anything else);
       - a service account;
-      - a role of another client, direct or effective (re-pointing that account would reach that application);
+      - a role of another client, direct or effective, beyond the realm's default roles (re-pointing that account
+        would reach that application);
       - an identity binding (cac_edipi, entra_oid) - as idp-admin.py user-create-cac --existing refuses one;
       - an entry in the vetted-administrator allowlist."""
     if u["id"] in allowlisted:
@@ -155,7 +171,7 @@ def enroll_refusal(kc, u, app, rm_id, allowlisted, other_clients=()):
     # effective roles of every other client (through a composite of a realm or app role)
     for oc in other_clients:
         _, eff_o = kc.api("GET", "/users/%s/role-mappings/clients/%s/composite" % (u["id"], oc["id"]))
-        if eff_o:
+        if [r for r in eff_o or [] if r.get("id") not in defaults]:       # beyond what every user holds
             return "holds roles of %s (effective)" % oc["clientId"]
     _, full = kc.api("GET", "/users/%s" % u["id"])
     bound = sorted(k for k in ("cac_edipi", "entra_oid") if (full.get("attributes") or {}).get(k))
@@ -263,12 +279,13 @@ def setup(a):
         rmc = one(kc, "/clients?clientId=realm-management", "clientId", "realm-management") or sys.exit("no realm-management client")
         allowlisted = master_allowlist(kc)
         other_clients = [c for c in paged_get(kc, "/clients") if c["clientId"] not in (app, "realm-management")]
+        defaults = default_role_ids(kc)
         for r in roles:
             us = paged_get(kc, "/clients/%s/roles/%s/users" % (appc["id"], q(r["name"])))
             for u in us:
                 if u["id"] in seen: continue
                 seen.add(u["id"])
-                why = enroll_refusal(kc, u, app, rmc["id"], allowlisted, other_clients)
+                why = enroll_refusal(kc, u, app, rmc["id"], allowlisted, other_clients, defaults)
                 if why:
                     print("NOT enrolled %s: %s" % (u["username"], why)); continue
                 _, rm = kc.api("GET", "/users/%s/role-mappings" % u["id"])
