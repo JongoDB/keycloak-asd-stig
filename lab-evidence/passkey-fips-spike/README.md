@@ -1,25 +1,24 @@
-# Passkey (WebAuthn) under strict FIPS: lab spike, 2026-11-15
+# Passkey (WebAuthn) under strict FIPS: lab spike
 
-This is rollout step 1 of the [passkey public realm design](../../docs/passkey-public-realm.md) §10.
+The lab evidence for the [passkey public realm pattern](../../docs/passkey-public-realm.md) (§4 and §8).
 
-**No production IdP was touched.** Everything ran in a throwaway local container on an operator Mac, and the
-lab was torn down afterwards: containers, volumes and network removed.
+Everything ran in a throwaway local container, torn down afterwards: containers, volumes and network removed.
 
 ## Result
 
 **Passkey registration and sign-in work on the IdP's image in strict FIPS mode.** ES256 and RS256 both
 register and authenticate. FIPS mode broke nothing in any case tried. Ed25519 also works, but it stays **off**
-until its CMVP status is confirmed (design §4, Appendix A).
+until its CMVP status is confirmed (pattern §4, Appendix A).
 
 ## Set-up
 
 | | |
 |---|---|
-| Image | `keycloak-cac`, built locally from this repository at **`1ec4b6b`**, the commit the production IdP pinned at the time. Built with `FIPS=true`, `FIPS_MODE=strict`, Keycloak 26.8.2. This is a local arm64 build, so its digest differs from production's. |
+| Image | `keycloak-cac`, built locally from this repository. Built with `FIPS=true`, `FIPS_MODE=strict`, Keycloak 26.8.2. A local arm64 build. |
 | FIPS jars | bc-fips 2.1.3, bctls-fips 2.1.25, bcutil-fips 2.1.8, bcpkix-fips 2.1.13 (`keycloak-cac/fips/fips-jars.sha256`) |
 | Startup line | `FIPS1402Provider created: KC(BCFIPS version 2.0103 Approved Mode, FIPS-JVM: unknown)`. Keycloak puts BCFIPS first in the JCA provider list (`Security.insertProviderAt(bcFipsProvider, 1)` in `FIPS1402Provider`), so WebAuthn signature checks resolve to it first. `FIPS-JVM: unknown` reflects the Mac host. |
 | Deployment | The repository's `compose.lab.yaml` (Keycloak + PostgreSQL 17), with a local mail sink for the invitation mail |
-| Realm | A throwaway realm, `spike-public`. dod-stig login theme, Terms and Conditions on, registration and reset off, temporary lockout as in `example` (3 failures). The WebAuthn Passwordless policy is as in design §4: UV required, discoverable credential required, attestation `none`, attachment not specified, avoid same authenticator, passkeys enabled. |
+| Realm | A throwaway realm, `spike-public`. dod-stig login theme, Terms and Conditions on, registration and reset off, temporary lockout (3 failures). The WebAuthn Passwordless policy is as in pattern §4: UV required, discoverable credential required, attestation `none`, attachment not specified, avoid same authenticator, passkeys enabled. |
 | Browser flow | cookie, or [username form (passkeys) → CONDITIONAL [`conditional-credential` (webauthn-passwordless, not used) → `webauthn-authenticator-passwordless`]]. See finding 1. |
 | Invitation | Admin API `execute-actions-email` with Terms and Conditions + `webauthn-register-passwordless` (+ `VERIFY_EMAIL`, see finding 5). The link was taken from the mail sink. |
 | Authenticator | The Chrome DevTools-protocol virtual authenticator (Playwright Chromium 140) standing in for a platform passkey: CTAP2.1, internal transport, resident key, user verification. Every sign-in ran in a **new** browser context holding a copy of the credential, so cookies and session storage were clean each time. |
@@ -78,28 +77,27 @@ the autofill path; see "Not proved".
    policy.
 5. **E-mail is verified only when `VERIFY_EMAIL` is a set-up action.** With Terms and Conditions + passkey
    registration alone, `emailVerified` stayed `false`. Adding `VERIFY_EMAIL` to the invitation's actions made it
-   `true`. `stig-accounts` U1 should use `VERIFY_EMAIL, TERMS_AND_CONDITIONS, webauthn-register-passwordless`.
+   `true`. `stig-accounts`' set-up actions for a passkey realm should be `VERIFY_EMAIL, TERMS_AND_CONDITIONS, webauthn-register-passwordless`.
    Separately, 26.8.2's admin API has no passkey-mediation setting, so the default (conditional) applies.
 
 ## Not proved
 
 - **Real authenticators.** The tests used only the Chrome virtual authenticator, not iCloud Keychain, Google
-  Password Manager, Windows Hello or a YubiKey 5 FIPS. The build's **first step** is a real-device test: the operator signs in
-  with a phone or laptop passkey before any vendor uses the realm.
+  Password Manager, Windows Hello or a YubiKey 5 FIPS. Test with a real phone or laptop passkey, and a
+  security key, before anyone relies on the realm.
 - **Server-side user verification.** Chrome refuses a non-UV request when UV is required, so the server never saw a
   UV=0 assertion. That the server rejects one was not observed.
-- **Production's startup line.** Not read, to stay off the production IdP. The lab shows `FIPS-JVM: unknown`
-  because of the host.
+- **A server host's startup line.** The lab shows `FIPS-JVM: unknown` because of the local host.
 - **The banner on the autofill path.** A virtual authenticator answers autofill without user action, so it signed in
   before the banner was acknowledged. A person has to click into the username field, which the banner overlay
-  covers, but the banner is client-side script, not a server-side step. Check this in the real-device test.
+  covers, but the banner is client-side script, not a server-side step. Check this with a real device.
 - **Ed25519's CMVP coverage.** Ed25519 works on bc-fips 2.1.3. Whether that version's certificate covers EdDSA is
   not confirmed, so Ed25519 stays off.
 
 ## Part 2: Keycloak Organizations on the same image
 
-The lab was brought back up from the same image to answer the operator's affiliation requirement, then torn down again. The
-assessment and its controls are in design §13. In short:
+The lab was brought back up from the same image to assess Keycloak Organizations for affiliation, then torn down again. The
+assessment and its controls are in pattern §8. In short:
 
 - Organizations work in strict FIPS mode, and the `organization` claim carries the alias and id.
 - Organizations carry no roles and their internal groups are invisible to the group APIs, so the gate, the guard and
@@ -107,7 +105,7 @@ assessment and its controls are in design §13. In short:
 - The designed delegate gets 403 on every organization endpoint, and shared membership gives it no extra reach.
 - Membership changes need `manage-organizations` **and** `manage-users`.
 - **`manage-organizations` alone can create a password account** through an organization invitation, even with
-  registration off. That is why design §13 adds controls.
+  registration off. That is why pattern §8 adds controls.
 
 ## Evidence (in this directory)
 

@@ -41,10 +41,10 @@ never signs anyone in.
 | **Operator** | SSH to `idp-host` plus `sudo`, or run-command rights on the VM's resource group. `idp-admin.py` then acts as the master realm's `stig-automation` service account | `idp-admin.py` on the VM |
 | **IdP administrator** | group `/roles/idp-admin` (realm-management `realm-admin`) | admin console, or ask the operator |
 | **User manager** | group `/roles/idp-user-manager` | admin console (memberships only), `stig-accounts` API |
-| **app-a user manager** (every app-a admin) | group `/roles/app-a-user-manager`, granted by the operator together with `app-a:APP_ADMIN` | app-a's portal account page, with their own token (`idp-onboarding`); app-a's groups only |
+| **app-a user manager** (every app-a admin) | group `/roles/app-a-user-manager`, granted by the operator together with `app-a:administrator` | app-a's portal account page, with their own token (`idp-onboarding`); app-a's groups only |
 | **Auditor** | group `/roles/idp-auditor` | admin console, read only |
 | **app-a's Admin screen** | service account `app-a-admin` | app-a's own Admin screen, at `https://app-a.example.mil` |
-| **app-a reader delegate** | service account `app-a-reader-delegate` | app-a's own screens, for a Review lead: `REVIEW_READER` membership of existing app-a members only |
+| **app-a reader delegate** | service account `app-a-reader-delegate` | app-a's own screens, for a partner lead: `partner-reader` membership of existing app-a members only |
 | **Break-glass** | master realm | the VM only, in an emergency |
 
 Keep the operator and IdP administrators few. `sudo idp-admin.py allowlist` lists every vetted
@@ -102,16 +102,16 @@ If you do not have such a script, ask the operator to run `invite` (recipe c).
 
 ### app-a user manager (`/roles/app-a-user-manager`)
 
-- **Who:** every app-a admin. **Being `APP_ADMIN` in app-a means the operator also grants this role** (recipe g). It is
-  never given automatically from app-a's `APP_ADMIN` group, because app-a's own service account can write that group.
+- **Who:** every app-a admin. **Being `administrator` in app-a means the operator also grants this role** (recipe g). It is
+  never given automatically from app-a's `administrator` group, because app-a's own service account can write that group.
 - **Can do, from app-a's portal, signed in as themselves:** what a user manager can do, but only inside
-  `/app-a/*`: create an account in one app-a role group (`REVIEW_LEAD`, `REVIEW_ASSESSOR` and `VENDOR`
+  `/app-a/*`: create an account in one app-a role group (`partner-lead`, `partner-auditor` and `contractor`
   included), re-send its set-up e-mail, disable, and move people between app-a role groups. Every change needs a sign-in
   in the last 5 minutes; the page asks again when it is older.
 - **Cannot do:** anything a user manager cannot (above), nor anything in another application's groups, nor the bare
   `/app-a` group. Card (EDIPI) and Entra binding, password and TOTP resets, re-enabling and deleting stay with
   the operator and IdP admins.
-- The guard reports (`STIG-APP-MANAGER-MISALIGNED`, mailed) anyone holding this role without `app-a:APP_ADMIN`.
+- The guard reports (`STIG-APP-MANAGER-MISALIGNED`, mailed) anyone holding this role without `app-a:administrator`.
   Nothing is changed automatically: fix it with `grant` or `revoke`.
 
 ### Auditor (`/roles/idp-auditor`)
@@ -121,10 +121,10 @@ If you do not have such a script, ask the operator to run `invite` (recipe c).
 
 ### app-a's Admin screen (`app-a-admin`)
 
-- app-a users with `APP_ADMIN` use it through app-a's own Admin screen. It acts through this service account.
-- **Can do:** list the members of the `/app-a` role groups, and move a member between the 11 app-a role
-  groups. That changes their app-a role. It can also move members into and out of `REVIEW_READER`. It can never give `REVIEW_LEAD`,
-  `REVIEW_ASSESSOR` or `VENDOR`, and cannot put anyone in the bare `/app-a` group.
+- app-a users with `administrator` use it through app-a's own Admin screen. It acts through this service account.
+- **Can do:** list the members of the `/app-a` role groups, and move a member between the 6 app-a role
+  groups. That changes their app-a role. It can also move members into and out of `partner-reader`. It can never give `partner-lead`,
+  `partner-auditor` or `contractor`, and cannot put anyone in the bare `/app-a` group.
 - **Cannot do:** create, invite, disable or re-enable anyone; edit, reset or delete anyone; touch anyone who is not
   already an app-a group member; touch an administrator; give a role in any other app. Every `stig-accounts` call is
   refused to it.
@@ -136,15 +136,15 @@ If you do not have such a script, ask the operator to run `invite` (recipe c).
 ### app-a reader delegate (`app-a-reader-delegate`)
 
 Created with `idp-admin.py delegate-setup app-a-reader-delegate`. It holds no
-role. A Review lead acting in app-a can, through it, move existing app-a members into or out of `REVIEW_READER` and
-nothing else: no other group, nobody outside `/app-a`, no `stig-accounts` call, no impersonation (`fgap/split_delegation_test.py`). `REVIEW_LEAD`, `REVIEW_ASSESSOR` and `VENDOR` stay with IdP user managers and administrators. It starts on a
+role. A partner lead acting in app-a can, through it, move existing app-a members into or out of `partner-reader` and
+nothing else: no other group, nobody outside `/app-a`, no `stig-accounts` call, no impersonation (`fgap/split_delegation_test.py`). `partner-lead`, `partner-auditor` and `contractor` stay with IdP user managers and administrators. It starts on a
 client secret and moves to `client-jwt` with its own JWKS the same way as `app-a-admin`
 (`delegate-client-setup app-a-reader-delegate --jwks-url ...`).
 
-The four Review roles (`REVIEW_READER`, `REVIEW_ASSESSOR`, `REVIEW_LEAD`, `VENDOR`) each have their group
+The four partner roles (`partner-reader`, `partner-auditor`, `partner-lead`, `contractor`) each have their group
 `/app-a/<ROLE>`; the config's `applications.app-a.delegations` says which delegate may write which of them.
 
-**A further step:** a separate `app-a-public` realm for vendors without a CAC (passkeys only):
+**A further step:** a separate `app-a-public` realm for contractors without a CAC (passkeys only):
 [`passkey-public-realm.md`](passkey-public-realm.md).
 
 ### Break-glass (master realm)
@@ -159,9 +159,9 @@ the host README's break-glass procedure (the cloud's run-command facility, then 
 
 | Service (client id) | URL | Roles (group `/<client>/<ROLE>`) | Who can grant a role |
 |---|---|---|---|
-| `app-b` | `https://app-b.example.mil` | `admin`, `engineer`, `evaluator`, `student` | operator, IdP admin, user manager |
-| `app-c` | `https://app-c.example.mil` | `admin`, `engineer`, `evaluator`, `student` | operator, IdP admin, user manager |
-| `app-a` | `https://app-a.example.mil` | `OPERATIONAL_USER`, `UNIT_CHAMPION`, `SPONSOR`, `PROGRAM_OFFICE`, `TEST_OBSERVER`, `APP_ADMIN`, `STAFF_SUPPORT`, `STAFF_PRODUCT`, `STAFF_TEST_LEAD`, `STAFF_TRAINING_LEAD`, `STAFF_ENGINEER` | operator, IdP admin, user manager; app-a's Admin screen moves existing members between these 11 and into or out of `REVIEW_READER`. Also: `REVIEW_READER`, `REVIEW_ASSESSOR`, `REVIEW_LEAD`, `VENDOR`; LEAD, ASSESSOR and VENDOR are granted only by the operator, IdP admins and user managers; a Review lead in app-a can grant `REVIEW_READER` to an existing app-a member (reader delegate) |
+| `app-b` | `https://app-b.example.mil` | `owner`, `maintainer`, `reviewer`, `member` | operator, IdP admin, user manager; `/roles/app-b-user-manager` holders who also hold `owner` |
+| `app-c` | `https://app-c.example.mil` | `lead`, `analyst`, `auditor`, `reader` | operator, IdP admin, user manager; `/roles/app-c-user-manager` holders who also hold `lead` |
+| `app-a` | `https://app-a.example.mil` | `viewer`, `editor`, `approver`, `planner`, `observer`, `administrator`, plus `partner-reader`, `partner-auditor`, `partner-lead`, `contractor` | operator, IdP admin, user manager. The application's own administrator delegate moves existing members between the six application roles and into or out of `partner-reader`; a membership-only reader delegate writes `partner-reader` alone. `partner-auditor`, `partner-lead` and `contractor` are granted only by the operator, IdP admins and user managers. (Which delegate writes which group is the config's `applications.<app>.delegations`.) |
 
 How a role reaches the app:
 
@@ -208,8 +208,8 @@ Placeholders: `<first.last>` the username, `<EDIPI>` ten digits, `<client>` a cl
 ssh idp-host 'sudo idp-admin.py user-create-cac <first.last> <EDIPI> <address> <First> <Last> <client>:<ROLE>'
 ```
 
-Example: `user-create-cac jane.doe 1234567890 jane.doe@example.mil Jane Doe app-a:OPERATIONAL_USER`.
-It prints `created: jane.doe (cac_edipi verified, no identity-provider link), role app-a:OPERATIONAL_USER`.
+Example: `user-create-cac jane.doe 1234567890 jane.doe@example.mil Jane Doe app-a:viewer`.
+It prints `created: jane.doe (cac_edipi verified, no identity-provider link), role app-a:viewer`.
 
 What this gives the person: a card-only account. No password, no TOTP, no e-mail is sent. The role is a direct
 mapping.
@@ -308,12 +308,14 @@ still bound by the operator only. The manual way above keeps working.
 
 **Entra: who may sign in.** Keep **Assignment required?** on for the broker's enterprise application, so nobody
 outside an assigned group gets past Entra (AADSTS50105), and assign one **dynamic** group of enabled staff members to
-it (Graph `appRoleAssignedTo`, default role). For example:
+it (Graph `appRoleAssignedTo`, default role). For example, with your tenant's own naming conventions for separate
+administrator and emergency accounts in place of the placeholders:
 ```
-(user.userPrincipalName -notStartsWith "a_") and (user.userPrincipalName -notStartsWith "break") and
+(user.userPrincipalName -notStartsWith "<admin-account-prefix>") and
+(user.userPrincipalName -notStartsWith "<emergency-account-prefix>") and
 (user.accountEnabled -eq true) and (user.userType -eq "Member")
 ```
-- enabled staff **members** only; separate admin (`a_...`) and break-glass accounts and every guest are excluded;
+- enabled staff **members** only; separate administrator and emergency accounts and every guest are excluded;
 - there is then **no per-person Entra step**: joining the tenant makes someone eligible, leaving it removes them. An
   IdP account still needs an invite (above); an Entra sign-in never creates one.
 - Add the optional ID-token claim **acct** to the broker app registration (Token configuration -> + Add optional claim
@@ -383,7 +385,7 @@ app-a's Admin screen) can manage that role, and `user-create-cac --existing` ref
 - **Group roles** (most people): add the new group, then leave the old one. In the console: Users → the person →
   Groups → Join group, then select the old group → Leave. An IdP admin or a user manager can do this.
 - **app-a's own Admin screen** can move an app-a member from one app-a role to another (and into or
-  out of `REVIEW_READER`; never `REVIEW_LEAD`, `REVIEW_ASSESSOR` or `VENDOR`). It cannot add someone who
+  out of `partner-reader`; never `partner-lead`, `partner-auditor` or `contractor`). It cannot add someone who
   is not already an app-a member, cannot touch an administrator, cannot see a direct-mapped role, and cannot give a
   role in another app.
 - **Direct-mapped roles** (administrators, `user-create-cac`, `user-create-pw`): only an IdP admin or the operator.
@@ -419,11 +421,11 @@ ssh idp-host 'sudo idp-admin.py grant <first.last> idp-user-manager'    # or idp
 ```
 
 **An app-a admin**: one grant gives both the app-a role and the right to manage app-a's
-accounts from the portal. `grant` refuses the manager role unless `APP_ADMIN` is in the same grant or is
-already mapped directly (holding it only through app-a's `APP_ADMIN` group does not count):
+accounts from the portal. `grant` refuses the manager role unless `administrator` is in the same grant or is
+already mapped directly (holding it only through app-a's `administrator` group does not count):
 
 ```
-ssh idp-host 'sudo idp-admin.py grant <first.last> app-a-user-manager app-a:APP_ADMIN'
+ssh idp-host 'sudo idp-admin.py grant <first.last> app-a-user-manager app-a:administrator'
 ```
 
 The rules `grant` enforces:
