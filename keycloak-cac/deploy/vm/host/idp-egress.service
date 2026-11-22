@@ -1,0 +1,16 @@
+# /etc/systemd/system/idp-egress.service - Keycloak container egress rules (host/egress.sh -> /usr/local/sbin/idp-egress).
+# FAIL CLOSED: runs before dockerd, and docker.service REQUIRES it (RequiredBy=), so no container starts without the
+# rules and dockerd does not start at all if they cannot be applied. Install: README, "Egress firewall" (setup-host.sh does it).
+[Unit]
+Description=Shared IdP: Keycloak container egress rules (raw IMDS/WireServer drop + DOCKER-USER internal-range deny), before dockerd
+DefaultDependencies=no
+After=local-fs.target
+Before=docker.service network-pre.target
+Wants=network-pre.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/idp-egress
+ExecStart=/usr/local/sbin/idp-egress
+[Install]
+RequiredBy=docker.service
