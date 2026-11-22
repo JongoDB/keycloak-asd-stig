@@ -22,6 +22,20 @@
             <input class="${properties.kcButtonClass!} ${properties.kcButtonPrimaryClass!} ${properties.kcButtonBlockClass!} ${properties.kcButtonLargeClass!}"
                    id="kc-card-signin" type="submit" value="${msg("stigCardSignInUse")}"/>
         </form>
+        <#-- the realm's identity providers (e.g. Microsoft), as the stock login page lists them: a person who signs in
+             with one goes straight there, without "Use another sign-in method" first. FreeMarker auto-escapes. -->
+        <#if social?? && social.providers?? && social.providers?has_content>
+            <ul id="stig-card-idps" class="${properties.kcFormSocialAccountListClass!}">
+                <#list social.providers as p>
+                    <li>
+                        <a id="social-${p.alias}" class="${properties.kcFormSocialAccountListButtonClass!} ${properties.kcButtonClass!} ${properties.kcButtonDefaultClass!} ${properties.kcButtonBlockClass!}"
+                           type="button" href="${p.loginUrl}">
+                            <span>${p.displayName!p.alias}</span>
+                        </a>
+                    </li>
+                </#list>
+            </ul>
+        </#if>
         <#if cardOther>
         <form id="stig-card-other" action="${url.loginAction}" method="post">
             <input class="${properties.kcButtonClass!} ${properties.kcButtonDefaultClass!} ${properties.kcButtonBlockClass!} ${properties.kcButtonLargeClass!}"
