@@ -1,0 +1,243 @@
+{
+ "T1_realm": {
+  "organizationsEnabled": true,
+  "adminPermissionsEnabled": true
+ },
+ "T1_orgs": {
+  "acme": {
+   "id": "00000000-0000-4000-8000-000000000001",
+   "domains": [
+    {
+     "name": "acme.example",
+     "verified": false,
+     "autoRedirect": false
+    }
+   ]
+  },
+  "example": {
+   "id": "00000000-0000-4000-8000-000000000002",
+   "domains": [
+    {
+     "name": "example-org.example",
+     "verified": false,
+     "autoRedirect": false
+    }
+   ]
+  }
+ },
+ "T2_org_scope_exists": true,
+ "T2_org_scope_mappers": [
+  [
+   "oidc-organization-membership-mapper",
+   {
+    "id.token.claim": "true",
+    "introspection.token.claim": "true",
+    "access.token.claim": "true",
+    "claim.name": "organization",
+    "jsonType.label": "String",
+    "multivalued": "true"
+   }
+  ]
+ ],
+ "T2_claim_contractor": [
+  "acme"
+ ],
+ "T2_roles_contractor": {
+  "app-a": {
+   "roles": [
+    "contractor"
+   ]
+  }
+ },
+ "T2_claim_staff": [
+  "example"
+ ],
+ "T2_roles_staff": null,
+ "T2_claim_contractor_with_id": {
+  "acme": {
+   "id": "00000000-0000-4000-8000-000000000001"
+  }
+ },
+ "T4_top_groups_before": [],
+ "T4_top_groups_after": [
+  "/app-a"
+ ],
+ "T4_contractor_user_groups": [
+  "/app-a/contractor"
+ ],
+ "T4_outsider_user_groups": [],
+ "T4_contractor_rm_roles": {
+  "realmMappings": [
+   {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "name": "default-roles-spike-org",
+    "description": "${role_default-roles}",
+    "composite": true,
+    "clientRole": false,
+    "containerId": "00000000-0000-4000-8000-000000000004"
+   }
+  ]
+ },
+ "T4_profile_changed": false,
+ "T4_profile_attrs_added": [],
+ "T4_browser_flow": "browser",
+ "T4_browser_flow_execs": [
+  [
+   0,
+   "auth-cookie",
+   "ALTERNATIVE"
+  ],
+  [
+   0,
+   "auth-spnego",
+   "DISABLED"
+  ],
+  [
+   0,
+   "identity-provider-redirector",
+   "ALTERNATIVE"
+  ],
+  [
+   0,
+   "Organization",
+   "ALTERNATIVE"
+  ],
+  [
+   1,
+   "Browser - Conditional Organization",
+   "CONDITIONAL"
+  ],
+  [
+   2,
+   "conditional-user-configured",
+   "REQUIRED"
+  ],
+  [
+   2,
+   "organization",
+   "ALTERNATIVE"
+  ],
+  [
+   0,
+   "forms",
+   "ALTERNATIVE"
+  ],
+  [
+   1,
+   "auth-username-password-form",
+   "REQUIRED"
+  ],
+  [
+   1,
+   "Browser - Conditional 2FA",
+   "CONDITIONAL"
+  ],
+  [
+   2,
+   "conditional-user-configured",
+   "REQUIRED"
+  ],
+  [
+   2,
+   "conditional-credential",
+   "REQUIRED"
+  ],
+  [
+   2,
+   "auth-otp-form",
+   "ALTERNATIVE"
+  ],
+  [
+   2,
+   "webauthn-authenticator",
+   "DISABLED"
+  ],
+  [
+   2,
+   "auth-recovery-authn-code-form",
+   "DISABLED"
+  ]
+ ],
+ "T4_user_org_endpoint": [
+  "acme"
+ ],
+ "T3_delegate (query-users, query-groups + FGAP on /app-a)": {
+  "list orgs": 403,
+  "get org acme": 403,
+  "list acme members": 403,
+  "add staff to acme": 403,
+  "remove contractor from acme": 403,
+  "create org": 403,
+  "get contractor (in tree)": 200,
+  "get outsider (same org, not in tree)": 403,
+  "get staff (other org)": 403,
+  "search users -> usernames visible": [
+   200,
+   []
+  ],
+  "move contractor to partner-reader": 204,
+  "contractor's orgs via member endpoint": 403
+ },
+ "T5_role_needed": {
+  "only-query": {
+   "list orgs": 403,
+   "add outsider->example": 403,
+   "create org": 403
+  },
+  "view-users": {
+   "list orgs": 403,
+   "add outsider->example": 403,
+   "create org": 403
+  },
+  "manage-users": {
+   "list orgs": 403,
+   "add outsider->example": 403,
+   "create org": 403
+  },
+  "view-realm": {
+   "list orgs": 403,
+   "add outsider->example": 403,
+   "create org": 403
+  },
+  "manage-realm": {
+   "list orgs": 200,
+   "add outsider->example": 403,
+   "create org": 201
+  }
+ },
+ "T5_realm_management_roles": [
+  "create-client",
+  "impersonation",
+  "manage-authorization",
+  "manage-clients",
+  "manage-events",
+  "manage-identity-providers",
+  "manage-organizations",
+  "manage-realm",
+  "manage-users",
+  "query-clients",
+  "query-groups",
+  "query-organizations",
+  "query-realms",
+  "query-users",
+  "realm-admin",
+  "view-authorization",
+  "view-clients",
+  "view-events",
+  "view-identity-providers",
+  "view-organizations",
+  "view-realm",
+  "view-users"
+ ],
+ "T5_org_member_api_fields": {
+  "id": "00000000-0000-4000-8000-000000000005",
+  "username": "outsider.one",
+  "firstName": "Lab",
+  "lastName": "Outsider",
+  "email": "outsider.one@acme.example",
+  "emailVerified": true,
+  "enabled": true,
+  "createdTimestamp": 1794782161023,
+  "membershipType": "UNMANAGED"
+ }
+}

@@ -1,0 +1,495 @@
+{
+ "user": "es256.reader",
+ "registration_policy_algs": [
+  "ES256"
+ ],
+ "signin_policy_algs": [
+  "ES256",
+  "RS256"
+ ],
+ "dod_notice_invite_path": [
+  [
+   "invite step 0 action-token",
+   false
+  ],
+  [
+   "invite step 1 required-action",
+   false
+  ],
+  [
+   "invite step 2 required-action",
+   false
+  ],
+  [
+   "invite step 3 required-action",
+   false
+  ]
+ ],
+ "registration_page_end": "Sign in to spike-public | ",
+ "registration_webauthn_calls": [
+  {
+   "op": "create",
+   "options": {
+    "challenge": "<16 bytes>",
+    "rp": {
+     "id": "localhost",
+     "name": "app-a Partners (spike)"
+    },
+    "user": {
+     "id": "<36 bytes>",
+     "name": "es256.reader",
+     "displayName": "es256.reader"
+    },
+    "pubKeyCredParams": [
+     {
+      "type": "public-key",
+      "alg": -7
+     }
+    ],
+    "attestation": "none",
+    "authenticatorSelection": {
+     "residentKey": "required",
+     "requireResidentKey": true,
+     "userVerification": "required"
+    }
+   }
+  },
+  {
+   "op": "create-ok",
+   "type": "public-key",
+   "attachment": "platform"
+  }
+ ],
+ "credentials": [
+  {
+   "type": "webauthn-passwordless",
+   "label": "spike passkey",
+   "cose_alg": -7,
+   "alg": "ES256",
+   "cose_kty": 2,
+   "attestationStatementFormat": "none",
+   "aaguid": "00000000-0000-0000-0000-000000000000",
+   "transports": [
+    "internal"
+   ]
+  }
+ ],
+ "after_registration": {
+  "emailVerified": false,
+  "requiredActions": []
+ },
+ "authenticator_credentials": [
+  {
+   "rk": true,
+   "signCount": 1
+  }
+ ],
+ "signin": [
+  {
+   "mode": "username",
+   "uv": true,
+   "authenticator_has_credential": true,
+   "banner_shown": true,
+   "page_left_login": false,
+   "idp_events": [
+    [
+     "LOGIN",
+     null,
+     "webauthn-passwordless",
+     "true"
+    ]
+   ],
+   "url": "https://localhost:18443/realms/spike-public/account/",
+   "message": "",
+   "webauthn_calls": [
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get",
+     "mediation": null,
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [
+       {
+        "id": "<32 bytes>",
+        "type": "public-key"
+       }
+      ],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get-ok",
+     "type": "public-key"
+    }
+   ]
+  },
+  {
+   "mode": "button",
+   "uv": true,
+   "authenticator_has_credential": true,
+   "banner_shown": true,
+   "page_left_login": false,
+   "idp_events": [
+    [
+     "LOGIN",
+     null,
+     "webauthn-passwordless",
+     "true"
+    ]
+   ],
+   "url": "https://localhost:18443/realms/spike-public/account/",
+   "message": "",
+   "webauthn_calls": [
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get",
+     "mediation": null,
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get-error",
+     "error": "AbortError: Cancelling pending WebAuthn call"
+    },
+    {
+     "op": "get-ok",
+     "type": "public-key"
+    },
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get-ok",
+     "type": "public-key"
+    }
+   ]
+  },
+  {
+   "mode": "conditional",
+   "uv": true,
+   "authenticator_has_credential": true,
+   "banner_shown": false,
+   "page_left_login": false,
+   "idp_events": [
+    [
+     "LOGIN",
+     null,
+     "webauthn-passwordless",
+     "true"
+    ]
+   ],
+   "url": "https://localhost:18443/realms/spike-public/account/",
+   "message": "",
+   "webauthn_calls": [
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get-ok",
+     "type": "public-key"
+    },
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get-ok",
+     "type": "public-key"
+    },
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get-ok",
+     "type": "public-key"
+    }
+   ]
+  },
+  {
+   "mode": "username",
+   "uv": false,
+   "authenticator_has_credential": true,
+   "banner_shown": true,
+   "page_left_login": false,
+   "idp_events": [],
+   "url": "https://localhost:18443/realms/spike-public/login-actions/authenticate",
+   "message": "The Passkey operation was not allowed or timed out. You may have cancelled the request, taken too long to respond, or the operation may not be permitted in this",
+   "webauthn_calls": [
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get",
+     "mediation": null,
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [
+       {
+        "id": "<32 bytes>",
+        "type": "public-key"
+       }
+      ],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get-error",
+     "error": "NotAllowedError: The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client."
+    }
+   ]
+  },
+  {
+   "mode": "button",
+   "uv": false,
+   "authenticator_has_credential": true,
+   "banner_shown": true,
+   "page_left_login": false,
+   "idp_events": [],
+   "url": "https://localhost:18443/realms/spike-public/login-actions/authenticate",
+   "message": "The Passkey operation was not allowed or timed out. You may have cancelled the request, taken too long to respond, or the operation may not be permitted in this",
+   "webauthn_calls": [
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get",
+     "mediation": null,
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get-error",
+     "error": "AbortError: Cancelling pending WebAuthn call"
+    },
+    {
+     "op": "get-error",
+     "error": "NotAllowedError: The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client."
+    },
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get-error",
+     "error": "NotAllowedError: The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client."
+    }
+   ]
+  },
+  {
+   "mode": "username",
+   "uv": true,
+   "authenticator_has_credential": false,
+   "banner_shown": true,
+   "page_left_login": false,
+   "idp_events": [],
+   "url": "https://localhost:18443/realms/spike-public/login-actions/authenticate",
+   "message": "The Passkey operation was not allowed or timed out. You may have cancelled the request, taken too long to respond, or the operation may not be permitted in this",
+   "webauthn_calls": [
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get",
+     "mediation": null,
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [
+       {
+        "id": "<32 bytes>",
+        "type": "public-key"
+       }
+      ],
+      "userVerification": "required"
+     }
+    },
+    {
+     "op": "get-error",
+     "error": "NotAllowedError: The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client."
+    }
+   ]
+  },
+  {
+   "mode": "username-only",
+   "uv": true,
+   "authenticator_has_credential": true,
+   "banner_shown": true,
+   "page_left_login": false,
+   "idp_events": [],
+   "url": "https://localhost:18443/realms/spike-public/login-actions/authenticate",
+   "message": "",
+   "webauthn_calls": [
+    {
+     "op": "get",
+     "mediation": "conditional",
+     "options": {
+      "rpId": "localhost",
+      "challenge": "<16 bytes>",
+      "allowCredentials": [],
+      "userVerification": "required"
+     }
+    }
+   ]
+  }
+ ],
+ "events": [
+  {
+   "type": "CODE_TO_TOKEN",
+   "error": null,
+   "details": {}
+  },
+  {
+   "type": "LOGIN",
+   "error": null,
+   "details": {
+    "credential_type": "webauthn-passwordless",
+    "web_authn_authenticator_user_verification_checked": "true",
+    "auth_method": "openid-connect",
+    "redirect_uri": "https://localhost:18443/realms/spike-public/account/"
+   }
+  },
+  {
+   "type": "CODE_TO_TOKEN",
+   "error": null,
+   "details": {}
+  },
+  {
+   "type": "LOGIN",
+   "error": null,
+   "details": {
+    "credential_type": "webauthn-passwordless",
+    "web_authn_authenticator_user_verification_checked": "true",
+    "auth_method": "openid-connect",
+    "redirect_uri": "https://localhost:18443/realms/spike-public/account/"
+   }
+  },
+  {
+   "type": "CODE_TO_TOKEN",
+   "error": null,
+   "details": {}
+  },
+  {
+   "type": "LOGIN",
+   "error": null,
+   "details": {
+    "credential_type": "webauthn-passwordless",
+    "web_authn_authenticator_user_verification_checked": "true",
+    "auth_method": "openid-connect",
+    "redirect_uri": "https://localhost:18443/realms/spike-public/account/"
+   }
+  },
+  {
+   "type": "UPDATE_CREDENTIAL",
+   "error": null,
+   "details": {
+    "credential_type": "webauthn-passwordless",
+    "auth_method": "openid-connect",
+    "custom_required_action": "webauthn-register-passwordless",
+    "public_key_credential_aaguid": "00000000-0000-0000-0000-000000000000",
+    "redirect_uri": "https://localhost:18443/realms/spike-public/account/"
+   }
+  },
+  {
+   "type": "CUSTOM_REQUIRED_ACTION",
+   "error": null,
+   "details": {
+    "credential_type": "webauthn-passwordless",
+    "auth_method": "openid-connect",
+    "custom_required_action": "webauthn-register-passwordless",
+    "public_key_credential_aaguid": "00000000-0000-0000-0000-000000000000",
+    "redirect_uri": "https://localhost:18443/realms/spike-public/account/"
+   }
+  },
+  {
+   "type": "CUSTOM_REQUIRED_ACTION",
+   "error": null,
+   "details": {
+    "auth_method": "openid-connect",
+    "custom_required_action": "TERMS_AND_CONDITIONS",
+    "redirect_uri": "https://localhost:18443/realms/spike-public/account/"
+   }
+  }
+ ]
+}
