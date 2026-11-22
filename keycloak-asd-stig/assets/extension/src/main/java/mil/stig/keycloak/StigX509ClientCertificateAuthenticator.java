@@ -65,6 +65,13 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
 
             X509Certificate[] certs = getCertificateChain(context);
             if (certs == null || certs.length == 0) {
+                // STIG: with a card port, no certificate on THIS connection does not mean no card: the browser asks for
+                // one only in a TLS handshake, and it reuses a connection made without it. Offer "Sign in with my CAC"
+                // on the card port (a new handshake there; same cookies, so the same sign-in) next to the other methods.
+                if (PresentCardRequiredAction.CARD_PORT > 0) {
+                    context.forceChallenge(cardSignInPage(context));
+                    return;
+                }
                 // No x509 client cert, fall through and
                 // continue processing the rest of the authentication flow
                 logger.debug("[authenticate] x509 client certificate is not available for mutual SSL.");
@@ -273,6 +280,38 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
     private static void redactSubject(AuthenticationFlowContext context) {
         String dn = context.getAuthenticationSession().getAuthNote(Details.X509_CERTIFICATE_SUBJECT_DISTINGUISHED_NAME);
         if (dn != null) context.getEvent().detail(Details.X509_CERTIFICATE_SUBJECT_DISTINGUISHED_NAME, AccountsPolicy.redactEdipis(dn));
+    }
+
+    /** The card sign-in choice: "Sign in with my CAC" re-runs THIS step on the card port (its refresh URL there),
+     *  "Use another sign-in method" posts "cancel" to this step on the page's own origin. On the card port itself (the
+     *  person declined the prompt, or has no card) it says no certificate was presented. */
+    private Response cardSignInPage(AuthenticationFlowContext context) {
+        int port = PresentCardRequiredAction.CARD_PORT;
+        java.net.URI refresh = PresentCardRequiredAction.onCardPort(context.getRefreshExecutionUrl(), port);
+        List<Map<String, String>> params = new java.util.ArrayList<>();
+        if (refresh.getRawQuery() != null) {
+            for (String kv : refresh.getRawQuery().split("&")) {
+                int i = kv.indexOf('=');
+                String k = java.net.URLDecoder.decode(i < 0 ? kv : kv.substring(0, i), java.nio.charset.StandardCharsets.UTF_8);
+                String v = i < 0 ? "" : java.net.URLDecoder.decode(kv.substring(i + 1), java.nio.charset.StandardCharsets.UTF_8);
+                params.add(Map.of("name", k, "value", v));
+            }
+        }
+        String action = refresh.getScheme() + "://" + refresh.getRawAuthority() + refresh.getRawPath();
+        boolean onCardPort = context.getUriInfo() != null && context.getUriInfo().getRequestUri().getPort() == port;
+        LoginFormsProvider form = context.form()
+                .setAttribute("cardSignIn", action).setAttribute("cardSignInParams", params)
+                // another method only where there is one: this step is an ALTERNATIVE (a CAC-only realm has none)
+                .setAttribute("cardOther", context.getExecution() != null
+                        && context.getExecution().getRequirement() == org.keycloak.models.AuthenticationExecutionModel.Requirement.ALTERNATIVE)
+                .setAttribute("cardProbe", refresh.getScheme() + "://" + refresh.getRawAuthority() + "/realms/" + context.getRealm().getName()
+                        + "/.well-known/openid-configuration");
+        if (onCardPort) {
+            logger.infof("STIG-CARD-SIGNIN-NO-CERT realm=%s port=%d: the card port was reached without a client certificate",
+                    context.getRealm().getName(), port);
+            form.setAttribute("cardError", "stigCardSignInNoCert");
+        }
+        return form.createForm("stig-card-signin.ftl");
     }
 
     /** Every check a card sign-in makes on the chain (trust, CA subject, validity, key usage, policy, revocation). */
