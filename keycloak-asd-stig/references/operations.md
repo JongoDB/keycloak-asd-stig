@@ -353,8 +353,10 @@ same cookies, so the same sign-in), and, where the step is an ALTERNATIVE, "Use 
 to this step on the page's own origin and the flow goes on to the password / identity-provider methods. The same script
 probes the card port first and, if that fails or takes more than 10 s, says the network blocks the card sign-in. On the
 card port without a certificate (the prompt declined) it says so (`STIG-CARD-SIGNIN-NO-CERT`). A browser that already
-presents the card on the main port signs in as before, without the page. Cost: a person with no card meets this choice
-first and clicks once more.
+presents the card on the main port signs in as before, without the page. The page also lists the realm's identity providers
+(`social.providers`, as the stock login page does), so a person who signs in with one (e.g. Microsoft) goes straight
+there; "Use another sign-in method" remains for the password and other methods. It is offered only where the step is an
+ALTERNATIVE with another enabled step in its flow.
 
 ### An administrator with no second factor after an identity-provider sign-in
 

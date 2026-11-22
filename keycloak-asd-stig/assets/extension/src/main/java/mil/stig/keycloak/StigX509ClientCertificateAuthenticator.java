@@ -302,8 +302,7 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
         LoginFormsProvider form = context.form()
                 .setAttribute("cardSignIn", action).setAttribute("cardSignInParams", params)
                 // another method only where there is one: this step is an ALTERNATIVE (a CAC-only realm has none)
-                .setAttribute("cardOther", context.getExecution() != null
-                        && context.getExecution().getRequirement() == org.keycloak.models.AuthenticationExecutionModel.Requirement.ALTERNATIVE)
+                .setAttribute("cardOther", hasOtherMethod(context))
                 .setAttribute("cardProbe", refresh.getScheme() + "://" + refresh.getRawAuthority() + "/realms/" + context.getRealm().getName()
                         + "/.well-known/openid-configuration");
         if (onCardPort) {
@@ -312,6 +311,15 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
             form.setAttribute("cardError", "stigCardSignInNoCert");
         }
         return form.createForm("stig-card-signin.ftl");
+    }
+
+    /** This step is an ALTERNATIVE and its flow holds another enabled step to go on to (a CAC-only flow has none). */
+    static boolean hasOtherMethod(AuthenticationFlowContext context) {
+        org.keycloak.models.AuthenticationExecutionModel me = context.getExecution();
+        if (me == null || me.getRequirement() != org.keycloak.models.AuthenticationExecutionModel.Requirement.ALTERNATIVE) return false;
+        return context.getRealm().getAuthenticationExecutionsStream(me.getParentFlow())
+                .anyMatch(e -> !e.getId().equals(me.getId())
+                        && e.getRequirement() != org.keycloak.models.AuthenticationExecutionModel.Requirement.DISABLED);
     }
 
     /** Every check a card sign-in makes on the chain (trust, CA subject, validity, key usage, policy, revocation). */
