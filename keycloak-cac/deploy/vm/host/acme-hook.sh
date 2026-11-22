@@ -31,8 +31,10 @@ DNS='^[a-z0-9-]+(\.[a-z0-9-]+)*$'
 for v in "$ACME_ZONE" "$ACME_PARENT"; do
   [[ "$v" =~ $DNS ]] || { echo "idp-acme-hook: ACME_ZONE and ACME_PARENT must be DNS-label shaped"; exit 1; }
 done
-# an Azure resource group name: letters (either case), digits, . _ - (parentheses are allowed by Azure, not here)
-[[ "$ACME_RG" =~ ^[A-Za-z0-9._-]{1,90}$ ]] || { echo "idp-acme-hook: ACME_RG is not a resource group name"; exit 1; }
+# an Azure resource group name: letters (either case), digits, . _ - (parentheses are allowed by Azure, not here);
+# no leading or trailing dot and no "..", so it can never step outside its URL path segment
+[[ "$ACME_RG" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,89}$ && "$ACME_RG" != *..* && "$ACME_RG" != *. ]] \
+  || { echo "idp-acme-hook: ACME_RG is not a resource group name"; exit 1; }
 [ -n "$ACME_DOMAINS" ] || { echo "idp-acme-hook: ACME_DOMAINS is empty"; exit 1; }
 for d in $ACME_DOMAINS; do [[ "$d" =~ $DNS ]] || { echo "idp-acme-hook: ACME_DOMAINS must be space-separated DNS names"; exit 1; }; done
 [[ "$ACME_DOMAINS" =~ ^[a-z0-9.-]+( [a-z0-9.-]+)*$ ]] || { echo "idp-acme-hook: ACME_DOMAINS must be single-space separated"; exit 1; }
