@@ -6,7 +6,10 @@ set -euo pipefail
 IP="${1:?usage: ZONE=<zone> NAMES=\"idp ...\" CF_TOKEN_FILE=<file> cloudflare-dns.sh <public ip>}"
 ZONE="${ZONE:?set ZONE}"; NAMES="${NAMES:?set NAMES (labels under ZONE)}"
 T="$(tr -d '\r\n' < "${CF_TOKEN_FILE:?set CF_TOKEN_FILE}")"   # a trailing newline would join the bearer
-api() { curl -fsS -H "Authorization: Bearer $T" -H "Content-Type: application/json" "$@"; }
+# the token never reaches a command line (ps, /proc): a header file in a 0700 directory, removed on exit
+AUTHD=$(mktemp -d); chmod 700 "$AUTHD"; trap 'rm -rf "$AUTHD"' EXIT
+( umask 077; printf 'Authorization: Bearer %s\n' "$T" > "$AUTHD/cf" ); T=""
+api() { curl -fsS -H @"$AUTHD/cf" -H "Content-Type: application/json" "$@"; }
 ZID=$(api "https://api.cloudflare.com/client/v4/zones?name=$ZONE" | python3 -c 'import json,sys;print(json.load(sys.stdin)["result"][0]["id"])')
 for n in $NAMES; do
   fq="$n.$ZONE"; body=$(printf '{"type":"A","name":"%s","content":"%s","ttl":300,"proxied":false,"comment":"CAC IdP"}' "$fq" "$IP")

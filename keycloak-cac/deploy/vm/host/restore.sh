@@ -13,28 +13,35 @@ set -euo pipefail
 . /etc/default/idp-backup
 S=/srv/idp; PASS=$S/secrets/backup_passphrase; KVSECRET=${KV_SECRET:-idp-backup-passphrase}
 imds() { curl -fsS -H Metadata:true "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=$1" | jq -r .access_token; }
+# Bearer tokens never reach a command line (ps, /proc): each goes into a header file in a 0700 directory, passed to
+# curl as -H @file, and the directory is removed on exit.
+AUTHD=$(mktemp -d); chmod 700 "$AUTHD"
+authfile() {   # authfile <resource> <name>: prints the header file's path; fails without a token
+  local tok; tok=$(imds "$1") || return 1; [ -n "$tok" ] && [ "$tok" != null ] || return 1
+  ( umask 077; printf 'Authorization: Bearer %s\n' "$tok" > "$AUTHD/$2" ); echo "$AUTHD/$2"; }
+trap 'rm -rf "$AUTHD"' EXIT
 case "${1:-}" in
   list)
-    curl -fsS -H "Authorization: Bearer $(imds https://storage.azure.com/)" -H "x-ms-version: 2021-08-06" \
+    curl -fsS -H @"$(authfile https://storage.azure.com/ st)" -H "x-ms-version: 2021-08-06" \
       "https://$STORAGE_ACCOUNT.blob.core.windows.net/backups?restype=container&comp=list" | grep -o '<Name>[^<]*</Name>' | sed 's/<[^>]*>//g';;
   fetch)
     B="${2:?blob}"; O="${3:?dir}"
     # only a name backup.sh writes: no path, no query, nothing to smuggle into the URL or the output directory
     [[ "$B" =~ ^idp-[0-9]{8}T[0-9]{6}Z\.tar\.gz\.gpg$ ]] || { echo "not a backup name (idp-YYYYMMDDTHHMMSSZ.tar.gz.gpg): $B"; exit 1; }
     mkdir -p "$O"; chmod 700 "$O"
-    curl -fsS -o "$O/$B" -H "Authorization: Bearer $(imds https://storage.azure.com/)" -H "x-ms-version: 2021-08-06" \
+    curl -fsS -o "$O/$B" -H @"$(authfile https://storage.azure.com/ st)" -H "x-ms-version: 2021-08-06" \
       "https://$STORAGE_ACCOUNT.blob.core.windows.net/backups/$B"
     # decrypt to a file first, so a wrong passphrase leaves nothing half-unpacked
     try() { gpg --batch --quiet --pinentry-mode loopback --passphrase-file "$1" -o "$O/.tgz" -d "$O/$B" 2>/dev/null; }
     ok=""
-    KVT=""; KVU="https://$KEY_VAULT.vault.azure.net/secrets/$KVSECRET"
+    KVA=""; KVU="https://$KEY_VAULT.vault.azure.net/secrets/$KVSECRET"
     kv_try() {    # kv_try <version>: that version's value, unless it is the placeholder, decrypts the backup
-      ( umask 077; curl -fsS -H "Authorization: Bearer $KVT" "$KVU/$1?api-version=7.4" \
+      ( umask 077; curl -fsS -H @"$KVA" "$KVU/$1?api-version=7.4" \
           | jq -je 'select(.contentType != "pending") | .value' > "$O/.pass" ) && [ -s "$O/.pass" ] && try "$O/.pass"; }
     if [ -n "${RESTORE_SECRET_VERSION:-}" ]; then
       # the operator pinned a known-good version: that one and nothing else (not the host file, no other version)
       [[ "$RESTORE_SECRET_VERSION" =~ ^[0-9a-f]{32}$ ]] || { echo "RESTORE_SECRET_VERSION is a 32-hex Key Vault version id"; exit 1; }
-      KVT=$(imds https://vault.azure.net)
+      KVA=$(authfile https://vault.azure.net kv)
       kv_try "$RESTORE_SECRET_VERSION" && ok="Key Vault $KVSECRET version $RESTORE_SECRET_VERSION (pinned)"
     else
       if [ -s "$PASS" ]; then try "$PASS" && ok="$PASS (on this host)"; fi
@@ -42,11 +49,11 @@ case "${1:-}" in
         # Key Vault: EVERY enabled version, newest first - all pages (nextLink) are listed before sorting, so versions
         # written later cannot push the real passphrase out of view. Placeholders are skipped. A version that cannot
         # be trusted can be bypassed with RESTORE_SECRET_VERSION=<known-good version id>.
-        KVT=$(imds https://vault.azure.net); ALL="$O/.versions"; echo '[]' > "$ALL"
+        KVA=$(authfile https://vault.azure.net kv); ALL="$O/.versions"; echo '[]' > "$ALL"
         url="$KVU/versions?api-version=7.4&maxresults=25"; pages=0
         while [ -n "$url" ]; do
           pages=$((pages + 1)); [ "$pages" -le 1000 ] || { echo "more than 1000 pages of secret versions: refusing"; exit 1; }
-          page=$(curl -fsS -H "Authorization: Bearer $KVT" "$url") || { echo "cannot list the versions of $KEY_VAULT/$KVSECRET"; exit 1; }
+          page=$(curl -fsS -H @"$KVA" "$url") || { echo "cannot list the versions of $KEY_VAULT/$KVSECRET"; exit 1; }
           jq -s '.[0] + (.[1].value // [])' "$ALL" <(printf '%s' "$page") > "$ALL.n" && mv "$ALL.n" "$ALL"
           url=$(printf '%s' "$page" | jq -r '.nextLink // empty')
           case "$url" in ""|"https://$KEY_VAULT.vault.azure.net/"*) ;; *) echo "unexpected nextLink host: refusing"; exit 1;; esac
