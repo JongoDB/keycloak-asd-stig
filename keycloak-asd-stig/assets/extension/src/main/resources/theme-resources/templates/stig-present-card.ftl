@@ -34,7 +34,8 @@
                     if (ac) ac.abort();
                 });
                 f.addEventListener("submit", function (ev) {
-                    if (sent || !window.fetch || !window.AbortController) return;    // no script support: post directly
+                    if (sent) { ev.preventDefault(); return; }                       // already on its way (either form)
+                    if (!window.fetch || !window.AbortController) return;            // no script support: post directly
                     ev.preventDefault();
                     btn.disabled = true; btn.value = f.getAttribute("data-waiting");       // an attribute: escaped as HTML, read as text
                     ac = new AbortController();
