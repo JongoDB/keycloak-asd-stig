@@ -290,6 +290,21 @@ class Guard(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("rule 6", out)
 
+    def test_abbreviation_leftovers(self):
+        # assembled at test time so this file does not match itself
+        l, c, y = "l", "c", "y"
+        bad = ["%s%s_sa = None" % (l, c), "fgap.control-%s%s2" % (l, c), "%s%suser = into(x)" % (c, y)]
+        ok = ["calc_total = 1", "fancy_user = 2", "html2 = 3", "cycle_user = 4", "ELC2X"]
+        for i, t in enumerate(bad + ok):
+            p = os.path.join(self.dir, "abbr%d.txt" % i)
+            with open(p, "w") as f:
+                f.write(t + "\n")
+            rc, out = run("--no-tree", "--files", p)
+            if i < len(bad):
+                self.assertEqual(rc, 1, t); self.assertIn("rule 7", out)
+            else:
+                self.assertEqual(rc, 0, t)
+
     def test_known_private_guid_anywhere(self):
         spec = importlib.util.spec_from_file_location("g2", GUARD)
         g = importlib.util.module_from_spec(spec)

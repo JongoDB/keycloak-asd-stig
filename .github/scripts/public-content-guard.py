@@ -31,6 +31,8 @@ Rules (reported by number only, so the CI log of this public repository never re
        are kept here);
   6    a GUID within 100 characters of a tenant/directory keyword that is not an obvious placeholder (fewer than 8
        distinct hex digits, e.g. 00000000-0000-4000-8000-000000000001). Use a placeholder in docs and tests.
+  7    an abbreviation of a private name left behind by a rename: identifiers such as l-c-2, l-c_<name>, c-y<...>user
+       (spelled here with hyphens so this file does not match itself).
 
 Threat model and limits. This is a safety net against ACCIDENTAL leaks: a name pasted into a comment, test,
 default value, commit message, generated report or packaged archive, including in the encodings that tooling
@@ -72,6 +74,9 @@ TERMS = [re.compile(p, re.I) for p in (
     r"cy[\W_]*roid",
     r"stock[\W_]*span",
 )]
+# Abbreviations of the private names left behind by a rename (identifiers built from the first letters, see rule 7).
+# Word-bounded and checked only on decoded TEXT runs of letters, so random base64 or binary does not trip it.
+ABBREV = re.compile(r"(?<![A-Za-z0-9])(?:l[c]2|l[c]_[a-z]\w*|c[y][a-z]{0,6}user)(?![A-Za-z0-9])")
 GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 TENANT_WORD = re.compile(r"tenant|\btid\b|directory[\W_]*id|microsoftonline|entra[\W_]*id", re.I)
 KNOWN_PRIVATE_SHA256 = {
@@ -218,6 +223,8 @@ class Scanner:
             for i, rx in enumerate(TERMS, 1):
                 if rx.search(t):
                     self.hit(where, "rule %d (private name)" % i)
+            if ABBREV.search(t):
+                self.hit(where, "rule 7 (an abbreviation of a private name)")
             for m in GUID.finditer(t):
                 g = m.group(0).lower()
                 if hashlib.sha256(g.encode()).hexdigest() in KNOWN_PRIVATE_SHA256:

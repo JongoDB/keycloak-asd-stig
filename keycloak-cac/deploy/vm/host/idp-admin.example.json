@@ -1,0 +1,32 @@
+{
+  "$comment": "idp-admin.py's per-deployment config. Install as /srv/idp/config/idp-admin.json (root 0600) or point IDP_ADMIN_CONFIG at it. Unknown keys are refused. After changing applications or delegations run `idp-admin.py roles-setup` (and `roles-setup --retire-app <client>` for an application you removed).",
+  "applications": {
+    "app-a": {
+      "$comment": "An application with a delegated role-group tree /app-a/<ROLE> (one group per client role, created by roles-setup). userManagerRole: the app-a client role every holder of /roles/app-a-user-manager must also hold (omit for no per-application manager).",
+      "userManagerRole": "administrator",
+      "adoptable": true,
+      "delegations": {
+        "app-a-admin": {
+          "$comment": "The application's own administrator service account (set up by fgap/app_admin_fgap.py): the role groups it may write membership of. Never list groups only the IdP's administrators may grant.",
+          "groups": ["viewer", "editor", "administrator", "partner-reader"]
+        },
+        "app-a-reader-delegate": {
+          "$comment": "A membership-only delegate (no realm-management role; created by `idp-admin.py delegate-setup app-a-reader-delegate`).",
+          "groups": ["partner-reader"],
+          "membershipOnly": true,
+          "name": "app-a reader delegate (partner-reader membership only)"
+        }
+      },
+      "preSplitDelegates": ["app-a-admin"]
+    },
+    "app-b": {
+      "$comment": "An application without delegates: its managers are the holders of /roles/app-b-user-manager who also hold app-b:owner.",
+      "userManagerRole": "owner"
+    }
+  },
+  "onboarding": {"defaultApps": ["app-a"]},
+  "entra": {"memberDomain": "example.mil", "displayName": "Microsoft Entra ID"},
+  "smtp": {"host": "smtp.example.mil", "port": 587, "from": "noreply@notify.example.mil", "displayName": "Example sign-in"},
+  "operatorSshHost": "idp-host",
+  "repoClientsDir": "clients"
+}
