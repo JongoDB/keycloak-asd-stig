@@ -26,8 +26,9 @@ import org.keycloak.services.messages.Messages;
  * administrator who already holds a second factor, passes untouched. An administrator enrols or replaces a second
  * factor only after signing in with the card, or with the second factor already held.
  *
- * The refusal looks like a wrong password in the browser flow (so it does not confirm that the password was right),
- * and an access-denied page after a brokered sign-in. The reason is in the audit log: STIG-ADMIN-SECOND-FACTOR-REQUIRED.
+ * The refusal looks like a wrong password in the browser flow (so it does not confirm that the password was right).
+ * After a brokered sign-in it is a policy page (stig-admin-second-factor.ftl: sign in with the CAC, or enrol an
+ * authenticator app first), shown as a challenge - never a failure, so it never counts toward brute-force lockout. The reason is in the audit log: STIG-ADMIN-SECOND-FACTOR-REQUIRED.
  */
 public class AdminSecondFactorRequiredAuthenticatorFactory implements Authenticator, AuthenticatorFactory {
 
@@ -49,14 +50,27 @@ public class AdminSecondFactorRequiredAuthenticatorFactory implements Authentica
                 brokered ? "identity-provider" : "password");
         context.getEvent().user(user);
         if (brokered) {
+            // a POLICY refusal after a successful identity-provider sign-in - not a wrong credential: a challenge, not a
+            // failure, so the brute-force protector never counts it (a failure would, and three of them lock the
+            // administrator out). The page says what to do instead, with the way back to the CAC sign-in.
             context.getEvent().error(Errors.ACCESS_DENIED);
-            Response page = context.form().setError(Messages.ACCESS_DENIED).createErrorPage(Response.Status.FORBIDDEN);
-            context.failure(AuthenticationFlowError.ACCESS_DENIED, page);
+            Response page = context.form().setAttribute("cacSignIn", restartUrl(context))
+                    .createForm("stig-admin-second-factor.ftl");
+            context.challenge(page);
         } else {
             context.getEvent().error(Errors.INVALID_USER_CREDENTIALS);
             Response page = context.form().setError(Messages.INVALID_USER).createLoginUsernamePassword();
             context.failureChallenge(AuthenticationFlowError.INVALID_CREDENTIALS, page);
         }
+    }
+
+    /** The sign-in from the start (the login page, where the CAC sign-in is offered), for this client and tab. */
+    static String restartUrl(AuthenticationFlowContext context) {
+        return org.keycloak.services.resources.LoginActionsService.loginActionsBaseUrl(context.getUriInfo())
+                .path(org.keycloak.services.resources.LoginActionsService.RESTART_PATH)
+                .queryParam(org.keycloak.models.Constants.CLIENT_ID, context.getAuthenticationSession().getClient().getClientId())
+                .queryParam(org.keycloak.models.Constants.TAB_ID, context.getAuthenticationSession().getTabId())
+                .build(context.getRealm().getName()).toString();
     }
 
     @Override public void action(AuthenticationFlowContext context) { authenticate(context); }

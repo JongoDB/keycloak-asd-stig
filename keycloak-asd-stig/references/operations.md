@@ -343,3 +343,24 @@ key's lifetime. **Never enable DEBUG (or TRACE) for
 lines print certificate subjects and identities. Keep those categories at INFO or above (e.g.
 `KC_LOG_LEVEL=INFO,org.keycloak.authentication.authenticators.x509:info,org.keycloak.services.x509:info`).
 
+### The CAC sign-in through the card port
+
+With `STIG_CARD_PORT` set, the X.509 step itself uses the card port too: when the request carries no client certificate
+- typically because the browser reuses a connection to the main port made without one (a page load, an attempt with
+another method) - it does not silently fall through. It shows `stig-card-signin.ftl`: "Sign in with my CAC" re-runs
+this step on the card port (its refresh URL there: a new connection and TLS handshake, which asks for the card; the
+same cookies, so the same sign-in), and, where the step is an ALTERNATIVE, "Use another sign-in method" posts `cancel`
+to this step on the page's own origin and the flow goes on to the password / identity-provider methods. The same script
+probes the card port first and, if that fails or takes more than 10 s, says the network blocks the card sign-in. On the
+card port without a certificate (the prompt declined) it says so (`STIG-CARD-SIGNIN-NO-CERT`). A browser that already
+presents the card on the main port signs in as before, without the page. Cost: a person with no card meets this choice
+first and clicks once more.
+
+### An administrator with no second factor after an identity-provider sign-in
+
+`stig-admin-second-factor-required` refuses such an administrator with a policy page (`stig-admin-second-factor.ftl`:
+"Administrators must sign in with their CAC, or enrol an authenticator app first", with a link that restarts the sign-in
+where the CAC is offered). It is a challenge, not a failure: a policy refusal after a successful identity-provider
+sign-in is not a wrong credential and never counts toward brute-force lockout. (In the password flow the refusal still
+looks like a wrong password, so it never confirms that the password was right.)
+
