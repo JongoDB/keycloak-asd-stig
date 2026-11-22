@@ -1,0 +1,48 @@
+{
+ "manage-organizations": {
+  "list orgs": 200,
+  "list acme members": 403,
+  "add outsider->example": 403,
+  "add own SA->acme": 403,
+  "GET member user": 403,
+  "PUT member user (rename)": 403,
+  "reset member password": 403,
+  "invite new user via org (invite-user)": 500,
+  "create org + domain": 201
+ },
+ "view-organizations": {
+  "list orgs": 200,
+  "list acme members": 403,
+  "add outsider->example": 403,
+  "add own SA->acme": 403,
+  "GET member user": 403,
+  "PUT member user (rename)": 403,
+  "reset member password": 403,
+  "invite new user via org (invite-user)": 403,
+  "create org + domain": 403
+ },
+ "manage-organizations+query-users": {
+  "list orgs": 200,
+  "list acme members": 200,
+  "add outsider->example": 403,
+  "add own SA->acme": 403,
+  "GET member user": 403,
+  "PUT member user (rename)": 403,
+  "reset member password": 403,
+  "invite new user via org (invite-user)": 500,
+  "create org + domain": 201
+ },
+ "manage-organizations+view-users": {
+  "list orgs": 200,
+  "list acme members": 200,
+  "add outsider->example": 403,
+  "add own SA->acme": 403,
+  "GET member user": 200,
+  "PUT member user (rename)": 403,
+  "reset member password": 403,
+  "invite new user via org (invite-user)": 500,
+  "create org + domain": 201
+ },
+ "vendor firstName after": "Lab",
+ "users created by invite": []
+}

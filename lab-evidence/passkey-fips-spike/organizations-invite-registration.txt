@@ -1,0 +1,8 @@
+registrationAllowed: False
+invite link path: https://localhost:18443/realms/spike-org/protocol/openid-connect/registrations
+page: https://localhost:18443/realms/spike-org/protocol/openid-connect/registrations
+text: 'SPIKE-ORG\nCreate an account to join the acme organization\n* Required fields\nUsername *\nPassword *\nConfirm password *\nEmail *\nFirst name *\nLast name *\n« Back to Login'
+inputs: ['username', 'password', 'password-confirm', 'email', 'firstName', 'lastName']
+after submit: https://localhost:18443/realms/spike-org/account/ 'Invited Person\nPersonal info\nAccount security\nApplications\nOrganizations\nPersonal info\n\nManage your basic information\n\nGeneral\nUsername *\nEmail *\nFirst name *\nLast name *\nJump to section\nGeneral\nSave\n'
+account created: [('invited.person', True)]
+its orgs: ['acme']

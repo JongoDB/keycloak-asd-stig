@@ -1,0 +1,10 @@
+attempt 1 -> 'SPIKE-PUBLIC\nPasskey Error\nUsername\nPasskey signature verification failed.\nTry again'
+   brute force: {'failedLoginNotBefore': 0, 'numFailures': 0, 'numTemporaryLockouts': 0, 'disabled': False, 'numSecondaryAuthFailures': 0, 'lastIPFailure': 'n/a', 'lastFailure': 0}
+attempt 2 -> 'SPIKE-PUBLIC\nPasskey Error\nUsername\nPasskey signature verification failed.\nTry again'
+   brute force: {'failedLoginNotBefore': 0, 'numFailures': 0, 'numTemporaryLockouts': 0, 'disabled': False, 'numSecondaryAuthFailures': 0, 'lastIPFailure': 'n/a', 'lastFailure': 0}
+attempt 3 -> 'SPIKE-PUBLIC\nPasskey Error\nUsername\nPasskey signature verification failed.\nTry again'
+   brute force: {'failedLoginNotBefore': 0, 'numFailures': 0, 'numTemporaryLockouts': 0, 'disabled': False, 'numSecondaryAuthFailures': 0, 'lastIPFailure': 'n/a', 'lastFailure': 0}
+attempt 4 -> 'SPIKE-PUBLIC\nPasskey Error\nUsername\nPasskey signature verification failed.\nTry again'
+   brute force: {'failedLoginNotBefore': 0, 'numFailures': 0, 'numTemporaryLockouts': 0, 'disabled': False, 'numSecondaryAuthFailures': 0, 'lastIPFailure': 'n/a', 'lastFailure': 0}
+[('LOGIN_ERROR', 'invalid_user_credentials'), ('LOGIN_ERROR', 'invalid_user_credentials'), ('LOGIN_ERROR', 'invalid_user_credentials'), ('LOGIN_ERROR', 'invalid_user_credentials'), ('LOGIN_ERROR', 'invalid_user_credentials'), ('LOGIN_ERROR', 'invalid_user_credentials'), ('LOGIN_ERROR', 'invalid_user_credentials'), ('LOGIN_ERROR', 'invalid_user_credentials')]
+{'type': 'LOGIN_ERROR', 'userId': None, 'ipAddress': '192.168.167.1', 'error': 'invalid_user_credentials', 'details': {'credential_type': 'webauthn-passwordless', 'auth_method': 'openid-connect', 'auth_type': 'code', 'web_authn_authentication_error': 'webauthn-error-bad-signature', 'redirect_uri': 'https://localhost:18443/realms/spike-public/account/', 'web_authn_authentication_error_detail': 'Assertion signature is not valid.'}}

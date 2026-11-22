@@ -1,0 +1,98 @@
+{
+ "user": "eddsa.reader",
+ "registration_policy_algs": [
+  "EdDSA"
+ ],
+ "signin_policy_algs": [
+  "ES256",
+  "RS256"
+ ],
+ "dod_notice_invite_path": [
+  [
+   "invite step 0 action-token",
+   false
+  ],
+  [
+   "invite step 1 required-action",
+   false
+  ],
+  [
+   "invite step 2 required-action",
+   false
+  ],
+  [
+   "invite step 3 required-action",
+   false
+  ],
+  [
+   "invite step 4 required-action",
+   false
+  ],
+  [
+   "invite step 5 required-action",
+   false
+  ],
+  [
+   "invite step 6 required-action",
+   false
+  ],
+  [
+   "invite step 7 required-action",
+   false
+  ],
+  [
+   "invite step 8 required-action",
+   false
+  ],
+  [
+   "invite step 9 required-action",
+   false
+  ]
+ ],
+ "registration_page_end": "Sign in to spike-public | Failed to register your Passkey.",
+ "registration_webauthn_calls": [
+  {
+   "op": "create",
+   "options": {
+    "challenge": "<16 bytes>",
+    "rp": {
+     "id": "localhost",
+     "name": "app-a Partners (spike)"
+    },
+    "user": {
+     "id": "<36 bytes>",
+     "name": "eddsa.reader",
+     "displayName": "eddsa.reader"
+    },
+    "pubKeyCredParams": [
+     {
+      "type": "public-key",
+      "alg": -7
+     }
+    ],
+    "attestation": "none",
+    "authenticatorSelection": {
+     "residentKey": "required",
+     "requireResidentKey": true,
+     "userVerification": "required"
+    }
+   }
+  },
+  {
+   "op": "create-ok",
+   "type": "public-key",
+   "attachment": "platform"
+  }
+ ],
+ "credentials": [],
+ "after_registration": {
+  "emailVerified": true,
+  "requiredActions": []
+ },
+ "authenticator_credentials": [
+  {
+   "rk": true,
+   "signCount": 1
+  }
+ ]
+}

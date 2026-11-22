@@ -18,6 +18,8 @@ application that uses this login.
 | `lab-evidence/` | Lab results: verify reports, screenshots, strict-FIPS runs, SBOMs, deployment notes, the 800-53 Rev 5 crosswalk (.md/.csv). |
 | `docs/integrate-your-app-with-our-idp.md` | **Start here** to connect an app to a hardened Keycloak someone else operates: install the relying-party skill and the prompt to give your coding agent. |
 | `docs/integrate-cac-in-your-app.md` | **Start here** for adding CAC login to another app: how to install the skill and a fill-in prompt for Claude Code. |
+| `docs/vm-accounts.md` | Managing accounts on a shared IdP run on one VM with `idp-admin.py`: roles, CAC and Entra accounts, invites, delegated per-application user managers, onboarding a client. |
+| `docs/passkey-public-realm.md` | Design for a passkey-only public realm beside the CAC realm (vendors and readers without a CAC), with its STIG impact, under strict FIPS. Lab evidence: `lab-evidence/passkey-fips-spike/`. |
 | `docs/keycloak-gateway-integration-prompt.md` | A prompt for putting apps behind the hardened oauth2-proxy gateway. |
 | `evals/` | Skill-creator eval runs (iterations 1–4, with and without the skill) and the HTML viewers. Iteration 4: 42/42 with the skill, 90% without. |
 
