@@ -290,6 +290,28 @@ class Guard(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("rule 6", out)
 
+    def test_abbreviation_leftovers(self):
+        # assembled at test time so this file does not match itself
+        l, c, y, d, a = "l", "c", "y", "d", "a"
+        p1 = l + c
+        p2 = c + y
+        bad = ["%s_sa = None" % p1, "fgap.control-%s2" % p1, "control%s2" % p1, "%s2x" % p1, "%s2" % p1.upper(),
+               "%suser = into(x)" % p2, "%sUSER" % p2.upper(), "%ssec = 1" % p1, "%st = {}" % p1, "t.acc.%sx1" % p1,
+               "t.acc.%sm2" % p1, "no%s = P()" % p2, "lab.no%s%si.x" % (d, a), "lab.%s.tag" % p2, "%s = k6.tree()" % p2]
+        ok = ["calc_total = 1", "fancy_user = 2", "html2 = 3", "cycle_user = 4", "cyber" + "user = 5", "LC" + "_ALL=C",
+              "l" + "c_all", "policy = 1", "x.%s == y" % p2, "lctrl", "select", "nocycle",
+              # the same letters inside random base64 must not trip it
+              "data = 'QUJD" + p1 + "2RUZHSElKS0xNTk9QUVJTVFVWV1hZWg=='"]
+        for i, t in enumerate(bad + ok):
+            p = os.path.join(self.dir, "abbr%d.txt" % i)
+            with open(p, "w") as f:
+                f.write(t + "\n")
+            rc, out = run("--no-tree", "--files", p)
+            if i < len(bad):
+                self.assertEqual(rc, 1, t); self.assertIn("rule 7", out)
+            else:
+                self.assertEqual(rc, 0, t)
+
     def test_known_private_guid_anywhere(self):
         spec = importlib.util.spec_from_file_location("g2", GUARD)
         g = importlib.util.module_from_spec(spec)

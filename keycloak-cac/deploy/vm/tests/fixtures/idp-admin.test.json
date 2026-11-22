@@ -1,0 +1,23 @@
+{
+  "$comment": "The config the offline unit tests and the lab harness load (IDP_ADMIN_CONFIG): three applications, one with a full delegation shape (an administrator delegate and a membership-only reader delegate).",
+  "applications": {
+    "app-a": {
+      "userManagerRole": "administrator",
+      "adoptable": true,
+      "delegations": {
+        "app-a-admin": {"groups": ["viewer", "editor", "approver", "planner", "observer", "administrator",
+                                   "partner-reader"]},
+        "app-a-reader-delegate": {"groups": ["partner-reader"], "membershipOnly": true,
+                                  "name": "app-a partner reader delegate (partner-reader membership only)"}
+      },
+      "preSplitDelegates": ["app-a-admin"]
+    },
+    "app-b": {"userManagerRole": "owner", "adoptable": true},
+    "app-c": {"userManagerRole": "lead", "adoptable": true}
+  },
+  "onboarding": {"defaultApps": ["app-a"]},
+  "entra": {"memberDomain": "example.mil", "displayName": "Microsoft Entra ID (lab)"},
+  "smtp": {"host": "smtp.example.mil", "port": 587, "from": "noreply@notify.example.mil", "displayName": "Lab sign-in"},
+  "operatorSshHost": "idp-host",
+  "repoClientsDir": "keycloak-cac/deploy/vm/tests/fixtures/clients"
+}
