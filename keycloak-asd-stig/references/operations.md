@@ -370,8 +370,9 @@ Two limits to know:
 - **A CAC-only realm with a visible, enabled identity provider is not CAC-only in practice.** The provider list is
   rendered whatever `cardOther` is - as on the stock login page, every enabled identity provider not marked "Hide on
   login page" is a button, and following it signs in without a card. For a realm meant to be card-only, disable its
-  identity providers, not just the flow's other steps; "Hide on login page" only removes the button (a `kc_idp_hint`
-  naming the provider still reaches it).
+  identity providers, not just the flow's other steps. "Hide on login page" only removes the button: an enabled
+  provider is still reachable through Keycloak's broker endpoint (`/realms/<realm>/broker/<alias>/login`) from any
+  sign-in in progress, and through `kc_idp_hint` where a flow has an Identity Provider Redirector step.
 
 ### An administrator with no second factor after an identity-provider sign-in
 
