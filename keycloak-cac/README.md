@@ -55,6 +55,7 @@ docker compose up -d             # podman compose works too; --scale keycloak=2 
 | Kubernetes with Helm | `deploy/helm/keycloak-cac` (`values-airgap.yaml` for closed networks) |
 | Kubernetes without Helm | `deploy/k8s/keycloak-cac-airgap.yaml` |
 | AWS ECS / Fargate | `deploy/ecs/task-definition.json` (with an NLB TCP listener: 443 to 8443) |
+| One hardened VM (Compose + host egress firewall, backups, ACME, account admin CLI) | `deploy/vm/` (see its [README](deploy/vm/README.md)) |
 
 **CAC needs TLS to reach Keycloak unbroken.** Use one of these:
 - Expose port 8443 directly.

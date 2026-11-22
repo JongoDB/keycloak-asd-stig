@@ -242,6 +242,8 @@ Not tested on a real OpenShift cluster.
 
 ## 9. Azure
 
+For a single hardened Azure VM operated with Compose (egress firewall, encrypted backups to Blob Storage, ACME DNS-01 without a DNS token on the host, account administration CLI), see [deploy/vm/README.md](deploy/vm/README.md).
+
 **AKS** (Azure Kubernetes Service):
 ```bash
 az aks update -g rg-iam -n aks-iam --attach-acr myregistry           # let AKS pull from ACR

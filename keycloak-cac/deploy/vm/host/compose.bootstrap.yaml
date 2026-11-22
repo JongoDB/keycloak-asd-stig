@@ -1,0 +1,11 @@
+# FIRST START ONLY (setup-host.sh): the temporary bootstrap admin, with Keycloak reachable from this host alone.
+# Once the image has hardened the master realm (bootstrap deleted), setup-host.sh drops this file and publishes 443.
+services:
+  keycloak:
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: bootstrap
+      KC_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_admin_password
+    secrets: [tls_crt, tls_key, db_password, db_ca, automation_secret, bootstrap_admin_password]
+    ports: !override ["127.0.0.1:443:8443"]
+secrets:
+  bootstrap_admin_password: {file: /srv/idp/secrets/bootstrap_admin_password}

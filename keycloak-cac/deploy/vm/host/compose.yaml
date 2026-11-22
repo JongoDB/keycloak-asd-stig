@@ -1,0 +1,102 @@
+# keycloak-cac on one VM: two containers. Rendered to /srv/idp/compose/ by setup-host.sh.
+#   keycloak  443 -> 8443, TLS passthrough (the card reaches Keycloak's own handshake). Serves sign-in AND the
+#             realm's own admin console (https://<PUBLIC_HOST>/admin/<REALM>/console/): who may administer
+#             is decided by realm-management roles, and every sign-in is CAC, Entra (+MFA proof for administrators)
+#             or password+TOTP. The master realm is break-glass only (Alt Token flow with no usable token, password
+#             grant denied; recovery is `kc.sh bootstrap-admin service` on this VM). Applies the STIG realm itself.
+#             Serving the admin console on the public listener (V-222574) is an exposure the operator must accept.
+#   db        PostgreSQL 17, TLS only (hostssl + scram), on an internal network with no route out.
+# All state is in PostgreSQL on the data disk (/srv/idp); secrets are single files, 0440, never in this file.
+name: idp
+x-keycloak: &keycloak
+  env_file: [/srv/idp/config/keycloak-cac.env]
+  user: "1000:1000"                 # no root group; secret files are root:1000 0440
+  read_only: true
+  # /opt/keycloak/data (anchors, client trust store, CRLs) is tmpfs, rebuilt from the image on EVERY start: a volume
+  # would carry a retired CA's CRL across an image upgrade, and one CRL from an issuer that is no longer an anchor
+  # makes Keycloak refuse every card (crlSignatureCertificates is null). All state lives in PostgreSQL.
+  tmpfs: [/tmp, "/opt/keycloak/data:size=768m,uid=1000,gid=1000,mode=0750"]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  environment: &kcenv
+    # BC-FIPS extracts a native library into /tmp and maps it executable; /tmp is a noexec tmpfs here. Keycloak gets
+    # the pure-Java variant from the image, but the entrypoint's keytool (BCFKS conversion) does not: give it to every
+    # JVM. (Fixed upstream in the PR; harmless after.)
+    JAVA_TOOL_OPTIONS: -Dorg.bouncycastle.native.cpu_variant=java
+    # Network clients get a strict allowlist of raw paths (STIG_PUBLIC_PATHS in keycloak-cac.env: the one realm,
+    # its admin console and API, /admin/serverinfo, /resources/); everything else - the master realm, any other
+    # realm, any path with %, ;, \, //, dot segments, whitespace or non-ASCII - is 404. Only 127.0.0.1 INSIDE this
+    # container bypasses it: the image's own apply and CRL work, and idp-admin.py / the tests / break-glass, which
+    # join this container's network namespace (setns). No network client can present that address - not even through
+    # docker-proxy, whose connections arrive from the bridge gateway, which is NOT trusted (a lost DNAT rule or IPv6
+    # would make every client look like the gateway). stig-extensions' PublicPathAllowlistFilter.
+    STIG_TRUSTED_SOURCES: 127.0.0.1
+    # Keycloak's outbound HTTP client (client JWKS, back-channel logout, Entra) never follows a redirect: a JWKS or
+    # back-channel URL that passed add-client's public-address check cannot 30x Keycloak to an internal address. This
+    # is Keycloak 26.8's default (read from DefaultHttpClientFactory: "Default: false"); pinned so a default change
+    # cannot turn it on. The network-level control is idp-egress (README, "Egress firewall").
+    KC_SPI_CONNECTIONS_HTTP_CLIENT__DEFAULT__ALLOW_REDIRECTS: "false"
+  depends_on: {db: {condition: service_healthy}}
+  volumes:
+    - /srv/idp/clients:/clients:ro    # one <client>.json per relying service
+    # Optional login theme of your own (setup-host.sh THEME_DIR; parent dod-stig), selected in keycloak-cac.env:
+    # - /srv/idp/theme/<THEME>:/opt/keycloak/themes/<THEME>:ro
+  networks: [backend, egress]
+  restart: unless-stopped
+  logging: {driver: json-file, options: {max-size: 50m, max-file: "10"}}
+services:
+  db:
+    image: ${POSTGRES_IMAGE}
+    user: "999:999"
+    command: >-
+      postgres -c ssl=on -c ssl_cert_file=/run/secrets/db_tls_crt -c ssl_key_file=/run/secrets/db_tls_key
+      -c ssl_min_protocol_version=TLSv1.2 -c password_encryption=scram-sha-256 -c hba_file=/etc/postgresql/pg_hba.conf -c ident_file=/etc/postgresql/pg_ident.conf
+      -c listen_addresses=*
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --data-checksums
+    secrets: [db_password, db_tls_crt, db_tls_key]   # file secrets are bind mounts: host modes apply (setup-host.sh)
+    volumes:
+      - /srv/idp/pgdata:/var/lib/postgresql/data
+      - /srv/idp/config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - /srv/idp/config/pg_ident.conf:/etc/postgresql/pg_ident.conf:ro
+    read_only: true
+    tmpfs: [/tmp, /var/run/postgresql]
+    shm_size: 256m
+    mem_limit: 1g
+    networks: [backend]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U keycloak -d keycloak"], interval: 10s, retries: 30}
+    restart: unless-stopped
+    logging: {driver: json-file, options: {max-size: 20m, max-file: "5"}}
+  keycloak:
+    <<: *keycloak
+    image: ${KEYCLOAK_IMAGE}
+    environment:
+      <<: *kcenv
+      CAC_APPLY: "true"
+      # No bootstrap admin here: it exists only on a first start, through compose.bootstrap.yaml (loopback-only port).
+    secrets: [tls_crt, tls_key, db_password, db_ca, automation_secret]
+    # IPv4 only: no docker-proxy listener on [::]. 8444 is the CARD PORT (STIG_CARD_PORT): the same listener, so that the
+    # present-card step's POST arrives on a new connection and TLS handshake, which asks the browser for the CAC.
+    ports: ["0.0.0.0:443:8443", "0.0.0.0:8444:8443"]
+    mem_limit: 8g                   # ~4.9 GiB measured with every DoD CRL loaded (strict FIPS: 3.5-3.9 GiB)
+secrets:
+  tls_crt: {file: /srv/idp/tls/tls.crt}
+  tls_key: {file: /srv/idp/tls/tls.key}
+  db_password: {file: /srv/idp/secrets/db_password}
+  db_ca: {file: /srv/idp/pki/db-ca.crt}
+  db_tls_crt: {file: /srv/idp/pki/db.crt}
+  db_tls_key: {file: /srv/idp/pki/db.key}
+  automation_secret: {file: /srv/idp/secrets/automation_secret}
+# Fixed bridge names and subnets: host/egress.sh (idp-egress) matches them - EGRESS_SUBNET / BACKEND_SUBNET in
+# /etc/default/idp-egress must equal these. Changing either recreates the network (a planned window).
+networks:
+  backend:                          # Keycloak <-> PostgreSQL only; no route out, no new connection to the host
+    internal: true
+    driver_opts: {com.docker.network.bridge.name: br-idp-backend}
+    ipam: {config: [{subnet: 172.31.251.0/24, gateway: 172.31.251.1}]}
+  egress:
+    driver_opts: {com.docker.network.bridge.name: br-idp-egress}
+    ipam: {config: [{subnet: 172.31.250.0/24, gateway: 172.31.250.1}]}   # outbound (CRLs, OCSP, mail); trusts nothing
