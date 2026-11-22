@@ -129,8 +129,17 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
                 : certs[0].getSubjectX500Principal().getName());
         f.add("isUserEnabled", "true");
         org.keycloak.forms.login.LoginFormsProvider form = context.form().setFormData(f);
-        // the POST goes to the card port: a new connection and TLS handshake there, which asks for the certificate
-        if (CARD_PORT > 0) form.setActionUri(onCardPort(context.getActionUrl(), CARD_PORT));
+        // with a card port: our own page - "Sign in with my CAC" posts to the card port (a new connection and TLS handshake,
+        // which asks for the certificate), "Continue without the card" posts to this page's OWN origin (the form's
+        // unmodified action), so a network that blocks the card port can always go on
+        if (CARD_PORT > 0) {
+            java.net.URI card = onCardPort(context.getActionUrl(), CARD_PORT);
+            if (error != null) form.setAttribute("cardError", error);         // shown by the template itself
+            return form.setAttribute("cardAction", card.toString())
+                    .setAttribute("cardProbe", card.getScheme() + "://" + card.getRawAuthority() + "/realms/" + context.getRealm().getName()
+                            + "/.well-known/openid-configuration")
+                    .createForm("stig-present-card.ftl");
+        }
         if (error != null) form.setError(error);
         return form.createX509ConfirmPage();
     }
