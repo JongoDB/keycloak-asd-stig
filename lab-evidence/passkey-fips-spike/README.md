@@ -120,6 +120,6 @@ assessment and its controls are in pattern §8. In short:
 | `organizations-delegate-group-attr.txt` | The delegate refused a group's organization binding and the invitation endpoint |
 
 Identifiers (organization, role and realm ids, and the virtual authenticator's test AAGUID) are replaced by
-placeholders; the realm and organization aliases are the lab's own throwaway names. Lab-only values throughout: `localhost:18443`, `*.lab.invalid` and `*.example` addresses, a virtual authenticator. Nothing here is a
+placeholders, and role names use the pattern's placeholders (`contractor`, `partner-reader`); the realm and organization aliases are the lab's own throwaway names. Lab-only values throughout: `localhost:18443`, `*.lab.invalid` and `*.example` addresses, a virtual authenticator. Nothing here is a
 credential for any real system. The driver scripts are not committed; they disable TLS verification against the
 lab's self-signed certificate.

@@ -43,6 +43,6 @@
   "invite new user via org (invite-user)": 500,
   "create org + domain": 201
  },
- "vendor firstName after": "Lab",
+ "contractor firstName after": "Lab",
  "users created by invite": []
 }

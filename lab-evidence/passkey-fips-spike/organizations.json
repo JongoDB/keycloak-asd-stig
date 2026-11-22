@@ -39,13 +39,13 @@
    }
   ]
  ],
- "T2_claim_vendor": [
+ "T2_claim_contractor": [
   "acme"
  ],
- "T2_roles_vendor": {
+ "T2_roles_contractor": {
   "app-a": {
    "roles": [
-    "VENDOR"
+    "contractor"
    ]
   }
  },
@@ -53,7 +53,7 @@
   "example"
  ],
  "T2_roles_staff": null,
- "T2_claim_vendor_with_id": {
+ "T2_claim_contractor_with_id": {
   "acme": {
    "id": "00000000-0000-4000-8000-000000000001"
   }
@@ -62,11 +62,11 @@
  "T4_top_groups_after": [
   "/app-a"
  ],
- "T4_vendor_user_groups": [
-  "/app-a/VENDOR"
+ "T4_contractor_user_groups": [
+  "/app-a/contractor"
  ],
  "T4_outsider_user_groups": [],
- "T4_vendor_rm_roles": {
+ "T4_contractor_rm_roles": {
   "realmMappings": [
    {
     "id": "00000000-0000-4000-8000-000000000003",
@@ -166,17 +166,17 @@
   "get org acme": 403,
   "list acme members": 403,
   "add staff to acme": 403,
-  "remove vendor from acme": 403,
+  "remove contractor from acme": 403,
   "create org": 403,
-  "get vendor (in tree)": 200,
+  "get contractor (in tree)": 200,
   "get outsider (same org, not in tree)": 403,
   "get staff (other org)": 403,
   "search users -> usernames visible": [
    200,
    []
   ],
-  "move vendor to REVIEW_READER": 204,
-  "vendor's orgs via member endpoint": 403
+  "move contractor to partner-reader": 204,
+  "contractor's orgs via member endpoint": 403
  },
  "T5_role_needed": {
   "only-query": {
