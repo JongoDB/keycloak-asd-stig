@@ -286,7 +286,17 @@ the hourly limit, which a 409 also spends). The EDIPI never appears in full in a
 The create does NOT bind the card. It only NAMES it: `<card attribute>_pending` (e.g. `cac_edipi_pending`, admin-only and
 concealed), reserved while live (no other create may name a card that is bound anywhere or named by a live invite: 409).
 After the person's first provider sign-in has bound the provider identity, the required action `stig-present-card`
-(register and enable it; `PresentCardRequiredAction`) asks them to present their card in the same session. The card is
+(register and enable it; `PresentCardRequiredAction`) asks them to present their card in the same session. Set
+`STIG_CARD_PORT` to a second public port of the same listener (e.g. 8444, the host mapping it to the container's HTTPS port):
+the step's form then posts there. A browser asks for a client certificate only during a TLS handshake and keeps its
+connection to the main port, typically made without a certificate (a provider sign-in); the card port is a new
+connection, TLS session and certificate decision, while the cookies (not port-scoped) keep the same authentication
+session. Unset: the form posts to its own origin, and works only if that connection already carries the card. With a card port the page is the extension's own template
+(`stig-present-card.ftl`): "Sign in with my CAC" posts to the card port; "Continue without the card" posts to the page's
+own origin, so a client network that allows only 443 out (which cannot reach the card port) can always go on; a small
+script reaches the card port first and, if that fails or takes more than 10 s, says the network blocks the card step and
+points at continuing without it. A browser that scopes cookies by port (Chrome's "Origin-Bound Cookies" experiment)
+would break the card port (no session cookie there); continuing without the card still works. The card is
 validated exactly as a card sign-in validates it (trust, CA, validity, key usage, policy, revocation) and its identity
 extracted by the realm's own X.509 mapping; it is bound only if that identity EQUALS the named value and no account holds
 it. A different card, or one bound elsewhere, is refused (audited) and the named value cleared: the account stays
