@@ -358,6 +358,22 @@ presents the card on the main port signs in as before, without the page. The pag
 there; "Use another sign-in method" remains for the password and other methods. It is offered only where the step is an
 ALTERNATIVE with another enabled step in its flow.
 
+Two limits to know:
+
+- **`hasOtherMethod` reads only the step's own flow, one level deep.** "Use another sign-in method" is offered when the
+  X.509 step is an ALTERNATIVE and any other execution in its parent flow is not DISABLED. It does not model hand-built
+  flows: a sibling sub-flow that is itself enabled but whose own steps are all DISABLED still counts as "another method"
+  (the button is shown and leads nowhere useful), and a REQUIRED sibling counts too, although it is not an alternative
+  to the card (Keycloak ignores ALTERNATIVE executions beside a REQUIRED one). The flows `kcstig.py` builds have neither
+  shape; after editing a browser flow by hand, check that the card page offers the button only when there is somewhere
+  to go.
+- **A CAC-only realm with a visible, enabled identity provider is not CAC-only in practice.** The provider list is
+  rendered whatever `cardOther` is - as on the stock login page, every enabled identity provider not marked "Hide on
+  login page" is a button, and following it signs in without a card. For a realm meant to be card-only, disable its
+  identity providers, not just the flow's other steps. "Hide on login page" only removes the button: an enabled
+  provider is still reachable through Keycloak's broker endpoint (`/realms/<realm>/broker/<alias>/login`) from any
+  sign-in in progress, and through `kc_idp_hint` where a flow has an Identity Provider Redirector step.
+
 ### An administrator with no second factor after an identity-provider sign-in
 
 `stig-admin-second-factor-required` refuses such an administrator with a policy page (`stig-admin-second-factor.ftl`:
