@@ -46,6 +46,36 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
 
     public static final String ID = "stig-present-card";
     static final String SKIPPED = "stig-present-card-skipped";
+
+    /**
+     * STIG_CARD_PORT: a second public port of the SAME Keycloak listener (the host maps it to the same container port).
+     * The card is presented by a POST to that port. Why: a browser asks for a client certificate only during a TLS
+     * handshake, and it reuses the connection (HTTP/2) and the TLS session it already has with host:443 - typically one
+     * made without a certificate (the person signed in with Entra, or declined the prompt). A request on that connection
+     * can never carry a certificate. A different port is a different connection, TLS session and client-certificate
+     * decision in the browser (they are keyed by host:port), while cookies are not port-scoped: the same authentication
+     * session, so the bind stays in the same session. Unset: the form posts to the page's own origin (as before).
+     */
+    static final int CARD_PORT = cardPort(System.getenv("STIG_CARD_PORT"));
+
+    static int cardPort(String v) {
+        try {
+            int p = Integer.parseInt(String.valueOf(v).trim());
+            return p > 0 && p < 65536 ? p : -1;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /** The form's action, moved to the card port when one is configured. */
+    static java.net.URI onCardPort(java.net.URI action, int port) {
+        if (port <= 0 || action == null) return action;
+        String host = action.getRawAuthority() == null ? null : action.getHost();
+        if (host == null) return action;
+        if (host.indexOf(':') >= 0 && !host.startsWith("[")) host = "[" + host + "]";        // IPv6 literal
+        return java.net.URI.create(action.getScheme() + "://" + host + ":" + port + (action.getRawPath() == null ? "" : action.getRawPath())
+                + (action.getRawQuery() == null ? "" : "?" + action.getRawQuery()));
+    }
     private static final Logger LOG = Logger.getLogger("mil.stig.audit");
 
     // ---- factory
@@ -92,11 +122,15 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
         X509Certificate[] certs = chain(context);
         MultivaluedMap<String, String> f = new MultivaluedHashMap<>();
         f.add("username", context.getUser().getUsername());
-        f.add("subjectDN", certs == null || certs.length == 0
+        f.add("subjectDN", CARD_PORT > 0
+                ? "Insert your CAC and choose Sign in: your browser will ask for your certificate (or Ignore to do it at a later sign-in)"
+                : certs == null || certs.length == 0
                 ? "No card presented yet: insert your CAC and choose Sign in (or Ignore to do it at a later sign-in)"
                 : certs[0].getSubjectX500Principal().getName());
         f.add("isUserEnabled", "true");
         org.keycloak.forms.login.LoginFormsProvider form = context.form().setFormData(f);
+        // the POST goes to the card port: a new connection and TLS handshake there, which asks for the certificate
+        if (CARD_PORT > 0) form.setActionUri(onCardPort(context.getActionUrl(), CARD_PORT));
         if (error != null) form.setError(error);
         return form.createX509ConfirmPage();
     }
@@ -123,7 +157,12 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
             return;
         }
         X509Certificate[] certs = chain(context);
-        if (certs == null || certs.length == 0) { context.challenge(page(context, "No card was presented.")); return; }
+        if (certs == null || certs.length == 0) {
+            LOG.infof("STIG-CARD-PRESENT-NO-CERT realm=%s user=%s port=%s: the request carried no client certificate",
+                    realm.getName(), u.getUsername(), context.getUriInfo() == null ? "?" : String.valueOf(context.getUriInfo().getRequestUri().getPort()));
+            context.challenge(page(context, "No card was presented: insert your CAC, choose Sign in, and pick your certificate when the browser asks."));
+            return;
+        }
         // the card must be bound to the attribute the realm's X.509 step maps cards by - else a bound card would open nothing
         // (or another account): refuse to bind on any mismatch or ambiguity, and leave the pending value for the operator
         AuthenticatorConfigModel cfg = x509Config(realm);

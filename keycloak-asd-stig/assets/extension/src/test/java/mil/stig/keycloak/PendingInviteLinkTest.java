@@ -150,6 +150,13 @@ public final class PendingInviteLinkTest {
         t("provider domain: unset realm attribute allows nothing", AccountsPolicy.providerDomainMatches("a@example.org", null), false);
         t("provider domain: blank allows nothing", AccountsPolicy.providerDomainMatches("a@example.org", " "), false);
 
+        t("card port: parsed", PresentCardRequiredAction.cardPort("8444"), 8444);
+        t("card port: unset/garbage/out of range -> none", PresentCardRequiredAction.cardPort(null) == -1 && PresentCardRequiredAction.cardPort("x") == -1
+                && PresentCardRequiredAction.cardPort("70000") == -1, true);
+        t("card port: the form action moves to it, path and query kept",
+                PresentCardRequiredAction.onCardPort(java.net.URI.create("https://idp.example/realms/r/login-actions/required-action?session_code=a&execution=stig-present-card"), 8444).toString(),
+                "https://idp.example:8444/realms/r/login-actions/required-action?session_code=a&execution=stig-present-card");
+        t("card port: none -> the action unchanged", PresentCardRequiredAction.onCardPort(java.net.URI.create("https://idp.example/x"), -1).toString(), "https://idp.example/x");
         System.out.printf("PendingInviteLinkTest: %d/%d passed%n", run - failed, run);
         if (failed > 0) System.exit(1);
     }
