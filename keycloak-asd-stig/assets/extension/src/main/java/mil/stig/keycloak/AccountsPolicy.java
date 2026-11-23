@@ -101,6 +101,14 @@ final class AccountsPolicy {
             return "an IdP administrator gets only a card an administrator named (link-cac --allow-admin --edipi), never any card";
         return null;
     }
+    /** Release a claim (a single-use key) only once the transaction that relied on it has COMMITTED or rolled back:
+     *  a release before the commit would let a second writer claim, check and bind before this write is visible. */
+    static void releaseAfterCompletion(org.keycloak.models.KeycloakSession session, String key) {
+        session.getTransactionManager().enlistAfterCompletion(new org.keycloak.models.AbstractKeycloakTransaction() {
+            @Override protected void commitImpl() { session.singleUseObjects().remove(key); }
+            @Override protected void rollbackImpl() { session.singleUseObjects().remove(key); }
+        });
+    }
     /** A link request is live for 7 days from its time; one dated more than five minutes in the future is not. */
     static boolean linkLive(Long requestMs, long nowMs) {
         return requestMs != null && requestMs <= nowMs + 300_000L && nowMs - requestMs <= LINK_DAYS * 86_400_000L;

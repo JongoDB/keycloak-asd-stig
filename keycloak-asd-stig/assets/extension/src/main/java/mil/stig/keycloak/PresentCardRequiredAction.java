@@ -299,11 +299,8 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
             context.challenge(page(context, "That card is being bound elsewhere right now: try again in a minute."));
             return;
         }
-        try {
-            bindOrRefuse(context, req, id, pending, ca, kind);
-        } finally {
-            if (claim != null) session.singleUseObjects().remove(claim);
-        }
+        if (claim != null) AccountsPolicy.releaseAfterCompletion(session, claim);      // released once this write commits
+        bindOrRefuse(context, req, id, pending, ca, kind);
     }
 
     private void bindOrRefuse(RequiredActionContext context, Request req, String id, String pending, String ca, String kind) {

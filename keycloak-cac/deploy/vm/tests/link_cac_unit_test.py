@@ -349,6 +349,28 @@ check("cancel-all: one audit line per account and one for the run", len(lines) =
 code, out, al = run(kc, ["a.one", "--cancel-all"])
 check("cancel-all: with a username -> refused", isinstance(code, str) and "takes no username" in code, code)
 
+# ---- put_user (profile updates): only the changing fields; never stopped by a refusal (containment must land)
+class ProfileKC:
+    def __init__(self, status):
+        self.status, self.posts, self.puts = status, [], []
+    def req(self, method, path, body=None, headers=None):
+        self.posts.append(json.loads(body)); return self.status, '{"error":"username is malformed"}'
+    def api(self, method, path, obj=None, ok=(200, 201, 204), ok404=False):
+        self.puts.append((method, path, obj)); return None
+pk = ProfileKC(200); M.put_user(pk, "u1", {"enabled": False})
+check("profile: a disable sends exactly {enabled: false} to stig-bindings (no other field, no attribute), no PUT",
+      pk.posts == [{"profile": {"enabled": False}, "reason": "profile"}] and not pk.puts, (pk.posts, pk.puts))
+for st_ in (400, 500, 404):
+    pk = ProfileKC(st_); err_ = io.StringIO()
+    with contextlib.redirect_stderr(err_):
+        M.put_user(pk, "u1", {"enabled": False})
+    check("profile: the endpoint answering %d (e.g. a validator refusing another field) -> the disable still lands: a PUT "
+          "of just that field" % st_, pk.puts == [("PUT", "/users/u1", {"enabled": False, "id": "u1"})], pk.puts)
+pk = ProfileKC(200)
+src = open(args.admin).read()
+check("profile: the guard's containment disable passes only {enabled: False} (not the account's representation)",
+      'put_user(kc, uid, {"enabled": False})' in src and 'dict(kc.api("GET", "/users/%s" % uid), enabled=False)' not in src)
+
 # ---- guard: requests never completed
 kc = FakeKC(); now = int(time.time() * 1000)
 kc.add("fresh", attrs={"stig_card_link": [str(now - DAY)]})

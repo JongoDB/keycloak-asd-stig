@@ -130,7 +130,7 @@ public class StigBindingsResourceProviderFactory implements AdminRealmResourcePr
                 boolean ok = switch (n) {
                     case "emailVerified", "enabled" -> v instanceof Boolean;
                     case "requiredActions" -> v instanceof List && ((List<Object>) v).stream().allMatch(x -> x instanceof String && !((String) x).isBlank());
-                    case "username" -> v instanceof String && ((String) v).trim().matches("[A-Za-z0-9][A-Za-z0-9._@-]{0,254}");
+                    case "username" -> v instanceof String && !((String) v).isBlank() && ((String) v).trim().length() <= 255;
                     case "email" -> v instanceof String && (((String) v).isEmpty() || ((String) v).matches("[^@\\s]+@[^@\\s]+"));
                     default -> v instanceof String && ((String) v).length() <= 255;
                 };
@@ -168,25 +168,20 @@ public class StigBindingsResourceProviderFactory implements AdminRealmResourcePr
             UserModel u = id == null ? null : session.users().getUserById(realm, id);
             if (u == null) return err(Response.Status.NOT_FOUND, "no such user");
             String caller = auth.adminAuth().getUser() == null ? "?" : auth.adminAuth().getUser().getUsername();
-            List<String> claims = new ArrayList<>();
-            try {
-                return apply(u, p, caller, claims);
-            } finally {
-                claims.forEach(k -> session.singleUseObjects().remove(k));       // held only while this write runs
-            }
+            return apply(u, p, caller);
         }
 
-        private Response apply(UserModel u, Plan p, String caller, List<String> claims) {
+        private Response apply(UserModel u, Plan p, String caller) {
             for (Map.Entry<String, String> e : p.set().entrySet()) {
                 String n = e.getKey(), v = e.getValue();
-                if (CARD.equals(n) || PENDING.equals(n)) {          // claim first, then check: two writers cannot both pass
-                    String key = "stig-accounts-card:" + realm.getId() + ":" + v;
+                if (CARD.equals(n) || PENDING.equals(n) || ENTRA.equals(n)) {   // claim first, then check: two writers cannot both pass
+                    String key = (ENTRA.equals(n) ? "stig-bindings-entra:" : "stig-accounts-card:") + realm.getId() + ":" + v;
                     if (!session.singleUseObjects().putIfAbsent(key, 60)) {
-                        LOG.warnf("STIG-BINDINGS-REFUSED realm=%s caller=%s user=%s: card %s is being bound elsewhere right now",
-                                realm.getName(), caller, u.getUsername(), shown(n, v));
-                        return err(Response.Status.CONFLICT, "that card is being bound elsewhere right now");
+                        LOG.warnf("STIG-BINDINGS-REFUSED realm=%s caller=%s user=%s: %s %s is being bound elsewhere right now",
+                                realm.getName(), caller, u.getUsername(), n, shown(n, v));
+                        return err(Response.Status.CONFLICT, n + " is being bound elsewhere right now");
                     }
-                    claims.add(key);
+                    AccountsPolicy.releaseAfterCompletion(session, key);      // held until this write commits or rolls back
                 }
                 List<String> attrs = CARD.equals(n) || PENDING.equals(n) ? List.of(CARD, PENDING) : ENTRA.equals(n) ? List.of(ENTRA) : List.of();
                 for (String a : attrs) {

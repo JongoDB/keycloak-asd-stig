@@ -2961,20 +2961,23 @@ def write_bindings(kc, uid, set_=None, remove=(), present=None, reason=None):
 
 PROFILE_FIELDS = ("username", "email", "firstName", "lastName", "emailVerified", "enabled", "requiredActions")
 
-def put_user(kc, uid, rep):
-    """Update a user's profile fields (username, e-mail, names, the two flags, required actions) server-side through
-    stig-bindings: Keycloak stores a PUT's representation in the admin event WITH every attribute (the card included, even
-    when the request sent none), the endpoint's event holds only the fields. An image without the endpoint (or a test
-    double without raw requests): the former PUT, without the attributes."""
-    prof = {k: rep[k] for k in PROFILE_FIELDS if k in rep and rep[k] is not None}
+def put_user(kc, uid, changes):
+    """Change ONLY these profile fields of a user (username, e-mail, names, the two flags, required actions), server-side
+    through stig-bindings: Keycloak's admin event for a user PUT holds every attribute, the card included, even when the
+    request sends none; the endpoint's event holds only the fields. Never fails closed: on any answer but 200 (an image
+    without the endpoint, a validator refusing, an error) it falls back to a PUT of just these fields, so a containment
+    step (the guard's disable) always lands. (A test double without raw requests goes straight to the PUT.)"""
+    changes = {k: v for k, v in changes.items() if k in PROFILE_FIELDS and v is not None}
     if getattr(kc, "req", None) is not None:
         st, data = kc.req("POST", "/admin/realms/%s/stig-bindings/users/%s" % (REALM, uid),
-                          json.dumps({"profile": prof, "reason": "profile"}).encode(), {"Content-Type": "application/json"})
+                          json.dumps({"profile": changes, "reason": "profile"}).encode(), {"Content-Type": "application/json"})
         if st == 200:
             return
         if st not in (404, 405):
-            sys.exit("stig-bindings profile update -> HTTP %s %s" % (st, mask_digits(clean(data, 200))))
-    kc.api("PUT", "/users/%s" % uid, {k: v for k, v in rep.items() if k != "attributes"})
+            print("WARNING: stig-bindings refused a profile update (HTTP %s %s): falling back to a PUT of %s only (its admin "
+                  "event stores the account's attributes)" % (st, mask_digits(clean(data, 160)), ", ".join(sorted(changes))),
+                  file=sys.stderr)
+    kc.api("PUT", "/users/%s" % uid, dict(changes, id=uid))
 
 def bindings_or_put(kc, uid, set_=None, remove=(), reason=None):
     """write_bindings, or - on an image without the endpoint - the former full PUT, with a warning (the admin event then
@@ -3026,7 +3029,7 @@ def contain_user(kc, st, uid, why, pre=()):
     lines, failures, reset_ok = [], [], False
     steps = list(pre) + [
         ("reset", lambda: reset_factors(kc, kc.api("GET", "/users/%s" % uid), [why])),
-        ("disable", lambda: put_user(kc, uid, dict(kc.api("GET", "/users/%s" % uid), enabled=False))),
+        ("disable", lambda: put_user(kc, uid, {"enabled": False})),      # the one field: nothing else can stop it
         ("logout", lambda: kc.api("POST", "/users/%s/logout" % uid))]
     for label, step in steps:
         try:
@@ -3443,8 +3446,7 @@ def promote_or_pend(kc, u, roles, st, reset, lifespan=43200, email=None, clear=F
         gone = reset_factors(kc, u, risks)
         st["reset_at"][uid] = int(time.time() * 1000); save_state(st)
         if email:
-            rep = kc.api("GET", "/users/%s" % uid); rep["email"], rep["emailVerified"] = email, False
-            put_user(kc, uid, rep); gone.append("e-mail set by the operator")
+            put_user(kc, uid, {"email": email, "emailVerified": False}); gone.append("e-mail set by the operator")
             if creator:     # the operator has now reset it and set its address: no longer the delegate's
                 bindings_or_put(kc, uid, remove=[CREATED_BY], reason="operator reset")
             if creator and (kc.api("GET", "/users/%s" % uid).get("attributes") or {}).get(CREATED_BY):
@@ -3549,14 +3551,15 @@ def cmd_rename(a):
         sys.exit("REFUSED: %s already exists" % a.new)
     u.update({"username": a.new, "email": a.email or u.get("email"), "firstName": a.first or u.get("firstName"),
               "lastName": a.last or u.get("lastName"), "emailVerified": True})
+    changes = {k: u[k] for k in ("username", "email", "firstName", "lastName", "emailVerified")}
     if same:
-        put_user(kc, u["id"], u)
+        put_user(kc, u["id"], changes)
     else:
         # The STIG realm keeps usernames read-only (editUsernameAllowed=false, also for admins): open it for this one
         # change, then close it again whatever happens.
         kc.api("PUT", "", {"editUsernameAllowed": True})
         try:
-            put_user(kc, u["id"], u)
+            put_user(kc, u["id"], changes)
         finally:
             kc.api("PUT", "", {"editUsernameAllowed": False})
     after = kc.api("GET", "/users/%s" % u["id"])
@@ -3575,8 +3578,7 @@ def cmd_set_password(a):
     alphabet = string.ascii_letters + string.digits
     pw = "".join(_s.choice(alphabet) for _ in range(20)) + "-" + _s.choice("!#%+") + _s.choice(string.digits) + "aZ"
     kc.api("PUT", "/users/%s/reset-password" % u["id"], {"type": "password", "value": pw, "temporary": True})
-    u["requiredActions"] = sorted(set(u.get("requiredActions") or []) | {"CONFIGURE_TOTP"})
-    put_user(kc, u["id"], u)
+    put_user(kc, u["id"], {"requiredActions": sorted(set(u.get("requiredActions") or []) | {"CONFIGURE_TOTP"})})
     sys.stdout.write(pw)
 
 def cmd_smtp(a):
@@ -3945,7 +3947,7 @@ def cmd_user_enable(a):
     if u["enabled"] and held:
         sys.exit("REFUSED: the guard disabled %s (%s, %s): run reset-user (or a grant/promote that passes its checks) "
                  "first" % (a.username, held.get("why"), time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(held.get("at", 0) / 1000))))
-    put_user(kc, u["id"], u); print("%s enabled=%s" % (a.username, u["enabled"]))
+    put_user(kc, u["id"], {"enabled": u["enabled"]}); print("%s enabled=%s" % (a.username, u["enabled"]))
 
 def cmd_user_delete(a):
     kc = KC(); u = user(kc, a.username); kc.api("DELETE", "/users/%s" % u["id"]); allowlist_drop(u["id"], kc); print("deleted", a.username)
@@ -4370,7 +4372,7 @@ def reset_factors(kc, u, why):
     if rep.get("email"):
         gone.append("email")
     rep["email"], rep["emailVerified"] = "", False          # "" clears it; None would mean "unchanged"
-    put_user(kc, u["id"], rep)
+    put_user(kc, u["id"], {"requiredActions": [], "email": rep["email"], "emailVerified": False})
     kc.api("POST", "/users/%s/logout" % u["id"])
     if kc.api("GET", "/users/%s" % u["id"]).get("email"):
         raise RuntimeError("factor reset of %s: the e-mail address is still set" % u["username"])
