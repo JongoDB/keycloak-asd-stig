@@ -135,6 +135,40 @@ public final class PendingInviteLinkTest {
         t("pending card: expired after 7 days (the marker's time)", AccountsPolicy.pendingExpired(NOW - DAY, NOW - 8 * DAY, NOW), true);
         t("pending card: no time known = expired (never bound)", AccountsPolicy.pendingExpired(null, null, NOW), true);
 
+        // an administrator's link request (idp-admin.py link-cac): live 7 days from the REQUEST, whatever the account's age
+        t("link request: the time is a plain epoch-ms", AccountsPolicy.linkTime(" " + NOW + " "), NOW);
+        t("link request: anything else is no time", AccountsPolicy.linkTime("lab.um " + NOW), null);
+        t("link request: empty is no time", AccountsPolicy.linkTime(""), null);
+        t("link request: live a day after it was made", AccountsPolicy.linkLive(NOW - DAY, NOW), true);
+        t("link request: expired after 7 days", AccountsPolicy.linkLive(NOW - 8 * DAY, NOW), false);
+        t("link request: one dated in the future (beyond 5 min) is not live", AccountsPolicy.linkLive(NOW + DAY, NOW), false);
+        t("link request: no time = not live", AccountsPolicy.linkLive(null, NOW), false);
+        t("link request: \"<ms> admin\" carries the time", AccountsPolicy.linkTime(NOW + " admin"), NOW);
+        t("link request: \"<ms> admin\" records an administrator", AccountsPolicy.linkForAdmin(NOW + " admin"), true);
+        t("link request: a plain time records none", AccountsPolicy.linkForAdmin(String.valueOf(NOW)), false);
+        t("link request: any other suffix is no time", AccountsPolicy.linkTime(NOW + " root"), null);
+        t("admin: any card on an account that is an administrator NOW -> refused",
+                AccountsPolicy.adminLinkRefusal(null, false, true) != null, true);
+        t("admin: any card on an account that WAS an administrator at the request -> refused",
+                AccountsPolicy.adminLinkRefusal(null, true, false) != null, true);
+        t("admin: a named card on an administrator -> allowed (link-cac --allow-admin --edipi)",
+                AccountsPolicy.adminLinkRefusal("1234567890", true, true), null);
+        t("admin: any card on a non-administrator -> allowed", AccountsPolicy.adminLinkRefusal(null, false, false), null);
+        t("present: the named card, free -> bind", AccountsPolicy.presentRefusal("1234567890", "1234567890", null, false, false, true), null);
+        t("present: any card (a link request without one), free -> bind", AccountsPolicy.presentRefusal(null, "1234567890", null, false, false, true), null);
+        t("present: another card than the administrator named -> refused",
+                AccountsPolicy.presentRefusal("1234567890", "1234567891", null, false, false, true), "the card presented is not the one the administrator named");
+        t("present: another card than the invite named -> refused (the invite's wording)",
+                AccountsPolicy.presentRefusal("1234567890", "1234567891", null, false, false, false), "the card presented is not the one the invite named");
+        t("present: no identity -> refused", AccountsPolicy.presentRefusal(null, null, null, false, false, true) != null, true);
+        t("present: a card bound to another account -> refused", AccountsPolicy.presentRefusal(null, "1234567890", null, true, false, true),
+                "that card is already bound to another account");
+        t("present: a card reserved for another account -> refused", AccountsPolicy.presentRefusal(null, "1234567890", null, false, true, true),
+                "that card is reserved for another account");
+        t("present: the account already holds another card -> refused", AccountsPolicy.presentRefusal(null, "1234567890", "1111111111", false, false, true),
+                "the account already has another card");
+        t("present: the account's own card again -> bind (no change)", AccountsPolicy.presentRefusal(null, "1234567890", "1234567890", false, false, true), null);
+
         // stig-accounts: signIn cac
         t("edipi: ten digits", AccountsPolicy.validEdipi("1234567890"), true);
         t("edipi: nine digits refused", AccountsPolicy.validEdipi("123456789"), false);
@@ -157,6 +191,21 @@ public final class PendingInviteLinkTest {
                 PresentCardRequiredAction.onCardPort(java.net.URI.create("https://idp.example/realms/r/login-actions/required-action?session_code=a&execution=stig-present-card"), 8444).toString(),
                 "https://idp.example:8444/realms/r/login-actions/required-action?session_code=a&execution=stig-present-card");
         t("card port: none -> the action unchanged", PresentCardRequiredAction.onCardPort(java.net.URI.create("https://idp.example/x"), -1).toString(), "https://idp.example/x");
+        // stig-bindings: what the operator's tooling may write server-side (and nothing else)
+        java.util.function.Function<java.util.Map<String, Object>, String> plan = b -> StigBindingsResourceProviderFactory.plan(b).error();
+        t("bindings: set the card", plan.apply(java.util.Map.of("set", java.util.Map.of("cac_edipi", "1234567890"))), null);
+        t("bindings: a pending card, the request and the step", plan.apply(java.util.Map.of("set", java.util.Map.of("cac_edipi_pending", "1234567890",
+                "stig_card_link", NOW + " admin"), "presentCard", "add", "reason", "link-cac reserve")), null);
+        t("bindings: an entra_oid", plan.apply(java.util.Map.of("set", java.util.Map.of("entra_oid", "0b1c2d3e-0000-4000-8000-000000000001"))), null);
+        t("bindings: remove the delegate marker", plan.apply(java.util.Map.of("remove", java.util.List.of("stig_created_by"))), null);
+        t("bindings: a card of 9 digits refused", plan.apply(java.util.Map.of("set", java.util.Map.of("cac_edipi", "123456789"))) != null, true);
+        t("bindings: any other attribute refused", plan.apply(java.util.Map.of("set", java.util.Map.of("email", "x@y.mil"))) != null, true);
+        t("bindings: setting the delegate marker refused", plan.apply(java.util.Map.of("set", java.util.Map.of("stig_created_by", "x 1"))) != null, true);
+        t("bindings: removing another attribute refused", plan.apply(java.util.Map.of("remove", java.util.List.of("firstName"))) != null, true);
+        t("bindings: an unknown field refused", plan.apply(java.util.Map.of("enabled", true)) != null, true);
+        t("bindings: nothing to do refused", plan.apply(java.util.Map.of()) != null, true);
+        t("bindings: a malformed request time refused", plan.apply(java.util.Map.of("set", java.util.Map.of("stig_card_link", "soon"))) != null, true);
+        t("bindings: the event shows a card masked", StigBindingsResourceProviderFactory.shown("cac_edipi", "1234567890"), "******7890");
         System.out.printf("PendingInviteLinkTest: %d/%d passed%n", run - failed, run);
         if (failed > 0) System.exit(1);
     }

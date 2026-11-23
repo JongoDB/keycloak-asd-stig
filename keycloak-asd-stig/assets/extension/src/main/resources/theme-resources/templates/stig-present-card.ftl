@@ -11,7 +11,7 @@
                 <span class="${properties.kcAlertTitleClass!}">${cardError}</span>
             </div>
         </#if>
-        <p id="stig-card-intro">${msg("stigPresentCardIntro")}</p>
+        <p id="stig-card-intro">${msg(cardIntro!"stigPresentCardIntro")}</p>
         <#-- [hidden] must win over the theme's alert display (PatternFly sets display on its alert class, which beats the
              browser's own [hidden] rule: without this the "blocked" alert showed on every load) -->
         <style>

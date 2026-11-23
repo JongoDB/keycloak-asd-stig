@@ -49,6 +49,101 @@ After changing `applications`, run `idp-admin.py roles-setup`. To retire an appl
 then `roles-setup --retire-app <client>`: a plain `roles-setup` refuses while the removed application's delegation is
 still live, because its former managers would keep their write power.
 
+## link-cac: a card for an existing account
+
+`link-cac` binds a CAC to an account that already exists (it signs in with a password and OTP, or through Entra). The
+default proves possession: the operator only *requests* the card, and the person binds it by presenting it.
+
+```bash
+sudo idp-admin.py link-cac jane.doe                      # the card jane.doe presents at the next sign-in is bound
+sudo idp-admin.py link-cac jane.doe --edipi              # ... only the card whose EDIPI you type at the prompt
+sudo idp-admin.py link-cac jane.doe --cancel             # withdraw a pending request
+sudo idp-admin.py link-cac --cancel-all                  # withdraw EVERY pending request (the realm-wide stop)
+sudo idp-admin.py link-cac jane.doe --bind-edipi --confirm-direct-bind   # only if they cannot present a card
+```
+
+- **Possession (the default).** The account gets a link request (`stig_card_link`, the time of the request) and the
+  required action `stig-present-card` (stig-extensions' present-card step, the same step that binds the card an Entra +
+  CAC invite names). At the next sign-in the person is asked to present their CAC. The card is validated exactly as a
+  card sign-in validates it, and its identity is read with the realm's own X.509 mapping. It is bound only if no other
+  account holds it or has it reserved, and only if the account does not already hold a different card. A refusal or a
+  bind settles the request either way. Both are logged (`STIG-CARD-PRESENT-BOUND` / `-REFUSED request=link`, card
+  masked) and recorded as an admin event. The person may continue without the card. They are then asked again at each
+  sign-in for 7 days from the request, after which it is ignored. `guard` reports an expired request
+  (`STIG-CARD-LINK-EXPIRED`, exit 2) and lists live ones as information.
+- **`--edipi`** reserves one card (`cac_edipi_pending`, as an invite does): only a card with that EDIPI binds, and no
+  other request or `stig-accounts` create may name it meanwhile. Use it when you have read the EDIPI from the card
+  holder. A typo then binds nothing, rather than someone else's card.
+- **`--bind-edipi --confirm-direct-bind`** sets `cac_edipi` now, with nobody presenting the card. Use it only when the
+  person cannot sign in or cannot present a card, and only after you have verified the card and its holder yourself.
+  It is never allowed on an IdP administrator.
+- **The EDIPI is typed, never passed as an argument.** `sudo` writes the command line to the auth log, and the shell
+  keeps it in its history. `--edipi` and `--bind-edipi` therefore take no value: the number is typed twice at a prompt
+  that does not show it, or read as one line on stdin. A number on the command line is refused without being repeated.
+  The EDIPI must be exactly 10 digits. It is only ever printed or logged masked (`******7890`).
+- **Refused, and nothing changed:**
+  - no such account, a disabled account, or a client's service account;
+  - an account that already has a card, or carries an invite's pending card, unless you pass `--replace`, which removes
+    that card and ends the account's sessions;
+  - an EDIPI bound to, or reserved for, another account;
+  - for the possession modes, an account with no password and no Entra binding (it could never sign in to present a
+    card: `send-setup` first), a browser flow whose X.509 step does not map cards by `cac_edipi`, or a user profile
+    that does not declare the request (run `roles-setup`, which declares `stig_card_link` admin-only).
+- **IdP administrators.** These are refused unless you pass `--allow-admin`, and even then only with `--edipi`: an
+  administrator gets only the card you verified, and only when its holder presents it. A direct bind is never
+  allowed. A card on an administrator is its strongest sign-in path, so a typo or a pretext must never be enough to
+  attach one. A card bound by presentation is not "set by the operator's tooling" in `binding_provenance` (Keycloak
+  records the person, not the tool, as the writer), so a later `promote` of that account refuses it until it is
+  reviewed (`--clear-bindings` removes it). That outcome is deliberate.
+  The extension enforces the same rule itself, whoever wrote the request: an "any card" request on an account that
+  is an IdP administrator (any effective realm-management role, or a member of `/roles` or a group beneath it) is
+  refused at the sign-in, before the page is shown, and again at bind time. It is cleared and audited. `link-cac`
+  records `<ms> admin` when the account was an administrator at the request, so an account demoted since then still
+  gets a named card only.
+- **Who can write the request.** `stig_card_link` is declared admin-only with `cac-identity-guard`, so through the
+  admin API only a realm administrator (`realm-admin`) or a master-realm administrator may set it. Delegates and user
+  managers cannot, and neither can the onboarding client, whose admin-API profile allows only the `stig-accounts`
+  calls and group membership. `stig-accounts` never writes it, the person's own account API refuses it (read-only),
+  and it is concealed from delegates. The extension ignores a link request while the user profile does not guard
+  the attribute this way (`STIG-CARD-LINK-UNGUARDED`; run `roles-setup`).
+- **Audit.** Each attempt (requested, bound, cancelled, refused, or failed) writes one `STIG-LINK-CAC` line to the
+  system log (facility auth, tag `idp-admin`): `user`, `mode` (present / reserve / bind / cancel), `card` (masked,
+  `any`, `invalid`, or `-`), `replace`, `allow_admin`, `operator`, `result`, and `reason` for a refusal.
+- **`card-accounts off`** no longer disables the present-card step. The step acts only on an account that has a live
+  request, and `link-cac` needs it whether card accounts are on or off. `link-cac` registers and enables the step if
+  it has to. To stop every link request at once, run `link-cac --cancel-all`. It writes one audit line per account
+  and one for the run.
+- **Credentials, not a session.** An "any card" request binds only in a sign-in where the person entered their
+  credentials (password + OTP, or the identity provider). A sign-in that reuses an existing SSO session (Keycloak's
+  cookie) skips the step: the request stays, and is logged as `STIG-CARD-PRESENT-NEEDS-SIGNIN`. Otherwise someone
+  holding an unlocked browser could bind their own card. A named card (`--edipi`) cannot be satisfied by anyone but
+  its holder, so it may be presented either way.
+- **No full EDIPI in the admin events.** Keycloak stores the request body of a user update in its admin event, so a
+  `PUT` carrying `cac_edipi` writes the full number into the event store.
+  - The tooling writes bindings server-side through stig-extensions' `stig-bindings` endpoint (realm administrators
+    only; its event shows the card masked). This covers `cac_edipi`, `cac_edipi_pending`, `stig_card_link` and
+    `entra_oid`, and the removal of `stig_created_by`. It is used by `link-cac`, `user-create-cac`, `invite --edipi`
+    / `--entra-oid`, `link-entra`, `reset-user --clear-bindings` and the operator reset at promotion.
+  - Every other user update (`rename`, `user-enable`, `set-password`, the factor reset, the guard's disable) goes
+    through the same endpoint's `profile` write: username, e-mail, names, the two flags and the required actions,
+    with the attributes untouched. A `PUT` that sends no attributes is not enough: the lab showed that Keycloak's admin
+    event for it still holds every attribute.
+  - On an image without the endpoint (404), the pre-existing commands fall back to the former `PUT`, with a warning.
+    `link-cac` refuses instead. Any other refusal fails closed, with one exception: the guard's containment disable.
+    If the endpoint refuses that, a `PUT` of exactly `{"enabled": false}` still lands.
+  - Two cases remain: `user-create-cac` still takes the EDIPI as an argument (so `sudo` logs it), and admin events
+    written before this change keep what they stored.
+  - `binding_provenance` reads the masked `stig-bindings` events: a card the operator bound counts as the
+    operator's; one its holder presented does not.
+- **One card, one account, also at the same moment.** The endpoint and the present-card step both claim the card
+  (the same claim key `stig-accounts` uses) before checking and binding it, so two writers cannot bind one card to
+  two accounts.
+- **Hand-offs.** A `link_cac` hand-off suggests `link-cac <username>` when the account passes the usual hand-off checks.
+  If the account already has a card, the suggestion carries a CAUTION about `--replace`.
+
+Tests: `python3 tests/link_cac_unit_test.py` (fake Keycloak, offline). The extension's request rules are tested in
+`PendingInviteLinkTest`, which `build.sh` runs.
+
 ## Hand-off intake
 
 An application can file requests for the IdP team - link a card or an Entra identity, reset someone's sign-in,

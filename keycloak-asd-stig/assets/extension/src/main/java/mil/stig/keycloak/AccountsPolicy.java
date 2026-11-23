@@ -78,6 +78,54 @@ final class AccountsPolicy {
         long oldest = Math.min(createdMs == null ? Long.MAX_VALUE : createdMs, markerMs == null ? Long.MAX_VALUE : markerMs);
         return oldest == Long.MAX_VALUE || nowMs - oldest > PENDING_CARD_DAYS * 86_400_000L;
     }
+    /** Admin-only (and concealed) attribute an administrator's link request writes (idp-admin.py link-cac): "<epoch-ms>",
+     *  the time of the request. It asks the holder of an EXISTING account to present a card at their next sign-in
+     *  (PresentCardRequiredAction); with `<card attribute>_pending` set as well, only that card binds. Live for 7 days
+     *  from the request - not from the account's creation, as an invite's pending card is. */
+    static final String LINK_ATTRIBUTE = "stig_card_link";
+    static final int LINK_DAYS = 7;
+    /** The time a link request records, or null (absent, or not "<epoch-ms>" / "<epoch-ms> admin"). */
+    static Long linkTime(String v) {
+        if (v == null || !v.trim().matches("[0-9]{1,15}( admin)?")) return null;
+        return Long.parseLong(v.trim().split(" ")[0]);
+    }
+    /** The request was made while the account was an IdP administrator ("<epoch-ms> admin"). */
+    static boolean linkForAdmin(String v) {
+        return v != null && v.trim().matches("[0-9]{1,15} admin");
+    }
+    /** Why a link request must not run for this account (null: it may). An IdP administrator - when the request was
+     *  made, or now - gets only a card an administrator NAMED (expected != null), never "any card": whoever could
+     *  write the request must not be able to make an administrator's next sign-in bind the card in the reader. */
+    static String adminLinkRefusal(String expected, boolean adminAtRequest, boolean adminNow) {
+        if (expected == null && (adminAtRequest || adminNow))
+            return "an IdP administrator gets only a card an administrator named (link-cac --allow-admin --edipi), never any card";
+        return null;
+    }
+    /** Release a claim (a single-use key) only once the transaction that relied on it has COMMITTED or rolled back:
+     *  a release before the commit would let a second writer claim, check and bind before this write is visible. */
+    static void releaseAfterCompletion(org.keycloak.models.KeycloakSession session, String key) {
+        session.getTransactionManager().enlistAfterCompletion(new org.keycloak.models.AbstractKeycloakTransaction() {
+            @Override protected void commitImpl() { session.singleUseObjects().remove(key); }
+            @Override protected void rollbackImpl() { session.singleUseObjects().remove(key); }
+        });
+    }
+    /** A link request is live for 7 days from its time; one dated more than five minutes in the future is not. */
+    static boolean linkLive(Long requestMs, long nowMs) {
+        return requestMs != null && requestMs <= nowMs + 300_000L && nowMs - requestMs <= LINK_DAYS * 86_400_000L;
+    }
+    /** Why the card a person presented must NOT be bound to their account (null: bind it). `expected` is the card the
+     *  invite or the administrator named (null: any card - a link request without one), `identity` the presented card's
+     *  identity as the realm maps cards, `current` the card the account holds now. */
+    static String presentRefusal(String expected, String identity, String current, boolean boundElsewhere,
+                                 boolean reservedElsewhere, boolean link) {
+        if (identity == null || identity.isBlank()) return "the card presented carries no identity the realm maps cards by";
+        if (expected != null && !identity.trim().equals(expected))
+            return link ? "the card presented is not the one the administrator named" : "the card presented is not the one the invite named";
+        if (current != null && !current.isBlank() && !current.trim().equals(identity.trim())) return "the account already has another card";
+        if (boundElsewhere) return "that card is already bound to another account";
+        if (reservedElsewhere) return "that card is reserved for another account";
+        return null;
+    }
     /** The sign-in methods a create asks for, sorted; null when invalid. "signIn" absent: password (set-up mail); a
      *  string: "password", "entra" or "cac"; a list: entra and/or cac, in any order, each once - an empty list, a
      *  duplicate, "password" or anything else in a list is invalid. */

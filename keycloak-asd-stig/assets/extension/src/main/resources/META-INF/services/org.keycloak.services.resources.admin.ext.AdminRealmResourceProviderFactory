@@ -1,1 +1,2 @@
 mil.stig.keycloak.StigAccountsResourceProviderFactory
+mil.stig.keycloak.StigBindingsResourceProviderFactory

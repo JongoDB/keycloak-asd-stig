@@ -46,7 +46,8 @@ class Mock:
                                           ("disable_enable_unlock", "off.user"), ("consider_disable", "direct.role"),
                                           ("disable_enable_unlock", "roles.root"), ("delete_account", "shared.user"),
                                           ("reset_credentials", "shared.direct"), ("change_name_email", "shared.user"),
-                                          ("disable_enable_unlock", "plain.member")]):
+                                          ("disable_enable_unlock", "plain.member"), ("link_cac", "no.card"),
+                                          ("link_cac", "has.card"), ("link_cac", "boss.admin"), ("link_cac", "other.app")]):
             iid = "%08d-5555-4555-8555-555555555555" % (i + 1)
             if user == "shared.user" and kind == "change_name_email":
                 iid = "%08d-6666-4666-8666-666666666666" % (i + 1)
@@ -254,6 +255,8 @@ FK.add("roles.root", groups=["/roles"])                             # the bare /
 FK.add("shared.user", groups=["/app-a/viewer", "/app-c/lead"], roles={"app-a": ["viewer"], "app-c": ["lead"]})
 FK.add("shared.direct", groups=["/app-a/viewer"], roles={"app-a": ["viewer"], "app-b": ["owner"]})
 FK.add("plain.member", groups=["/app-a/viewer"], roles={"app-a": ["viewer"]})
+FK.add("no.card", groups=["/app-a/viewer"], roles={"app-a": ["viewer"]})
+FK.add("has.card", groups=["/app-a/viewer"], roles={"app-a": ["viewer"]}, attrs={"cac_edipi": ["2345678901"]})
 M.KC = lambda: FK
 check("module: UNMANAGED_CLIENTS (so add-client refuses it, check-clients does not call it unmanaged) names the worker",
       CID in M.UNMANAGED_CLIENTS and CID in M.RESERVED_CLIENTS)
@@ -337,12 +340,17 @@ check("list: disable_enable_unlock suggests user-enable false / true and user-un
 check("list: a username a command cannot carry gives NO command line (never a quoted one)",
       "rm -rf" not in "\n".join(l for l in out.splitlines() if "run:" in l) and "characters a command cannot carry" in out)
 check("list: nothing was changed, and no outcome was sent", "Nothing was changed" in out and all(m == "GET" for m, _, _ in M_.calls))
-for kind, want in [("link_cac", None), ("link_entra", "link-entra a.b <Entra object id>"), ("reset_credentials", "reset-user a.b"),
+for kind, want in [("link_cac", "link-cac a.b"), ("link_entra", "link-entra a.b <Entra object id>"), ("reset_credentials", "reset-user a.b"),
                    ("change_name_email", "rename a.b a.b --email <address>"), ("delete_account", "user-delete a.b"),
                    ("consider_disable", "user-enable a.b false"), ("something_new", None)]:
     cmds, note = M.handoff_suggestion(kind, "a.b")
     ok = (any(want in c for c in cmds) if want else not cmds) and bool(note)
     check("suggestion: %-22s -> %s" % (kind, cmds[0] if cmds else "(no command; a note)"), ok, (note or "")[:60])
+cmds, note = M.handoff_suggestion("link_cac", "a.b")
+check("suggestion: link_cac -> exactly `link-cac a.b` (possession: no EDIPI in any command); --edipi typed at the prompt, "
+      "--bind-edipi only if the person cannot present a card",
+      cmds == ["sudo idp-admin.py link-cac a.b"] and "--edipi" in note and "prompt" in note and "never from the hand-off" in note
+      and "--bind-edipi --confirm-direct-bind" in note and not re.search(r"[0-9]{4}", note), note[:120])
 check("suggestion: every command is an existing idp-admin.py command",
       all(c.split()[0] in M.build_parser()._subparsers._group_actions[0].choices
           for cmds, _ in M.HANDOFF_SUGGESTIONS.values() for c in cmds))
@@ -398,6 +406,18 @@ b = block("off.user")
 check("account: a disabled account is shown DISABLED", "account: DISABLED; card not bound; Entra not bound; application trees /app-a; application roles none" in b, b.replace("\n", " | ")[-120:])
 b = block("x; rm -rf /")
 check("account: an unsafe username is never looked up and gets no command", "WARNING" in b and "run:" not in b, b.replace("\n", " | ")[-100:])
+b = block("no.card")
+check("account: link_cac for a member of the filing tree without a card -> run: link-cac no.card, no warning, no caution",
+      "run:  sudo idp-admin.py link-cac no.card" in b and "WARNING" not in b and "CAUTION" not in b and "card not bound" in b,
+      b.replace("\n", " | ")[-150:])
+b = block("has.card")
+check("account: link_cac for an account that already has a card keeps the command with a CAUTION (--replace), never the number",
+      "CAUTION: has.card already has a card" in b and "--replace" in b and "run:  sudo idp-admin.py link-cac has.card" in b
+      and "2345678901" not in out and "8901" not in b, b.replace("\n", " | ")[-170:])
+for user in ("boss.admin", "other.app"):
+    b = next((x for x in blocks(user) if "link_cac" in x), "")
+    check("account: link_cac for %s -> a WARNING and NO command line (the existing safety checks)" % user,
+          "WARNING" in b and "run:" not in b, b.replace("\n", " | ")[-120:])
 def kc_down():
     sys.exit("admin login failed")
 M.KC = kc_down
