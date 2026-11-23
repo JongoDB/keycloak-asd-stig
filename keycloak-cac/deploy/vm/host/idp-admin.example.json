@@ -27,6 +27,14 @@
   "onboarding": {"defaultApps": ["app-a"]},
   "entra": {"memberDomain": "example.mil", "displayName": "Microsoft Entra ID"},
   "smtp": {"host": "smtp.example.mil", "port": 587, "from": "noreply@notify.example.mil", "displayName": "Example sign-in"},
+  "handoffIntake": {
+    "$comment": "Optional: an application's hand-off intake (requests the application files for the IdP team). `idp-admin.py handoff-worker-setup` creates clientId (client credentials, no roles; one optional client scope `scope` carrying an audience mapper for `audience`); `idp-admin.py handoffs` lists the open hand-offs from url and records outcomes; app is the filing application, and only members of its tree get a suggested command.",
+    "url": "https://app-a.example.mil/api/v1/idp-intake",
+    "clientId": "idp-handoff-worker",
+    "audience": "app-a-handoffs",
+    "scope": "app-a-handoffs.intake",
+    "app": "app-a"
+  },
   "operatorSshHost": "idp-host",
   "repoClientsDir": "clients"
 }
