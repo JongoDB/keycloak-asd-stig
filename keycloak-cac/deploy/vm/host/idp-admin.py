@@ -208,6 +208,9 @@ def load_admin_config(path):
                 no("onboarding.clientIds %r is reserved or not a client id" % x)
             if x in set(apps) | set(delegates) or x == (c.get("handoffIntake") or {}).get("clientId"):
                 no("onboarding.clientIds %r is also an application, a delegate or the hand-off worker" % x)
+            # nor a role group's name (RESERVED_CLIENTS holds them: /roles/<app>-user-manager for every application)
+            if x in {"%s-user-manager" % app for app in apps}:
+                no("onboarding.clientIds %r is reserved (the name of an application's user-manager role group)" % x)
     if "handoffIntake" in c:
         h = obj("handoffIntake", c["handoffIntake"], HANDOFF_KEYS)
         for k in sorted(HANDOFF_KEYS - {"name"}):
@@ -1784,6 +1787,22 @@ def onboarding_guard(kc, fix, marker):
         print("info  the admin-API profile capability could not be read this run: only that check was skipped", file=sys.stderr)
     return out
 
+def onboarding_takeover_refusal(kc, cid, files=None):
+    """Why an EXISTING client of this id must not be turned into an onboarding client, or None. A client add-client
+    registered or adopted (`stig.created-by=add-client`), or one a host client file declares, belongs to that path:
+    reshaping it here would fight the file at the next restart and strip what add-client set (a confidential relying
+    party made public, its redirects replaced). An absent client, or the onboarding client this tool built, is fine."""
+    files = host_client_files() if files is None else files
+    if cid in files:
+        return "is declared by host client file(s) %s" % ", ".join(files[cid])
+    c = find_client(kc, cid)
+    if c is None:
+        return None
+    attrs = (kc.api("GET", "/clients/%s" % c["id"]) or {}).get("attributes") or {}
+    if attrs.get(MANAGED_ATTR) == MANAGED_VAL:
+        return "is managed by add-client (%s=%s)" % (MANAGED_ATTR, MANAGED_VAL)
+    return None
+
 def cmd_onboarding_client_setup(a):
     """Create or converge the public client an application page uses to act with a user manager's own token, record
     its expected shape (ONBOARDING_STATE, written first), and verify. Refused unless the deployed stig-extensions
@@ -1820,6 +1839,10 @@ def cmd_onboarding_client_setup(a):
     bad_apps = [x for x in apps if x not in APP_USER_MANAGERS]
     if bad_apps:
         sys.exit("REFUSED: --app %s has no per-application user manager (APP_USER_MANAGERS)" % ", ".join(bad_apps))
+    why = onboarding_takeover_refusal(kc, a.client_id)
+    if why:
+        sys.exit("REFUSED: %s %s: onboarding-client-setup never reshapes a client something else manages (nothing "
+                 "recorded or changed)" % (a.client_id, why))
     want = {"redirect": redirect, "origin": origin, "max_age": a.max_auth_age, "dpop": bool(a.require_dpop), "apps": apps,
             **({"operations": ops} if need == 2 else {}),
             "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "operator": operator()}
