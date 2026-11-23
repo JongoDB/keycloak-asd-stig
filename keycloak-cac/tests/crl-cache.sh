@@ -110,4 +110,18 @@ rm -rf fx/live/*; openssl crl -in x.pem -outform DER -out fx/src/DODIDCA_70.crl
   && pass "crl-sync: a CRL past its nextUpdate is installed (its CA fails closed either way) and listed as expired" || no "expired: $(cat fx/expired)"
 : > fx/expired; bash "$PKI" crl-sync fx/src anchors fx/live fx/expired 2>/dev/null
 [ "$(cat fx/expired)" = DODIDCA_70.crl ] && pass "crl-sync: an expired CRL already installed (unchanged bytes) is listed too" || no "expired unchanged: $(cat fx/expired)"
+cp fx/live/DODIDCA_70.crl fx/expired.der; rm -f fx/src/*
+: > fx/expired; bash "$PKI" crl-sync fx/src anchors fx/live fx/expired 2>/dev/null
+[ "$(cat fx/expired)" = DODIDCA_70.crl ] && pass "crl-sync: an expired CRL left installed with NO cache entry is listed too" || no "expired, no cache entry: $(cat fx/expired)"
+: > index.txt; echo 01 > crlnum; openssl ca -config ca.cnf -gencrl -keyfile RETIRED.key -cert RETIRED.pem -out x.pem 2>/dev/null \
+  -crl_lastupdate "$(date -u -d "-1 hours" +%Y%m%d%H%M%SZ)" -crl_nextupdate "$(date -u -d "+5 days" +%Y%m%d%H%M%SZ)"
+openssl crl -in x.pem -outform DER -out fx/src/DODIDCA_70.crl            # a fresh CRL under that name, signed by an untrusted CA
+: > fx/expired; bash "$PKI" crl-sync fx/src anchors fx/live fx/expired 2>fx/log
+grep -q "STIG-CRL-UNTRUSTED DODIDCA_70.crl" fx/log && [ "$(sha256sum < fx/live/DODIDCA_70.crl)" = "$(sha256sum < fx/expired.der)" ] \
+  && [ "$(cat fx/expired)" = DODIDCA_70.crl ] && [ -z "$(ls -A fx/live | grep '\.new$')" ] \
+  && pass "crl-sync: an untrusted cache copy is refused, the expired installed one stays and is listed, no temp file left" || no "untrusted over expired: $(cat fx/log) [$(cat fx/expired)] $(ls -A fx/live)"
+rm -f fx/src/* fx/live/*; mk DODIDCA_70 1 a.der
+{ echo "0 text before the PEM block"; openssl crl -inform DER -in a.der; } > fx/src/DODIDCA_70.crl
+bash "$PKI" crl-sync fx/src anchors fx/live 2>/dev/null
+[ -s fx/live/DODIDCA_70.crl ] && pass "crl-sync: a PEM CRL with leading text (even text starting with \"0\") is read as PEM" || no "PEM with leading text not installed"
 exit $fail

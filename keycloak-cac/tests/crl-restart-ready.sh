@@ -7,6 +7,8 @@
 #      installed at the first health check that passes, no STIG-CRL-MISSING is logged, and a card still signs in;
 #   2b. restart with a SLOW source (every refresh takes minutes): ready as soon as the cache installed every expected
 #      CRL and the realm is applied - not after the first refresh, which still runs (and completes) afterwards;
+#   2c. the same with CAC_APPLY=false (a new container on the same database): nothing re-rendered the realm's CRL list,
+#      so readiness still waits for the first refresh (and its sync-crl-list) - no shortcut;
 #   3. restart with an EMPTY cache and the source down: never healthy, health names the missing CRLs; once the source is
 #      back the retry (CAC_CRL_RETRY_SECONDS) installs them and it becomes healthy;
 #   4. one CRL PERMANENTLY unavailable: not ready during CAC_CRL_READY_GRACE (naming it), then ready DEGRADED (still
@@ -43,6 +45,7 @@ http.server.ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()' "${1:-2}"
 }
 mirror
 for i in $(seq 1 30); do docker exec "$N-db" pg_isready -U keycloak >/dev/null 2>&1 && break; sleep 2; done
+run_kc() { # [extra docker run args]
 docker run -d --name "$N" --network "$NET" --user 1000:1000 --read-only --tmpfs /tmp \
   --tmpfs /opt/keycloak/data:uid=1000,gid=1000,mode=0750 --cap-drop ALL --security-opt no-new-privileges:true \
   -v "$VOL:/crl-cache" -e CAC_CRL_CACHE_DIR=/crl-cache -e CAC_CRL_RETRY_SECONDS=10 -e CAC_CRL_READY_GRACE=$GRACE \
@@ -50,7 +53,9 @@ docker run -d --name "$N" --network "$NET" --user 1000:1000 --read-only --tmpfs 
   -e CRL_MODE=online -e CRL_BASE="http://$N-mirror:8080" -e CAC_OCSP=false \
   -e KC_DB_URL="jdbc:postgresql://$N-db/keycloak" -e KC_DB_USERNAME=keycloak -e KC_DB_PASSWORD=crl-restart-db-password \
   -e CAC_PUBLIC_URL="https://localhost:$PORT" -e KC_BOOTSTRAP_ADMIN_USERNAME=bootstrap \
-  -e KC_BOOTSTRAP_ADMIN_PASSWORD=crl-restart-bootstrap-pw "$IMG" >/dev/null
+  -e KC_BOOTSTRAP_ADMIN_PASSWORD=crl-restart-bootstrap-pw "$@" "$IMG" >/dev/null
+}
+run_kc
 
 # (no `producer | grep -q` on big output: with pipefail, grep -q exiting first makes the producer's SIGPIPE a failure)
 res=(); check() { res+=("$2"); printf '%s %-96s %s\n' "$([ "$2" = 1 ] && echo PASS || echo FAIL)" "$1" "${3:-}"; }
@@ -123,6 +128,17 @@ check "slow source: ... and that refresh still completes after ready (0 failed)"
   "$([ "$R2" -gt "$R1" ] && grep "CRLs refreshed:" <<<"$(docker logs "$N" 2>&1)" | tail -1 | grep -q " 0 failed" && echo 1 || echo 0)" "$(docker logs "$N" 2>&1 | grep "CRLs refreshed:" | tail -1 | cut -c1-90)"
 s=$(sample)
 check "slow source: still ready, every CRL installed, after the refresh" "$([ "${s%% *}" = 0 ] && echo 1 || echo 0)" "${s:0:100}"
+
+# 2c. CAC_APPLY=false, slow source still up, full cache: NOT ready before the first refresh completed
+docker rm -f "$N" >/dev/null; run_kc -e CAC_APPLY=false; S0=$(date +%s)
+watch 20   # ~60 s: the shortcut made the normal container ready in ~25 s; the refresh takes ~150 s
+check "CAC_APPLY=false: no shortcut - not ready while the first refresh runs" \
+  "$([ -z "$READY_AT" ] && ! grep -qF "ready without waiting for the first refresh" <<<"$(docker logs "$N" 2>&1)" && echo 1 || echo 0)" "${LAST:0:100}"
+watch 300; S1=$(date +%s)
+check "CAC_APPLY=false: ready once the first refresh completed" \
+  "$([ -n "$READY_AT" ] && [ $BAD = 0 ] && grep -q "CRLs refreshed:" <<<"$(docker logs "$N" 2>&1)" && echo 1 || echo 0)" "after $((S1 - S0))s: ${LAST:0:90}"
+docker rm -f "$N" >/dev/null; run_kc; watch 300   # back to the normal container (CAC_APPLY=true) for what follows
+check "back to CAC_APPLY=true: healthy" "$([ -n "$READY_AT" ] && echo 1 || echo 0)" "${LAST:0:100}"
 docker rm -f "$N-mirror" >/dev/null
 
 # 3. restart with an EMPTY cache and the source down: never healthy; source back -> healthy, all CRLs

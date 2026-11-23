@@ -278,9 +278,16 @@ crl_next_wait() { # online: while any expected CRL is missing, retry every CAC_C
   else echo "${CAC_CRL_REFRESH_SECONDS:-21600}"; fi
 }
 crl_loop() {
-  # the cache already supplied every expected, unexpired CRL: ready now; the first refresh below runs after ready
-  [ "$MODE" = online ] && [ -f "$D/.crl-cache-complete" ] && [ -z "$(crl_missing)" ] && {
-    touch "$D/.crl-loaded"; log "CRLs: every expected CRL installed from the cache - ready without waiting for the first refresh"; }
+  # the cache already supplied every expected, unexpired CRL: ready now; the first refresh below runs after ready.
+  # Only when this container applied the realm (CAC_APPLY): with CAC_APPLY=false nothing rendered the realm's CRL list,
+  # which may be an older image's, and the stock form passes a card whose issuer's CRL it does not list - so readiness
+  # waits for the refresh and its sync-crl-list, as before. The authenticators are also re-pointed FIRST, as after every
+  # refresh; if that fails, no shortcut.
+  if [ "$MODE" = online ] && truthy "${CAC_APPLY:-true}" && [ -f "$D/.crl-cache-complete" ] && [ -z "$(crl_missing)" ]; then
+    if python3 "$TOOLS/cac-config.py" sync-crl-list; then
+      touch "$D/.crl-loaded"; log "CRLs: every expected CRL installed from the cache - ready without waiting for the first refresh"
+    else log "WARN could not update the CRL list: readiness waits for the first refresh"; fi
+  fi
   [ "$MODE" = online ] && { crl_refresh; python3 "$TOOLS/cac-config.py" sync-crl-list || log "WARN could not update the CRL list"
                            python3 "$TOOLS/cac-config.py" clear-crl-cache || true; touch "$D/.crl-loaded"; }
   [ "$MODE" != online ] && touch "$D/.crl-loaded"

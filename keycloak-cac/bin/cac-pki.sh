@@ -179,19 +179,19 @@ crl_name_of() { # anchor.pem [log] -> DISA CRL base name (DOD SW CA-75 -> DODSWC
   return 1
 }
 
-# DER or PEM, told from the first byte (a DER CRL is a SEQUENCE, 0x30) - not by parsing it: a DoD CRL is up to ~24 MB
-# and every full parse costs about a second on a small FIPS host.
-crl_fmt() { [ "$(head -c1 "$1" | od -An -tx1 | tr -d ' \n')" = 30 ] && echo DER || echo PEM; }
+# PEM if a PEM CRL header is in the first 4 KiB (text may precede it), otherwise DER - told without parsing the CRL:
+# a DoD CRL is up to ~24 MB and every full parse costs about a second on a small FIPS host.
+crl_fmt() { head -c 4096 "$1" | grep -aq -- '-----BEGIN X509 CRL-----' && echo PEM || echo DER; }
 # crl past nextUpdate (or without one)? -> 0. $2: openssl output already holding "nextUpdate=..." (saves a parse).
 crl_expired() { local nu="${2:-}" e
   [ -n "$nu" ] || nu=$(openssl crl -inform "$(crl_fmt "$1")" -in "$1" -noout -nextupdate 2>/dev/null || true)
   nu=$(sed -n 's/^nextUpdate=//p' <<<"$nu"); e=$(date -d "$nu" +%s 2>/dev/null || echo 0); [ -n "$nu" ] || e=0
   [ "$e" -le "$(date +%s)" ]; }
-crl_ok() { # crl anchors-pem [expired-list] -> 0 only if the signature verifies against a trusted anchor (one parse);
-           # with expired-list, appends the CRL's name to it when it is past its nextUpdate
+crl_ok() { # crl anchors-pem [expired-list [name]] -> 0 only if the signature verifies against a trusted anchor (one
+           # parse); with expired-list, appends name (default: the file's) to it when the CRL is past its nextUpdate
   local out; out=$(openssl crl -inform "$(crl_fmt "$1")" -in "$1" -CAfile "$2" -noout -nextupdate 2>&1 || true)
   grep -q 'verify OK' <<<"$out" || return 1
-  [ -z "${3:-}" ] || ! crl_expired "$1" "$out" || basename "$1" >> "$3"
+  [ -z "${3:-}" ] || ! crl_expired "$1" "$out" || echo "${4:-$(basename "$1")}" >> "$3"
 }
 
 # Keycloak evaluates EVERY configured CRL on every card login, and one whose issuer is not a trust anchor throws
@@ -226,19 +226,28 @@ cmd_crl_fetch() {
 }
 
 cmd_crl_sync() { # src-dir anchors-dir crl-dir [expired-list]
+  # expired-list: every CRL left installed in crl-dir that is past its nextUpdate - whether it came from src-dir now or
+  # was there before (a persisted data directory)
   local src="$1" a="$2" d="$3" x="${4:-}" w; w=$(mktemp -d); mkdir -p "$d"; cat "$a"/*.pem > "$w/anchors.pem"
   local ok=0 n; : > "$w/.verified"
   for f in "$src"/*.crl "$src"/crl/*.crl; do
     [ -e "$f" ] || continue; n=$(basename "$f")
     if same_file "$f" "$d/$n"; then ok=$((ok+1))   # unchanged: keep the installed file (no re-read by Keycloak)
-      [ -z "$x" ] || ! crl_expired "$d/$n" || echo "$n" >> "$x"
     elif crl_older "$f" "$d/$n"; then log "STIG-CRL-OLDER $n: older than the installed one - NOT installed"; ok=$((ok+1))
-      [ -z "$x" ] || ! crl_expired "$d/$n" || echo "$n" >> "$x"
-    elif crl_ok "$f" "$w/anchors.pem" "$x"; then cp "$f" "$d/.$n.new" && mv -f "$d/.$n.new" "$d/$n"; ok=$((ok+1)); echo "$n" >> "$w/.verified"
-    else log "STIG-CRL-UNTRUSTED $n: issuer not trusted or bad signature - NOT installed"; fi
+    else
+      # the copy is what gets verified and installed - never the source after the check (it could change in between)
+      cp "$f" "$d/.$n.new"
+      if crl_ok "$d/.$n.new" "$w/anchors.pem" "$x" "$n"; then mv -f "$d/.$n.new" "$d/$n"; ok=$((ok+1)); echo "$n" >> "$w/.verified"
+      else rm -f "$d/.$n.new"; log "STIG-CRL-UNTRUSTED $n: issuer not trusted or bad signature - NOT installed"; fi
+    fi
   done
   log "CRLs synced from $src: $ok installed"
-  cmd_crl_prune "$d" "$a" "$w/.verified"; rm -rf "$w"
+  cmd_crl_prune "$d" "$a" "$w/.verified"
+  if [ -n "$x" ]; then   # installed CRLs this sync did not just check: past nextUpdate? (only a persisted directory has any)
+    for f in "$d"/*.crl; do [ -e "$f" ] || continue; n=$(basename "$f")
+      grep -qxF "$n" "$w/.verified" || ! crl_expired "$f" || echo "$n" >> "$x"; done
+  fi
+  rm -rf "$w"
 }
 
 cmd_crl_save() { # crl-dir cache-dir names-file -> cache holds exactly the expected CRLs that are installed
