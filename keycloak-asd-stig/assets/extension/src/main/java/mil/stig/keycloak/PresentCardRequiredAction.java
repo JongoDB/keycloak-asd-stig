@@ -41,6 +41,13 @@ import org.keycloak.services.x509.X509ClientCertificateLookup;
  *   no card / an invalid card                       ask again (the person may Skip: the pending value stays until the
  *                                                   invite's 7 days are over, then it is ignored and the guard reports it)
  * Triggered while the account has a pending card, a provider binding, and is within the 7 days.
+ *
+ * An administrator's LINK REQUEST (idp-admin.py link-cac; AccountsPolicy.LINK_ATTRIBUTE "stig_card_link" = the request's
+ * epoch-ms) asks the holder of an EXISTING account - however they sign in (password + OTP, or the provider) - to present
+ * a card at their next sign-in: live for 7 days from the request. The card attribute is the one the browser flow's X.509
+ * step maps cards by. With `<card attribute>_pending` also set, only that card binds (as an invite's); without, the card
+ * the holder presents - never one bound to, or reserved for, another account, and never over a card the account already
+ * holds. Either way the request is settled (cleared) by a bind or a refusal, and audited.
  */
 public class PresentCardRequiredAction implements RequiredActionProvider, RequiredActionFactory {
 
@@ -84,7 +91,7 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
     @Override public void postInit(KeycloakSessionFactory factory) { }
     @Override public void close() { }
     @Override public String getId() { return ID; }
-    @Override public String getDisplayText() { return "Present your CAC (bind the card an invite named)"; }
+    @Override public String getDisplayText() { return "Present your CAC (bind the card an invite or an administrator's link request names)"; }
 
     static String cardAttr(RealmModel realm) {
         return AccountsPolicy.cardAttribute(realm.getAttribute(AccountsPolicy.CARD_ATTRIBUTE));
@@ -100,18 +107,42 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
                 ? null : p.trim();
     }
 
+    /** What this account's step would bind: the card attribute (null: the realm's X.509 step is missing or ambiguous - a
+     *  link request then binds nothing), the card it must be (null: the card the holder presents - a link request only),
+     *  and whether it is an administrator's link request rather than an invite. */
+    record Request(String attr, String expected, boolean link) { }
+
+    /** The account's live request, or null. An account carrying a link request is judged by it alone (live or not). */
+    static Request request(RealmModel realm, UserModel u, long nowMs) {
+        String marker = u.getFirstAttribute(AccountsPolicy.LINK_ATTRIBUTE);
+        if (marker != null && !marker.isBlank()) {
+            if (!AccountsPolicy.linkLive(AccountsPolicy.linkTime(marker), nowMs)) return null;
+            AuthenticatorConfigModel cfg = x509Config(realm);
+            String ca = cfg == null || cfg.getConfig() == null ? null : AccountsPolicy.cardAttribute(cfg.getConfig().get(USER_ATTR_KEY));
+            String p = ca == null ? null : u.getFirstAttribute(ca + AccountsPolicy.PENDING_SUFFIX);
+            return new Request(ca, p == null || p.isBlank() ? null : p.trim(), true);
+        }
+        String p = livePending(realm, u, nowMs);
+        return p == null ? null : new Request(cardAttr(realm), p, false);
+    }
+
+    static String shown(Request r) {
+        return r.expected() == null ? "any" : AccountsPolicy.maskEdipi(r.expected());
+    }
+
     @Override
     public void evaluateTriggers(RequiredActionContext context) {
         UserModel u = context.getUser();
         // not again in the sign-in where the person just skipped it (Keycloak re-evaluates triggers after each action)
         if (context.getAuthenticationSession() != null && context.getAuthenticationSession().getAuthNote(SKIPPED) != null) return;
-        if (u.getFirstAttribute(IdpLinkByAdminAttributeAuthenticatorFactory.ATTR) != null && livePending(context.getRealm(), u, Time.currentTimeMillis()) != null)
+        Request r = request(context.getRealm(), u, Time.currentTimeMillis());
+        if (r != null && (r.link() || u.getFirstAttribute(IdpLinkByAdminAttributeAuthenticatorFactory.ATTR) != null))
             u.addRequiredAction(ID);
     }
 
     @Override
     public void requiredActionChallenge(RequiredActionContext context) {
-        if (livePending(context.getRealm(), context.getUser(), Time.currentTimeMillis()) == null) {
+        if (request(context.getRealm(), context.getUser(), Time.currentTimeMillis()) == null) {
             context.success();                       // nothing (left) to bind
             return;
         }
@@ -129,6 +160,8 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
                 : certs[0].getSubjectX500Principal().getName());
         f.add("isUserEnabled", "true");
         org.keycloak.forms.login.LoginFormsProvider form = context.form().setFormData(f);
+        Request r = request(context.getRealm(), context.getUser(), Time.currentTimeMillis());
+        form.setAttribute("cardIntro", r != null && r.link() ? "stigPresentCardIntroLink" : "stigPresentCardIntro");
         // with a card port: our own page - "Sign in with CAC/PIV" posts to the card port (a new connection and TLS handshake,
         // which asks for the certificate), "Continue without the card" posts to this page's OWN origin (the form's
         // unmodified action), so a network that blocks the card port can always go on
@@ -156,11 +189,12 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
     @Override
     public void processAction(RequiredActionContext context) {
         RealmModel realm = context.getRealm(); UserModel u = context.getUser(); KeycloakSession session = context.getSession();
-        String pending = livePending(realm, u, Time.currentTimeMillis()), ca = cardAttr(realm);
-        if (pending == null || ca == null) { context.success(); return; }
+        Request req = request(realm, u, Time.currentTimeMillis());
+        if (req == null || (!req.link() && req.attr() == null)) { context.success(); return; }
+        String pending = req.expected(), ca = req.attr(), kind = req.link() ? "link" : "invite";
         if (context.getHttpRequest().getDecodedFormParameters().containsKey("cancel")) {
-            LOG.infof("STIG-CARD-PRESENT-SKIPPED realm=%s user=%s card=%s: asked again at the next sign-in, until the invite expires",
-                    realm.getName(), u.getUsername(), AccountsPolicy.maskEdipi(pending));
+            LOG.infof("STIG-CARD-PRESENT-SKIPPED realm=%s user=%s request=%s card=%s: asked again at the next sign-in, until the %s expires",
+                    realm.getName(), u.getUsername(), kind, shown(req), req.link() ? "link request" : "invite");
             context.getAuthenticationSession().setAuthNote(SKIPPED, "1");
             context.success();                      // re-added by evaluateTriggers at the next sign-in while live
             return;
@@ -175,7 +209,7 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
         // the card must be bound to the attribute the realm's X.509 step maps cards by - else a bound card would open nothing
         // (or another account): refuse to bind on any mismatch or ambiguity, and leave the pending value for the operator
         AuthenticatorConfigModel cfg = x509Config(realm);
-        if (cfg == null || cfg.getConfig() == null || !ca.equals(cfg.getConfig().get(USER_ATTR_KEY))) {
+        if (cfg == null || cfg.getConfig() == null || ca == null || !ca.equals(cfg.getConfig().get(USER_ATTR_KEY))) {
             LOG.errorf("STIG-CARD-PRESENT-MISCONFIGURED realm=%s user=%s: %s - nothing bound", realm.getName(), u.getUsername(),
                     cfg == null ? "the browser flow has no X.509 step, or several that differ"
                                 : "stig.accounts.card-attribute " + ca + " is not the X.509 step's user attribute " + cfg.getConfig().get(USER_ATTR_KEY));
@@ -193,22 +227,26 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
             context.challenge(page(context, "That card could not be validated."));
             return;
         }
-        String why = null;
-        if (identity == null || !identity.trim().equals(pending)) why = "the card presented is not the one the invite named";
-        else if (session.users().searchForUserByUserAttributeStream(realm, ca, pending).anyMatch(x -> !x.getId().equals(u.getId())))
-            why = "that card is already bound to another account";
-        u.removeAttribute(ca + AccountsPolicy.PENDING_SUFFIX);       // either way the invite's card is settled now
+        String id = identity == null ? null : identity.trim();
+        boolean elsewhere = id != null && !id.isEmpty()
+                && session.users().searchForUserByUserAttributeStream(realm, ca, id).anyMatch(x -> !x.getId().equals(u.getId()));
+        boolean reserved = id != null && !id.isEmpty()
+                && session.users().searchForUserByUserAttributeStream(realm, ca + AccountsPolicy.PENDING_SUFFIX, id).anyMatch(x -> !x.getId().equals(u.getId()));
+        String why = AccountsPolicy.presentRefusal(pending, id, u.getFirstAttribute(ca), elsewhere, reserved, req.link());
+        u.removeAttribute(ca + AccountsPolicy.PENDING_SUFFIX);       // either way the request is settled now
+        u.removeAttribute(AccountsPolicy.LINK_ATTRIBUTE);
         if (why != null) {
-            LOG.warnf("STIG-CARD-PRESENT-REFUSED realm=%s user=%s pending=%s presented=%s: %s - the account stays without a card",
-                    realm.getName(), u.getUsername(), AccountsPolicy.maskEdipi(pending), AccountsPolicy.maskEdipi(identity), why);
-            audit(context, "{\"stig\":\"card refused: " + why + "\",\"card\":\"" + AccountsPolicy.maskEdipi(pending) + "\"}");
+            LOG.warnf("STIG-CARD-PRESENT-REFUSED realm=%s user=%s request=%s pending=%s presented=%s: %s - the account's card is unchanged",
+                    realm.getName(), u.getUsername(), kind, shown(req), AccountsPolicy.maskEdipi(id), why);
+            audit(context, "{\"stig\":\"card refused: " + why + "\",\"request\":\"" + kind + "\",\"card\":\"" + AccountsPolicy.maskEdipi(id) + "\"}");
             context.success();
             return;
         }
-        u.setSingleAttribute(ca, pending);
-        LOG.infof("STIG-CARD-PRESENT-BOUND realm=%s user=%s card=%s: the invite's card, presented by the account holder",
-                realm.getName(), u.getUsername(), AccountsPolicy.maskEdipi(pending));
-        audit(context, "{\"stig\":\"card bound: presented by the account holder\",\"card\":\"" + AccountsPolicy.maskEdipi(pending) + "\"}");
+        u.setSingleAttribute(ca, id);
+        LOG.infof("STIG-CARD-PRESENT-BOUND realm=%s user=%s request=%s card=%s: %s, presented by the account holder",
+                realm.getName(), u.getUsername(), kind, AccountsPolicy.maskEdipi(id),
+                req.link() ? (pending == null ? "the card of an administrator's link request" : "the card an administrator's link request named") : "the invite's card");
+        audit(context, "{\"stig\":\"card bound: presented by the account holder\",\"request\":\"" + kind + "\",\"card\":\"" + AccountsPolicy.maskEdipi(id) + "\"}");
         context.success();
     }
 

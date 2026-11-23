@@ -325,6 +325,27 @@ The present-card step binds only when `stig.accounts.card-attribute` equals the 
 check and the step never carry a full EDIPI (last four digits). Accepted risk: the generic 409 tells a delegate whether an
 EDIPI is bound or reserved; it is capped by the hourly create limit and every attempt is logged with the caller.
 
+### A card for an existing account (an administrator's link request)
+
+The same step binds a card to an account that already exists (it signs in with a password and OTP, or through the
+provider). This happens when an administrator writes a LINK REQUEST: `stig_card_link` = the request's epoch-ms
+(admin-only and concealed; declare it in the user profile with `cac-identity-guard` `{"unique": "false"}`), plus the
+required action on the account. The keycloak-cac VM tool's `link-cac` does both. A request is live for 7 days from
+the time it was made, whatever the account's age. While it is live, the step runs at every sign-in, by any means,
+until the person presents a card or the request expires. The card attribute is the browser flow's X.509 step's
+mapping attribute, which must be pinned as above. `stig.accounts.card-attribute` is not needed, so card accounts
+may stay off.
+
+- With `<card attribute>_pending` also set, only that card binds, as for an invite.
+- Without it, the card the holder presents binds.
+
+A card is never bound if another account holds it, another account's pending value names it, or the account already
+holds a different card. A bind or a refusal clears the request, and each is logged with `request=link`
+(`STIG-CARD-PRESENT-BOUND` / `-REFUSED`, last four digits) and recorded as an admin event.
+
+Possession is what makes this safe without the administrator ever typing the number: only the person who can sign
+in to the account AND holds the card can attach it.
+
 **EDIPIs in events and logs.** A card sign-in's login event never carries the card's identity: until an account is
 matched, its `username` detail (and the attempted username the login page may echo) is `card:******NNNN#xxxxxxxx` - the
 last four digits and an 8-hex keyed hash (HMAC-SHA-256 under the realm's active HMAC key), so repeated attempts by one card

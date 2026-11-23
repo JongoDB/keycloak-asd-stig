@@ -135,6 +135,29 @@ public final class PendingInviteLinkTest {
         t("pending card: expired after 7 days (the marker's time)", AccountsPolicy.pendingExpired(NOW - DAY, NOW - 8 * DAY, NOW), true);
         t("pending card: no time known = expired (never bound)", AccountsPolicy.pendingExpired(null, null, NOW), true);
 
+        // an administrator's link request (idp-admin.py link-cac): live 7 days from the REQUEST, whatever the account's age
+        t("link request: the time is a plain epoch-ms", AccountsPolicy.linkTime(" " + NOW + " "), NOW);
+        t("link request: anything else is no time", AccountsPolicy.linkTime("lab.um " + NOW), null);
+        t("link request: empty is no time", AccountsPolicy.linkTime(""), null);
+        t("link request: live a day after it was made", AccountsPolicy.linkLive(NOW - DAY, NOW), true);
+        t("link request: expired after 7 days", AccountsPolicy.linkLive(NOW - 8 * DAY, NOW), false);
+        t("link request: one dated in the future (beyond 5 min) is not live", AccountsPolicy.linkLive(NOW + DAY, NOW), false);
+        t("link request: no time = not live", AccountsPolicy.linkLive(null, NOW), false);
+        t("present: the named card, free -> bind", AccountsPolicy.presentRefusal("1234567890", "1234567890", null, false, false, true), null);
+        t("present: any card (a link request without one), free -> bind", AccountsPolicy.presentRefusal(null, "1234567890", null, false, false, true), null);
+        t("present: another card than the administrator named -> refused",
+                AccountsPolicy.presentRefusal("1234567890", "1234567891", null, false, false, true), "the card presented is not the one the administrator named");
+        t("present: another card than the invite named -> refused (the invite's wording)",
+                AccountsPolicy.presentRefusal("1234567890", "1234567891", null, false, false, false), "the card presented is not the one the invite named");
+        t("present: no identity -> refused", AccountsPolicy.presentRefusal(null, null, null, false, false, true) != null, true);
+        t("present: a card bound to another account -> refused", AccountsPolicy.presentRefusal(null, "1234567890", null, true, false, true),
+                "that card is already bound to another account");
+        t("present: a card reserved for another account -> refused", AccountsPolicy.presentRefusal(null, "1234567890", null, false, true, true),
+                "that card is reserved for another account");
+        t("present: the account already holds another card -> refused", AccountsPolicy.presentRefusal(null, "1234567890", "1111111111", false, false, true),
+                "the account already has another card");
+        t("present: the account's own card again -> bind (no change)", AccountsPolicy.presentRefusal(null, "1234567890", "1234567890", false, false, true), null);
+
         // stig-accounts: signIn cac
         t("edipi: ten digits", AccountsPolicy.validEdipi("1234567890"), true);
         t("edipi: nine digits refused", AccountsPolicy.validEdipi("123456789"), false);
