@@ -54,6 +54,18 @@ refused = [
     ("an unknown key in onboarding", lambda c: c["onboarding"].update({"apps": ["app-a"]}), "unknown key"),
     ("onboarding.defaultApps naming no application", lambda c: c["onboarding"].update({"defaultApps": ["nonesuch"]}), "not an application"),
     ("onboarding.defaultApps as a string", lambda c: c["onboarding"].update({"defaultApps": "app-a"}), "list of names"),
+    ("onboarding.clientIds naming the default onboarding client", lambda c: c["onboarding"].update({"clientIds": ["idp-onboarding"]}), "reserved"),
+    ("onboarding.clientIds naming a built-in", lambda c: c["onboarding"].update({"clientIds": ["admin-cli"]}), "reserved"),
+    ("onboarding.clientIds naming an application", lambda c: c["onboarding"].update({"clientIds": ["app-a"]}), "also an application"),
+    ("onboarding.clientIds naming a delegate", lambda c: c["onboarding"].update({"clientIds": ["app-a-admin"]}), "also an application"),
+    ("onboarding.clientIds naming the hand-off worker",
+     lambda c: (c.update({"handoffIntake": {"url": "https://app-a.example.mil/intake", "clientId": "x-worker", "audience": "a",
+                                            "scope": "app-a.intake", "app": "app-a"}}), c["onboarding"].update({"clientIds": ["x-worker"]})),
+     "hand-off worker"),
+    ("onboarding.clientIds not a client id", lambda c: c["onboarding"].update({"clientIds": ["App B"]}), "not a client id"),
+    ("onboarding.clientIds naming a client twice",
+     lambda c: c["onboarding"].update({"clientIds": ["app-b-onboarding", "app-b-onboarding"]}), "twice"),
+    ("onboarding.clientIds as a string", lambda c: c["onboarding"].update({"clientIds": "app-b-onboarding"}), "list of names"),
     ("preSplitDelegates naming no delegation", lambda c: c["applications"]["app-a"].update({"preSplitDelegates": ["x"]}), "not a delegation"),
     ("an unknown top-level key", lambda c: c.update({"application": {}}), "unknown key"),
     ("applications not an object", lambda c: c.update({"applications": ["app-a"]}), "not an object"),
@@ -61,6 +73,29 @@ refused = [
 for name, fn, want in refused:
     rc, out = load(variant(fn))
     check("REFUSED: " + name, rc != 0 and "REFUSED" in out and want in out, out.strip().splitlines()[-1][:110] if out.strip() else rc)
+
+# onboarding.clientIds: more onboarding clients, each built and guarded like the default one
+def ids(cfg):
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(cfg, f); p = f.name
+    try:
+        code = ("import importlib.machinery, importlib.util; ld = importlib.machinery.SourceFileLoader('m', %r); "
+                "s = importlib.util.spec_from_loader('m', ld); M = importlib.util.module_from_spec(s); ld.exec_module(M); "
+                "print(','.join(M.ONBOARDING_CLIENT_IDS))" % ADM)
+        r = subprocess.run([sys.executable, "-c", code], env=dict(os.environ, IDP_ADMIN_CONFIG=p), capture_output=True, text=True, timeout=60)
+        return r.stdout.strip()
+    finally:
+        os.unlink(p)
+check("no onboarding.clientIds: the default onboarding client only", ids(BASE) == "idp-onboarding", ids(BASE))
+two = variant(lambda c: c["onboarding"].update({"clientIds": ["app-b-onboarding"]}))
+check("onboarding.clientIds: the default first, then each named one", ids(two) == "idp-onboarding,app-b-onboarding", ids(two))
+rc, out = load(two)
+check("a config with onboarding.clientIds loads", rc == 0, out[-200:] if rc else "")
+with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+    json.dump(two, f); p2 = f.name
+r = subprocess.run([sys.executable, ADM, "onboarding-client-setup", "--help"], env=dict(os.environ, IDP_ADMIN_CONFIG=p2),
+                   capture_output=True, text=True, timeout=60); os.unlink(p2)
+check("onboarding-client-setup --client-id offers the named client", "app-b-onboarding" in r.stdout, r.stdout[-160:].replace("\n", " "))
 
 print("\n%d/%d passed" % (sum(res), len(res)))
 raise SystemExit(0 if all(res) else 1)

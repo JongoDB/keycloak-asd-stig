@@ -24,7 +24,8 @@
       "userManagerRole": "owner"
     }
   },
-  "onboarding": {"defaultApps": ["app-a"]},
+  "onboarding": {"$comment": "defaultApps: the trees onboarding-client-setup records without --app. clientIds: onboarding clients besides idp-onboarding, one per further application page (its own redirect and origin).",
+                 "defaultApps": ["app-a"], "clientIds": ["app-b-onboarding"]},
   "entra": {"memberDomain": "example.mil", "displayName": "Microsoft Entra ID"},
   "smtp": {"host": "smtp.example.mil", "port": 587, "from": "noreply@notify.example.mil", "displayName": "Example sign-in"},
   "handoffIntake": {
