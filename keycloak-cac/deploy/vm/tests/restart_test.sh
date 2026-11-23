@@ -78,7 +78,7 @@ reset; STUB_HEALTH=unhealthy run --image idp/keycloak-cac:26.8.2-fips-bbbbbbb; r
 PE=$(ls "$W"/srv/compose/.env.prev-* 2>/dev/null); PL=$(ls "$W"/srv/compose/images.lock.prev-* 2>/dev/null)
 [ $rc -ne 0 ] && [ -n "$PE" ] && [ -n "$PL" ] && grep -qx "KEYCLOAK_IMAGE=idp/keycloak-cac:26.8.2-fips-aaaaaaa" "$PE" && grep -q "fips-aaaaaaa $OLDID" "$PL" \
   && ok "--image, unhealthy: .env.prev-<ts> and images.lock.prev-<ts> hold the previous pair" || no "--image unhealthy prev (rc=$rc): $PE $PL"
-grep "ROLLBACK" "$W/err" | grep -qF "cp -p $PE $W/srv/compose/.env && cp -p $PL $W/srv/compose/images.lock && docker compose" \
+grep "ROLLBACK" "$W/err" | grep -qF "ROLLBACK (only if the image itself is at fault): cp -p $PE $W/srv/compose/.env && cp -p $PL $W/srv/compose/images.lock && docker compose" \
   && grep "ROLLBACK" "$W/err" | grep -q "up -d --no-deps keycloak" && grep "ROLLBACK" "$W/err" | grep -q "idp-restart --image idp/keycloak-cac:26.8.2-fips-aaaaaaa" \
   && [ "$(grep -c ROLLBACK "$W/err")" = 1 ] && ok "--image, unhealthy: one rollback line (cp -p both .prev files + up -d, or idp-restart --image <old tag>)" || no "rollback line: $(grep ROLLBACK "$W/err")"
 # ...and it works: applying the printed copies restores the previous pair exactly

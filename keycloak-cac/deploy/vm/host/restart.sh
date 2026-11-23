@@ -40,7 +40,7 @@ if [ -n "$TAG" ]; then
   [ -f "$LOCK" ] || : > "$LOCK"
   TS=$(date -u +%Y%m%dT%H%M%SZ)
   cp -p "$ENVF" "$ENVF.prev-$TS"; cp -p "$LOCK" "$LOCK.prev-$TS"
-  trap 'rc=$?; [ "$rc" -eq 0 ] || log "ROLLBACK (previous image ${OLD:-none}): cp -p $ENVF.prev-$TS $ENVF && cp -p $LOCK.prev-$TS $LOCK && $C up -d --no-deps keycloak   - or: idp-restart --image ${OLD:-<old tag>}"; exit "$rc"' EXIT
+  trap 'rc=$?; [ "$rc" -eq 0 ] || log "ROLLBACK (only if the image itself is at fault): cp -p $ENVF.prev-$TS $ENVF && cp -p $LOCK.prev-$TS $LOCK && $C up -d --no-deps keycloak   - or: idp-restart --image ${OLD:-<old tag>}"; exit "$rc"' EXIT
   awk -v t="$TAG" 'BEGIN{d=0} /^KEYCLOAK_IMAGE=/{print "KEYCLOAK_IMAGE=" t; d=1; next} {print} END{if(!d) print "KEYCLOAK_IMAGE=" t}' \
     "$ENVF" > "$ENVF.new" && mv -f "$ENVF.new" "$ENVF"
   # images.lock: the keycloak line is "<tag> <image ID>", both from the same inspect; the commit line from its label
