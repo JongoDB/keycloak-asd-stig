@@ -186,13 +186,30 @@ if [ -z "$MODE" ]; then   # lab: the mock CA's CRL; lab + real cards: DoD CRLs t
 fi
 MODE="${MODE,,}"; case "$MODE" in offline|local) MODE=file;; disabled|off) MODE=none;; esac; export CRL_MODE="$MODE"
 mkdir -p "$D/crl"
+crl_missing() { [ -f "$D/.crl-required" ] || return 0; while read -r n; do [ -z "$n" ] || [ -s "$D/crl/$n" ] || echo "$n"; done < "$D/.crl-required"; }
 # A data directory that survived a restart or an image upgrade may hold CRLs of CAs that are no longer anchors;
 # a single one makes Keycloak refuse every card. Remove them before Keycloak (or the profile) sees the directory.
 "$TOOLS/cac-pki.sh" crl-prune "$D/crl" "$D/anchors"
 CRL_SRC="${CAC_CRL_DIR:-/crl}"; $LAB && [ -z "${CAC_CRL_DIR:-}" ] && [ -d "$D/lab/conf/crl" ] && CRL_SRC="$D/lab/conf/crl"
+# Online mode: the CRLs this deployment must hold before it reports ready (cac-health.py), one file name per line.
+# Until every one is installed, card sign-in for that CA fails closed and the container is NOT healthy.
+rm -f "$D/.crl-required"
+if [ "$MODE" = online ]; then cp "$D/crl-names.txt" "$D/.crl-required"; fi
+# CAC_CRL_CACHE_DIR (online mode): a persistent directory holding the last good CRLs. A new container installs them
+# BEFORE Keycloak starts - through crl-sync, so only CRLs whose signature verifies against the CURRENT anchors are
+# installed (a retired CA's CRL never comes back) - and every refresh writes the expected ones back. CRLs are public;
+# a stale one (past nextUpdate) still fails closed for its CA until the refresh replaces it.
+CACHE="${CAC_CRL_CACHE_DIR:-}"
+if [ -n "$CACHE" ]; then
+  [ "$MODE" = online ] || die "CAC_CRL_CACHE_DIR is for CRL_MODE=online only (file mode reads CAC_CRL_DIR)"
+  [ -d "$CACHE" ] && [ -w "$CACHE" ] || die "CAC_CRL_CACHE_DIR=$CACHE is not a writable directory (owner 1000, see README)"
+  "$TOOLS/cac-pki.sh" crl-sync "$CACHE" "$D/anchors" "$D/crl"
+  log "CRLs: $(crl_missing | wc -l) of $(wc -l < "$D/.crl-required") expected still missing after installing the cache"
+fi
 crl_refresh() {
   case "$MODE" in
-    online) "$TOOLS/cac-pki.sh" crl-fetch "$D/anchors" "$D/crl";;
+    online) "$TOOLS/cac-pki.sh" crl-fetch "$D/anchors" "$D/crl"
+            [ -z "$CACHE" ] || "$TOOLS/cac-pki.sh" crl-save "$D/crl" "$CACHE" "$D/crl-names.txt" || log "WARN could not update the CRL cache $CACHE";;
     file)   "$TOOLS/cac-pki.sh" crl-sync "$CRL_SRC" "$D/anchors" "$D/crl";;
   esac
   "$TOOLS/cac-pki.sh" crl-health "$D/crl" || true
@@ -202,7 +219,7 @@ crl_refresh() {
 if $LAB && [ -d "$D/lab/conf/crl" ] && [ "$MODE" != file ]; then "$TOOLS/cac-pki.sh" crl-sync "$D/lab/conf/crl" "$D/anchors" "$D/crl"; fi
 case "$MODE" in
   file)   crl_refresh ;;                       # local: fast, needed before the profile is rendered
-  online) log "CRLs: downloading $(wc -l < "$D/crl-names.txt") DoD CRLs in the background (CAC logins fail closed until they arrive)";;
+  online) log "CRLs: downloading $(wc -l < "$D/crl-names.txt") DoD CRLs in the background (CAC logins fail closed, and the container is not ready, until every one is installed)";;
   ocsp)   log "WARN CRL_MODE=ocsp: no local CRL cache (V-222553 asks for one); every login depends on the OCSP responder";;
   none)   log "!!! CRL_MODE=none: certificate revocation is NOT checked (lab only) !!!";;
 esac
@@ -243,12 +260,17 @@ apply() {
   done
   return 1
 }
+crl_next_wait() { # online: while any expected CRL is missing, retry every CAC_CRL_RETRY_SECONDS, not every 6 h
+  local m; m=$(crl_missing | tr '\n' ' ')
+  if [ -n "$m" ]; then log "STIG-CRL-INCOMPLETE not ready, CRLs missing: $m"; echo "${CAC_CRL_RETRY_SECONDS:-60}"
+  else echo "${CAC_CRL_REFRESH_SECONDS:-21600}"; fi
+}
 crl_loop() {
   [ "$MODE" = online ] && { crl_refresh; python3 "$TOOLS/cac-config.py" sync-crl-list || log "WARN could not update the CRL list"
                            python3 "$TOOLS/cac-config.py" clear-crl-cache || true; touch "$D/.crl-loaded"; }
   [ "$MODE" != online ] && touch "$D/.crl-loaded"
   [ "$MODE" = online ] || [ "$MODE" = file ] || return 0
-  while sleep "${CAC_CRL_REFRESH_SECONDS:-21600}"; do
+  while sleep "$(crl_next_wait)"; do
     crl_refresh || log "WARN CRL refresh failed; keeping cached CRLs"
     [ "$MODE" = online ] && { python3 "$TOOLS/cac-config.py" sync-crl-list || log "WARN could not update the CRL list"; }
     python3 "$TOOLS/cac-config.py" clear-crl-cache || log "WARN could not clear Keycloak's CRL cache"

@@ -18,6 +18,7 @@ disk path) are swapped.
 | `host/backup.sh`, `host/restore.sh` | Encrypted backup to Blob Storage and restore (`idp-backup`, `idp-restore`). |
 | `host/acme-hook.sh`, `host/tls-deploy-hook.sh` | certbot DNS-01 hook and deploy hook. |
 | `host/idp-events.sh`, `host/idp-alert.py` | Sign-in event view; failure mail. |
+| `host/restart.sh` | `idp-restart`: restart Keycloak or switch it to another local image, and wait until it is healthy (see "Restarting Keycloak"). |
 | `host/idp-admin.py`, `host/idp-admin.example.json` | The operator CLI and its per-instance configuration (see below). |
 | `tests/` | Offline and on-host tests (see "Tests"). |
 
@@ -35,11 +36,14 @@ Everything stateful lives on the data disk, mounted at `/srv/idp`:
 | `state/` | `idp-admin.py`'s state: the vetted-administrator allowlist and guard records | root only |
 | `pgdata/` | PostgreSQL | 0700, uid 999 |
 | `compose/` | `compose.yaml`, `.env` (image references), `images.lock` (image IDs in use) | |
+| `crl-cache/` | the last good DoD CRLs (public data), written by every refresh and installed by a new container before Keycloak starts | 0750, uid 1000 |
 | `src/` | extracted copies of this repository, one per commit the image was built from | |
 | `theme/` | an optional login theme of your own | |
 
 Keycloak runs as 1000:1000 with a read-only root, all capabilities dropped and `/opt/keycloak/data` on tmpfs (rebuilt
-from the image on every start, so a CRL from a retired CA can never survive an upgrade).
+from the image on every start). The CRLs Keycloak reads live there too, so a CRL from a retired CA can never survive an
+upgrade. `crl-cache/` is not that directory: at start the image installs from it only the CRLs whose signature verifies
+against its current anchors (`CAC_CRL_CACHE_DIR`).
 
 ## Install
 
@@ -161,12 +165,43 @@ mails daily while the served certificate differs from the one on disk.
 `/srv/idp/secrets/smtp_password`). `idp-events [minutes]` prints recent sign-in, sign-out, error and admin-gate
 events.
 
+## Restarting Keycloak
+
+Use `idp-restart`; do not restart the container by hand and treat "running" as "ready".
+
+```bash
+sudo idp-restart                                   # restart, wait until healthy
+sudo idp-restart --image <tag>                     # run another image already built or loaded on this host
+```
+
+It refuses to start unless the egress rules are in place (`idp-egress --check`) and `idp-admin.py check-clients`
+reports no drift, then restarts (or, with `--image`, recreates) the `keycloak` service and waits up to 15 minutes
+(`--timeout <s>`) for the container to be **healthy**. Healthy means Keycloak is ready, the realm is applied and **every
+expected CRL is installed**: a container still missing one reports `not ready: N of M CRLs not installed: <names>`
+(`docker inspect idp-keycloak-1`, or `docker exec idp-keycloak-1 /opt/keycloak-cac/bin/cac-entrypoint.sh health`) and
+logs `STIG-CRL-INCOMPLETE` while it retries every minute. Card sign-in for a CA whose CRL is missing is refused
+(`STIG-CRL-NO-ISSUER-CRL`, "Certificate revoked or incorrect"), never allowed without it.
+
+Why a restarted container has CRLs at once: the CRLs Keycloak reads are on tmpfs and start empty, and the image
+downloads ~140 MB of DoD CRLs in the background. Without a cache every restart refused the cards of each CA whose CRL had not arrived yet, for the length of that
+download. With `/srv/idp/crl-cache` the entrypoint installs the last good CRLs before Keycloak starts (each signature
+checked against the current anchors); the download then only replaces them. Only a host's very first start, or one
+with an emptied cache, has that window, and the container stays unhealthy for its length.
+
+`--image <tag>` writes `/srv/idp/compose/.env` and the keycloak line of `images.lock` from
+`docker image inspect <tag>` (the tag with **its own** image ID, the commit from its revision label), the way
+`setup-host.sh` does, and after the restart checks that the container runs exactly that image ID. Never edit
+`images.lock` by hand: a new tag paired with the previous image's ID records an image that is not running.
+
+`idp-egress` is a systemd unit (`idp-egress.service`), not a compose service, and is never part of a restart: see
+"Egress firewall". If the rules are missing, `sudo idp-egress` re-applies them without restarting anything.
+
 ## Upgrades
 
 1. Take a backup (`sudo systemctl start idp-backup`) and confirm `sudo idp-admin.py guard` is clean.
 2. Copy the new commit's archive to the VM and re-run `setup-host.sh` with the new `KCAS_COMMIT`: it builds the new
    image only when the commit changes, re-renders the configuration and recreates the stack.
-3. Before any Keycloak restart, `sudo idp-admin.py check-clients` must report no drift.
+3. Before any Keycloak restart, `sudo idp-admin.py check-clients` must report no drift (`idp-restart` checks it).
 4. To roll back, re-run with the previous `KCAS_COMMIT` (its image is still present) or restore the backup.
 
 ## Break-glass
@@ -189,6 +224,7 @@ key. The account procedures are in [docs/vm-accounts.md](../../../docs/vm-accoun
 | Test | Where it runs |
 |---|---|
 | `tests/tls_hook_test.sh <tls-deploy-hook.sh>` | anywhere as root (stubs docker and the CLI) |
+| `tests/restart_test.sh <restart.sh>` | anywhere as root (stubs docker, the CLI and idp-egress) |
 | `tests/egress_netns_test.sh <egress.sh>` | anywhere as root with `ip netns` and iptables (a privileged container works) |
 | `tests/run-e2e.sh` | on the VM: password + TOTP path, lockout, banner, concurrent sessions, forged header (`E2E_CLIENT`, `E2E_REDIRECT`) |
 | `tests/hardening_test.py`, `tests/card_allowlist_gate.sh`, `tests/in_keycloak_netns.py` | on the VM |

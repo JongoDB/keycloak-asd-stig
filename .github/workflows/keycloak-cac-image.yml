@@ -1,5 +1,5 @@
 # keycloak-cac images: test on every pull request, publish to GHCR from main, deployed BY DIGEST.
-#   guards   render guards + CRL pruning (fast)
+#   guards   render guards + CRL pruning, CRL cache and readiness, idp-restart, US spelling (fast)
 #   build    standard, strict-FIPS and edge (test-only) images, built and LOADED locally, then tested:
 #            compose path with root:1000 0440 secrets (standard), edge-mode mTLS incl. pinning (edge), baked anchors.
 #            No registry credentials: this job holds contents:read only, on pull requests and on main.
@@ -38,6 +38,12 @@ jobs:
         run: keycloak-cac/tests/crl-prune.sh
       - name: CRL list per X.509 form (the stock form keeps every expected CRL listed)
         run: keycloak-cac/tests/crl-list.sh
+      - name: CRL cache (only current anchors' CRLs come back) and readiness (not ready while a CRL is missing)
+        run: keycloak-cac/tests/crl-cache.sh
+      - name: idp-restart (checks first, images.lock from docker image inspect, waits for healthy)
+        run: sudo sh keycloak-cac/deploy/vm/tests/restart_test.sh keycloak-cac/deploy/vm/host/restart.sh
+      - name: User-facing text is US English
+        run: keycloak-cac/tests/us-spelling.sh
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4.9.1
         with: {distribution: temurin, java-version: "17"}
       - name: Public path allowlist (bypass variants refused, the listed realm allowed)
@@ -89,6 +95,9 @@ jobs:
       - name: Start-up window of a hardened online deployment (tmpfs data, CRLs listed before they are downloaded)
         if: matrix.variant.name != 'edge'
         run: keycloak-cac/tests/crl-startup-window.sh "keycloak-cac:ci${{ matrix.variant.suffix }}"
+      - name: A restarted container is never healthy without its CRLs; with the CRL cache it has them at once
+        if: matrix.variant.name != 'edge'
+        run: keycloak-cac/tests/crl-restart-ready.sh "keycloak-cac:ci${{ matrix.variant.suffix }}"
       - name: Card sign-in page in Chromium (exact labels, spacing at 1440/360 px, blocked only on a network error)
         if: matrix.variant.name != 'edge'
         run: keycloak-cac/tests/card-signin-browser.sh "keycloak-cac:ci${{ matrix.variant.suffix }}"

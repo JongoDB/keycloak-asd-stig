@@ -337,7 +337,7 @@ ssh idp-host 'sudo idp-admin.py invite <first.last> --email <address> --groups <
 ```
 
 - The person gets a mail from `noreply@notify.example.mil`. The link works once and expires in 12 hours.
-- They accept the terms, set a password of at least 15 characters, and enrol an authenticator app (TOTP).
+- They accept the terms, set a password of at least 15 characters, and enroll an authenticator app (TOTP).
 - After that they sign in at the app with username, password and the 6-digit code.
 - Lost or expired link: `sudo idp-admin.py send-setup <first.last>`.
 - A user manager can do the same through `stig-accounts` `POST /users` (section 1), for `.mil` and `example.mil`
