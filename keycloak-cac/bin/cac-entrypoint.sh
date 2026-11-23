@@ -192,7 +192,8 @@ crl_missing() { [ -f "$D/.crl-required" ] || return 0; while read -r n; do [ -z 
 "$TOOLS/cac-pki.sh" crl-prune "$D/crl" "$D/anchors"
 CRL_SRC="${CAC_CRL_DIR:-/crl}"; $LAB && [ -z "${CAC_CRL_DIR:-}" ] && [ -d "$D/lab/conf/crl" ] && CRL_SRC="$D/lab/conf/crl"
 # Online mode: the CRLs this deployment must hold before it reports ready (cac-health.py), one file name per line.
-# Until every one is installed, card sign-in for that CA fails closed and the container is NOT healthy.
+# Until every one is installed, card sign-in for that CA fails closed and the container is NOT healthy (for at most
+# CAC_CRL_READY_GRACE seconds; then ready DEGRADED, naming them - see cac-health.py).
 rm -f "$D/.crl-required"
 if [ "$MODE" = online ]; then cp "$D/crl-names.txt" "$D/.crl-required"; fi
 # CAC_CRL_CACHE_DIR (online mode): a persistent directory holding the last good CRLs. A new container installs them
@@ -219,7 +220,7 @@ crl_refresh() {
 if $LAB && [ -d "$D/lab/conf/crl" ] && [ "$MODE" != file ]; then "$TOOLS/cac-pki.sh" crl-sync "$D/lab/conf/crl" "$D/anchors" "$D/crl"; fi
 case "$MODE" in
   file)   crl_refresh ;;                       # local: fast, needed before the profile is rendered
-  online) log "CRLs: downloading $(wc -l < "$D/crl-names.txt") DoD CRLs in the background (CAC logins fail closed, and the container is not ready, until every one is installed)";;
+  online) log "CRLs: downloading $(wc -l < "$D/crl-names.txt") DoD CRLs in the background (cards of a CA fail closed until its CRL is installed; the container is not ready until all are, or CAC_CRL_READY_GRACE has passed)";;
   ocsp)   log "WARN CRL_MODE=ocsp: no local CRL cache (V-222553 asks for one); every login depends on the OCSP responder";;
   none)   log "!!! CRL_MODE=none: certificate revocation is NOT checked (lab only) !!!";;
 esac
@@ -262,7 +263,8 @@ apply() {
 }
 crl_next_wait() { # online: while any expected CRL is missing, retry every CAC_CRL_RETRY_SECONDS, not every 6 h
   local m; m=$(crl_missing | tr '\n' ' ')
-  if [ -n "$m" ]; then log "STIG-CRL-INCOMPLETE not ready, CRLs missing: $m"; echo "${CAC_CRL_RETRY_SECONDS:-60}"
+  if [ -n "$m" ]; then log "STIG-CRL-INCOMPLETE CRLs missing (cards of those CAs are refused; readiness waits CAC_CRL_READY_GRACE=${CAC_CRL_READY_GRACE:-240}s for them): $m"
+                      echo "${CAC_CRL_RETRY_SECONDS:-60}"
   else echo "${CAC_CRL_REFRESH_SECONDS:-21600}"; fi
 }
 crl_loop() {
@@ -277,7 +279,7 @@ crl_loop() {
   done
 }
 # ---- 5./6. worker: apply the realm once Keycloak is ready, then keep revocation data fresh
-rm -f "$D/.applied" "$D/.crl-loaded"
+rm -f "$D/.applied" "$D/.crl-loaded"; date +%s > "$D/.started"   # cac-health.py: CAC_CRL_READY_GRACE counts from here
 if truthy "${CAC_APPLY:-true}"; then
   ( if apply; then crl_loop; else log "ERROR STIG apply failed: stopping (fail secure)"; kill -TERM $KC_PID; fi ) </dev/null &
 else

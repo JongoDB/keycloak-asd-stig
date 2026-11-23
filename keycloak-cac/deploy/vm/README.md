@@ -176,11 +176,14 @@ sudo idp-restart --image <tag>                     # run another image already b
 
 It refuses to start unless the egress rules are in place (`idp-egress --check`) and `idp-admin.py check-clients`
 reports no drift, then restarts (or, with `--image`, recreates) the `keycloak` service and waits up to 15 minutes
-(`--timeout <s>`) for the container to be **healthy**. Healthy means Keycloak is ready, the realm is applied and **every
-expected CRL is installed**: a container still missing one reports `not ready: N of M CRLs not installed: <names>`
-(`docker inspect idp-keycloak-1`, or `docker exec idp-keycloak-1 /opt/keycloak-cac/bin/cac-entrypoint.sh health`) and
-logs `STIG-CRL-INCOMPLETE` while it retries every minute. Card sign-in for a CA whose CRL is missing is refused
-(`STIG-CRL-NO-ISSUER-CRL`, "Certificate revoked or incorrect"), never allowed without it.
+(`--timeout <s>`) for the container to be **healthy with every expected CRL installed**. A container still missing
+one reports `not ready: N of M CRLs not installed: <names>` (`docker inspect idp-keycloak-1`, or
+`docker exec idp-keycloak-1 /opt/keycloak-cac/bin/cac-entrypoint.sh health`) and logs `STIG-CRL-INCOMPLETE` while it
+retries every minute. Card sign-in for a CA whose CRL is missing is refused (`STIG-CRL-NO-ISSUER-CRL`, "Certificate
+revoked or incorrect"), never allowed without it. After `CAC_CRL_READY_GRACE` (240 s) the image reports healthy
+`DEGRADED`, still naming the missing CRLs, so a CRL-source outage cannot take every sign-in method down; `idp-restart`
+keeps waiting for the full set and, if it never arrives, ends with a `WARN ... DEGRADED` line and exit 0 (the image is
+fine; do not roll back for it).
 
 Why a restarted container has CRLs at once: the CRLs Keycloak reads are on tmpfs and start empty, and the image
 downloads ~140 MB of DoD CRLs in the background. Without a cache every restart refused the cards of each CA whose CRL had not arrived yet, for the length of that

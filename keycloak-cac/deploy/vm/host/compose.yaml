@@ -27,7 +27,7 @@ x-keycloak: &keycloak
     # the pure-Java variant from the image, but the entrypoint's keytool (BCFKS conversion) does not: give it to every
     # JVM. (Fixed upstream in the PR; harmless after.)
     JAVA_TOOL_OPTIONS: -Dorg.bouncycastle.native.cpu_variant=java
-    CAC_CRL_CACHE_DIR: /crl-cache     # see the tmpfs note above; health stays "unhealthy" while any expected CRL is missing
+    CAC_CRL_CACHE_DIR: /crl-cache     # see the tmpfs note above; "unhealthy" while an expected CRL is missing (240 s grace)
     # Network clients get a strict allowlist of raw paths (STIG_PUBLIC_PATHS in keycloak-cac.env: the one realm,
     # its admin console and API, /admin/serverinfo, /resources/); everything else - the master realm, any other
     # realm, any path with %, ;, \, //, dot segments, whitespace or non-ASCII - is 404. Only 127.0.0.1 INSIDE this

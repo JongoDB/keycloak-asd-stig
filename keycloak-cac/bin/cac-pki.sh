@@ -35,6 +35,14 @@ cn_of() { openssl x509 -in "$1" -noout -subject -nameopt multiline | sed -n 's/^
 dn_of() { openssl x509 -in "$1" -noout -"$2" -nameopt RFC2253 | sed "s/^$2=//"; }
 # The image has no diffutils (cmp): compare by SHA-256. Unchanged CRLs are left untouched so Keycloak never re-reads them.
 same_file() { [ -f "$1" ] && [ -f "$2" ] && [ "$(sha256sum < "$1")" = "$(sha256sum < "$2")" ]; }
+# A CRL never goes backwards: one whose thisUpdate is EARLIER than the installed (or cached) copy's is not installed,
+# even though its signature verifies - CRLs are fetched over plain HTTP, so an old one can be replayed, and an old one
+# planted in the cache must not be restored over a newer one. STIG-CRL-OLDER names it; the newer copy stays.
+crl_this_update() { # crl -> epoch seconds of thisUpdate, 0 if unreadable
+  local t; t=$(openssl crl -inform DER -in "$1" -noout -lastupdate 2>/dev/null || openssl crl -in "$1" -noout -lastupdate 2>/dev/null) || { echo 0; return; }
+  date -d "${t#lastUpdate=}" +%s 2>/dev/null || echo 0
+}
+crl_older() { [ -s "$2" ] && [ "$(crl_this_update "$1")" -lt "$(crl_this_update "$2")" ]; }   # new installed
 fp_of() { openssl x509 -in "$1" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d :; }
 
 split_pem() { # file.pem outdir prefix  -> one file per certificate
@@ -191,6 +199,7 @@ cmd_crl_fetch() {
     if curl -fsSL --retry 3 -m 180 -o "$w/$n.crl" "$CRL_BASE/$n.crl" && crl_ok "$w/$n.crl" "$w/anchors.pem"; then
       # unchanged bytes: leave the installed file alone, so Keycloak does not re-read and re-verify it
       if same_file "$w/$n.crl" "$d/$n.crl"; then same=$((same+1)); rm -f "$w/$n.crl"
+      elif crl_older "$w/$n.crl" "$d/$n.crl"; then log "STIG-CRL-OLDER $n.crl: the downloaded CRL is older than the installed one - kept the installed"; same=$((same+1)); rm -f "$w/$n.crl"
       else mv -f "$w/$n.crl" "$d/.$n.crl.new" && mv -f "$d/.$n.crl.new" "$d/$n.crl"; ok=$((ok+1)); fi   # atomic swap
     else log "WARN $n.crl: download or signature check failed - keeping cached copy"; bad=$((bad+1)); rm -f "$w/$n.crl"; fi
   done
@@ -204,6 +213,7 @@ cmd_crl_sync() {
   for f in "$src"/*.crl "$src"/crl/*.crl; do
     [ -e "$f" ] || continue
     if same_file "$f" "$d/$(basename "$f")"; then ok=$((ok+1))   # unchanged: keep the installed file (no re-read by Keycloak)
+    elif crl_older "$f" "$d/$(basename "$f")"; then log "STIG-CRL-OLDER $(basename "$f"): older than the installed one - NOT installed"; ok=$((ok+1))
     elif crl_ok "$f" "$w/anchors.pem"; then cp "$f" "$d/.$(basename "$f").new" && mv -f "$d/.$(basename "$f").new" "$d/$(basename "$f")"; ok=$((ok+1))
     else log "STIG-CRL-UNTRUSTED $(basename "$f"): issuer not trusted or bad signature - NOT installed"; fi
   done
@@ -216,7 +226,9 @@ cmd_crl_save() { # crl-dir cache-dir names-file -> cache holds exactly the expec
   [ -d "$c" ] || die "crl-save: no cache directory $c"
   while read -r n; do [ -n "$n" ] || continue
     if [ -s "$d/$n" ]; then
-      same_file "$d/$n" "$c/$n" || { cp "$d/$n" "$c/.$n.new" && mv -f "$c/.$n.new" "$c/$n"; saved=$((saved+1)); }   # atomic swap
+      if same_file "$d/$n" "$c/$n"; then :
+      elif crl_older "$d/$n" "$c/$n"; then log "STIG-CRL-OLDER $n: the installed CRL is older than the cached one - cache kept"
+      else cp "$d/$n" "$c/.$n.new" && mv -f "$c/.$n.new" "$c/$n"; saved=$((saved+1)); fi   # atomic swap
     fi
   done < "$names"
   for f in "$c"/*.crl; do [ -e "$f" ] || continue   # pruned here (retired or re-keyed CA) or no longer expected: drop it

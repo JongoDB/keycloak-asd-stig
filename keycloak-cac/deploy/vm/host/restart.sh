@@ -58,11 +58,14 @@ else
 fi
 
 # healthy = Keycloak ready, realm applied, every expected CRL installed. Until then card sign-in of a CA whose CRL is
-# missing is refused (fail closed); with /srv/idp/crl-cache the CRLs are normally there from the first second.
+# missing is refused (fail closed); with /srv/idp/crl-cache the CRLs are normally there from the first second. Past
+# CAC_CRL_READY_GRACE the image reports healthy "DEGRADED" with CRLs still missing: keep waiting for the full set, and
+# if it does not arrive, say so without failing the restart (the image is fine; the CRL source is not).
+last() { docker inspect -f '{{range .State.Health.Log}}{{.Output}}{{end}}' "$CT" 2>/dev/null | grep -v '^$' | tail -1; }
 waited=0; st=""
 while [ "$waited" -lt "$TIMEOUT" ]; do
   st=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CT" 2>/dev/null || echo missing)
-  [ "$st" = healthy ] && break
+  if [ "$st" = healthy ]; then case "$(last)" in *DEGRADED*) ;; *) break;; esac; fi
   [ "$st" = missing ] || [ "$(docker inspect -f '{{.State.Running}}' "$CT")" = true ] || die "$CT is not running (docker logs $CT)"
   sleep 5; waited=$((waited + 5))
 done
@@ -76,4 +79,10 @@ if [ "$st" != healthy ]; then
 fi
 RUN=$(docker inspect -f '{{.Image}}' "$CT")
 [ -z "$ID" ] || [ "$RUN" = "$ID" ] || die "$CT runs $RUN, but images.lock / .env name $ID"
+case "$(last)" in *DEGRADED*)
+  log "WARN healthy but DEGRADED after ${TIMEOUT}s, image $RUN: $(last | sed 's/^ready DEGRADED: //')"
+  log "  Sign-in works; only those CAs' cards are refused until their CRLs arrive (the container keeps retrying every"
+  log "  minute, STIG-CRL-INCOMPLETE). This is a CRL-source problem, not the image: do not roll back for it."
+  exit 0;;
+esac
 log "healthy after ${waited}s: $(docker exec "$CT" sh -c 'ls /opt/keycloak/data/cac/crl/*.crl 2>/dev/null | wc -l') CRLs installed, image $RUN"

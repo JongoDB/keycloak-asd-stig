@@ -27,7 +27,7 @@ case "\$*" in
   "inspect -f {{.Image}} "*) case "\$(cat "$W/running")" in *bbbbbbb) echo \${STUB_RUN_ID:-$NEWID};; *) echo $OLDID;; esac;;
   "inspect -f "*Health.Status*) echo \${STUB_HEALTH:-healthy};;
   "inspect -f {{.State.Running}} "*) echo true;;
-  "inspect -f "*Health.Log*) echo "not ready: 2 of 20 CRLs not installed: DODIDCA_70.crl DODROOTCA6.crl";;
+  "inspect -f "*Health.Log*) echo "\${STUB_HEALTH_OUT:-not ready: 2 of 20 CRLs not installed: DODIDCA_70.crl DODROOTCA6.crl}";;
   exec*) echo 20;;
 esac
 EOF
@@ -87,5 +87,11 @@ grep -qx "KEYCLOAK_IMAGE=idp/keycloak-cac:26.8.2-fips-aaaaaaa" "$W/srv/compose/.
   && ok "the rollback copies restore the previous tag with its own ID" || no "rollback restore"
 reset; STUB_RUN_ID=$OLDID run --image idp/keycloak-cac:26.8.2-fips-bbbbbbb; rc=$?
 [ $rc -ne 0 ] && grep -q ROLLBACK "$W/err" && ok "--image, container runs another image: rollback printed too" || no "mismatch rollback"
+
+# healthy but DEGRADED (past CAC_CRL_READY_GRACE, a CRL still missing): waits for the full set, then warns, exit 0
+reset; STUB_HEALTH_OUT="ready DEGRADED: 1 of 20 CRLs not installed: DODIDCA_70.crl - cards of those CAs are refused until they arrive" \
+  run --image idp/keycloak-cac:26.8.2-fips-bbbbbbb; rc=$?
+[ $rc -eq 0 ] && grep -q "WARN healthy but DEGRADED after 10s" "$W/err" && grep -q "DODIDCA_70.crl" "$W/err" && grep -q "do not roll back" "$W/err" \
+  && ! grep -q ROLLBACK "$W/err" && ok "healthy DEGRADED (a CRL source outage): waited the full timeout, names the CRL, exit 0, no rollback" || no "degraded (rc=$rc) $(cat "$W/err")"
 
 echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]
