@@ -176,8 +176,9 @@ with sync_playwright() as pw:
         check("[layout %d] exactly one \"another method\" control is shown (ours; Keycloak's \"Try Another Way\" hidden)" % w,
               others == ["kc-card-other"], others)
         intro = page.inner_text("#stig-card-intro")
-        check("[layout %d] the introduction: US English, names the organization's account" % w,
-              "organization's account (Microsoft Entra ID)" in intro and "organisation" not in intro, repr(intro[:140]))
+        check("[layout %d] the introduction: US English, the organization's account and another method, no provider named" % w,
+              intro.endswith("Or sign in with your organization's account, or use another method.") and "organisation" not in intro
+              and "Microsoft" not in intro and "Entra" not in intro, repr(intro[-90:]))
         sw = page.evaluate("document.documentElement.scrollWidth")
         check("[layout %d] no horizontal scroll" % w, sw <= w, "scrollWidth %s" % sw)
         check("[layout %d] no blocked message on load" % w, not page.is_visible("#stig-card-blocked"))
