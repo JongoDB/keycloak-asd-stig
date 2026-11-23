@@ -66,7 +66,7 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
             X509Certificate[] certs = getCertificateChain(context);
             if (certs == null || certs.length == 0) {
                 // STIG: with a card port, no certificate on THIS connection does not mean no card: the browser asks for
-                // one only in a TLS handshake, and it reuses a connection made without it. Offer "Sign in with my CAC"
+                // one only in a TLS handshake, and it reuses a connection made without it. Offer "Sign in with CAC/PIV"
                 // on the card port (a new handshake there; same cookies, so the same sign-in) next to the other methods.
                 if (PresentCardRequiredAction.CARD_PORT > 0) {
                     context.forceChallenge(cardSignInPage(context));
@@ -282,7 +282,7 @@ public class StigX509ClientCertificateAuthenticator extends AbstractX509ClientCe
         if (dn != null) context.getEvent().detail(Details.X509_CERTIFICATE_SUBJECT_DISTINGUISHED_NAME, AccountsPolicy.redactEdipis(dn));
     }
 
-    /** The card sign-in choice: "Sign in with my CAC" re-runs THIS step on the card port (its refresh URL there),
+    /** The card sign-in choice: "Sign in with CAC/PIV" re-runs THIS step on the card port (its refresh URL there),
      *  "Use another sign-in method" posts "cancel" to this step on the page's own origin. On the card port itself (the
      *  person declined the prompt, or has no card) it says no certificate was presented. */
     private Response cardSignInPage(AuthenticationFlowContext context) {

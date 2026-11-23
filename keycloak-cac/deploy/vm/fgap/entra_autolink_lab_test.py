@@ -273,7 +273,7 @@ def entra_then_card(ident_, cert=None, skip=False):
                     act, f = E.form(p, "stig-card-ignore"); f["cancel"] = "Continue without the card"     # the clicked button
                     k, u, p = b.go(act, f, ACCT)
                 else:                                       # the same session, now with the card in the reader
-                    act, f = E.form(p, "stig-card-form"); f["login"] = "Sign in with my CAC"
+                    act, f = E.form(p, "stig-card-form"); f["login"] = "Sign in with CAC/PIV"
                     bc = E.Browser(a.cacert, "/t/%s.crt" % cert, "/t/%s.key" % cert)
                     bc.op = urllib.request.build_opener(urllib.request.HTTPSHandler(context=bc.ctx),
                                                         urllib.request.HTTPCookieProcessor(b.jar), E.Stop())
@@ -673,7 +673,7 @@ ctx_keep = ssl.create_default_context(cafile=a.cacert)
 c_main = conn_to(PORT, ctx_keep)
 c_main.request("GET", "/realms/%s/.well-known/openid-configuration" % REALM, headers={"Host": "%s:%d" % (HOST, PORT)}); c_main.getresponse().read()
 ctx_keep.load_cert_chain("/t/roe.jane.crt", "/t/roe.jane.key")       # the card inserted AFTER the connection was made
-f_t["login"] = "Sign in with my CAC"
+f_t["login"] = "Sign in with CAC/PIV"
 main_act = act_t.replace(":%d/" % CARD_PORT, ":%d/" % PORT)
 st, loc, body = post_on(c_main, main_act, f_t, b_t)
 check("[tls] the bug reproduced: the POST on the kept main-port connection (made without a card) carries NO certificate",
@@ -694,7 +694,7 @@ print("info  [tls] TLS session resumption on the main port: %s" % ("resumed (no 
       else "not resumed by this server (each new connection is a full handshake)"))
 # the fix: the page's own action, on the card port - a new connection and a full handshake, which asks for the card
 page_now = body                                                    # the re-challenged page (the old code is spent)
-act_now, f_now = E.form(page_now, "stig-card-form"); f_now["login"] = "Sign in with my CAC"
+act_now, f_now = E.form(page_now, "stig-card-form"); f_now["login"] = "Sign in with CAC/PIV"
 check("[tls] ... and the re-challenge still points at the card port", urllib.parse.urlparse(act_now).port == CARD_PORT, act_now)
 ctx_card = ssl.create_default_context(cafile=a.cacert); ctx_card.load_cert_chain("/t/roe.jane.crt", "/t/roe.jane.key")
 c_card = conn_to(CARD_PORT, ctx_card)
