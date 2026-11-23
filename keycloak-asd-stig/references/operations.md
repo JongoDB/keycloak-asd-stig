@@ -388,7 +388,7 @@ Two limits to know:
 ### An administrator with no second factor after an identity-provider sign-in
 
 `stig-admin-second-factor-required` refuses such an administrator with a policy page (`stig-admin-second-factor.ftl`:
-"Administrators must sign in with their CAC, or enrol an authenticator app first", with a link that restarts the sign-in
+"Administrators must sign in with their CAC, or enroll an authenticator app first", with a link that restarts the sign-in
 where the CAC is offered). It is a challenge, not a failure: a policy refusal after a successful identity-provider
 sign-in is not a wrong credential and never counts toward brute-force lockout. (In the password flow the refusal still
 looks like a wrong password, so it never confirms that the password was right.)

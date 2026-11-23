@@ -93,6 +93,9 @@ The fields are documented in `keycloak-asd-stig/references/profile.md` under cli
 | `CRL_MODE` | `online` (`file` in lab mode) | `online`: download the DoD CRLs and refresh them, plus OCSP. `file` (alias `OFFLINE`): CRLs from `CAC_CRL_DIR`. `ocsp`: OCSP only. `none`: no revocation checking, accepted only with `CAC_LAB_MODE=true`. |
 | `CAC_CRL_DIR` | `/crl` | File mode: a directory of `*.crl` files. Each one is signature-checked against the anchors before use. |
 | `CAC_CRL_REFRESH_SECONDS` | `21600` | How often CRLs are re-fetched or re-read. After each refresh, every node's CRL cache is cleared. |
+| `CAC_CRL_RETRY_SECONDS` | `60` | Online mode: while any expected CRL is missing (`STIG-CRL-INCOMPLETE`), the fetch is retried this often instead. |
+| `CAC_CRL_CACHE_DIR` | (none) | Online mode: a persistent, writable directory (owner 1000) for the last good CRLs. A new container installs them before Keycloak starts, each signature-checked against the current anchors (a retired CA's CRL is never installed), and every refresh writes the expected ones back. A CRL older (`thisUpdate`) than the copy already installed or cached never replaces it, whatever its source (`STIG-CRL-OLDER`). Closes the start-up window on a single host; CRLs are public data. |
+| `CAC_CRL_READY_GRACE` | `240` | Online mode: for this many seconds after the container starts, readiness (`health`) fails while any expected CRL is not installed and names it. After that it reports ready `DEGRADED` (naming the missing CRLs), so one unavailable CRL cannot keep every replica out of service or get it killed by a start-up probe; the cards of those CAs stay refused and the fetch keeps retrying. Keep it below the orchestrator's kill threshold (Helm `startupProbe` 600 s, ECS `startPeriod` 300 s). `-1`: never ready without every CRL; `0`: never wait. |
 | `CAC_LOGIN_CAS` | `^DOD (ID\|DERILITY) CA-[0-9]+$` | Which issuing CAs of the baked DoD bundle are trusted for card login (ERE on the CA's CN); their roots are kept, everything else (DOD EMAIL, DOD SW CAs, unused roots) is dropped from the client trust store. The CRLs fetched are exactly those of the trusted issuing CAs and their roots. Explicit `CAC_TRUST_ANCHORS_DIR` / `CAC_EXTRA_ANCHORS_DIR` are not narrowed. |
 | `CAC_OCSP` | on for `online`/`ocsp` | Checks OCSP in addition to CRLs. The `ocsp` mode fails closed. |
 | `CAC_OCSP_FAIL_OPEN` | `true` | With CRLs also checked, an unreachable OCSP responder is skipped (the CRL still decides). `false`: OCSP fails closed too, so responder reachability becomes a sign-in dependency. |
@@ -164,14 +167,14 @@ A fully air-gapped build host still needs a UBI package mirror for the tools sta
 
 1. `*_FILE` secrets are read, and the configuration is validated. The container refuses to start on any setting weaker than the STIG allows: a missing certificate, `CRL_MODE=none` outside lab mode, a serial-number mapping, a dev database or a missing automation secret.
 2. Trust anchors are set up from the baked bundle, a mounted directory or the lab PKI. The container builds `client-ca.p12` from these anchors **only**, so public CAs can never authenticate a client (V-222584), and pins the root DNs.
-3. CRLs come from a local directory (`file`), or start downloading in the background (`online`). Card logins fail closed until they arrive.
+3. CRLs come from a local directory (`file`), or start downloading in the background (`online`), after the last good ones from `CAC_CRL_CACHE_DIR` (if set) are installed. Card logins of a CA fail closed until its CRL arrives.
 4. Keycloak starts as PID 1.
 5. A worker waits for Keycloak, then applies the STIG realm: flows, timeouts, lockout, banner, users, clients, the Alt Token admin realm, and the automation account. It then deletes the bootstrap admin. If the apply fails three times, it stops the container (fail secure).
 6. The same worker refreshes CRLs every `CAC_CRL_REFRESH_SECONDS` and clears Keycloak's CRL cache cluster-wide.
 
 Keycloak otherwise keeps a CRL until its `nextUpdate`, about 7 days for DoD CRLs.
 
-**Readiness** (`cac-entrypoint.sh health`, used by the image `HEALTHCHECK` and the Helm probes) means three things: Keycloak is ready, the realm is applied, and revocation data is loaded.
+**Readiness** (`cac-entrypoint.sh health`, used by the image `HEALTHCHECK` and the Helm probes) means three things: Keycloak is ready, the realm is applied, and revocation data is loaded. In online mode "loaded" means every expected CRL (the issuing CAs' and their roots', `crl-names.txt`) is installed, not only that the first download finished; while one is missing, `health` names it. After `CAC_CRL_READY_GRACE` (240 s) it reports ready `DEGRADED` instead, still naming them: a CRL-source outage then refuses only those CAs' cards, not every sign-in.
 
 ## Verification
 

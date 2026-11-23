@@ -9,6 +9,8 @@
 #   cac-pki.sh crl-fetch <anchors-dir> <crl-dir>  download + signature-check the CRLs of the issuing CAs (online mode)
 #   cac-pki.sh crl-sync  <src-dir> <anchors-dir> <crl-dir>   copy signature-checked CRLs from a mounted dir (air-gapped)
 #   cac-pki.sh crl-prune <crl-dir> <anchors-dir>  delete CRLs whose issuer is no longer an anchor (also after fetch/sync)
+#   cac-pki.sh crl-save <crl-dir> <cache-dir> <crl-names.txt>  write the expected installed CRLs to a persistent cache
+#                                                 (CAC_CRL_CACHE_DIR); a new container installs them with crl-sync
 #   cac-pki.sh crl-health <crl-dir>               exit 1 if a CRL expires within 24h
 #   cac-pki.sh crl-coverage <anchors-dir> <crl-dir>  exit 1 if a trusted issuing CA or its root has no CRL
 #   cac-pki.sh narrow <anchors-dir>               keep only the issuing CAs of login certificates ($CAC_LOGIN_CAS) and their roots
@@ -31,6 +33,20 @@ log() { echo "cac-pki: $*" >&2; }
 die() { log "ERROR $*"; exit 1; }
 cn_of() { openssl x509 -in "$1" -noout -subject -nameopt multiline | sed -n 's/^ *commonName *= *//p' | head -1; }
 dn_of() { openssl x509 -in "$1" -noout -"$2" -nameopt RFC2253 | sed "s/^$2=//"; }
+# The image has no diffutils (cmp): compare by SHA-256. Unchanged CRLs are left untouched so Keycloak never re-reads them.
+same_file() { [ -f "$1" ] && [ -f "$2" ] && [ "$(sha256sum < "$1")" = "$(sha256sum < "$2")" ]; }
+# A CRL never goes backwards: one whose thisUpdate is EARLIER than the installed (or cached) copy's is not installed,
+# even though its signature verifies - CRLs are fetched over plain HTTP, so an old one can be replayed, and an old one
+# planted in the cache must not be restored over a newer one. STIG-CRL-OLDER names it; the newer copy stays.
+crl_this_update() { # crl -> epoch seconds of thisUpdate; 0 (and a warning) if it cannot be read
+  local t e; t=$(openssl crl -inform DER -in "$1" -noout -lastupdate 2>/dev/null || openssl crl -in "$1" -noout -lastupdate 2>/dev/null || true)
+  e=""; case "$t" in lastUpdate=?*) e=$(date -d "${t#lastUpdate=}" +%s 2>/dev/null || true);; esac   # date -d "" is today
+  case "$e" in ''|*[!0-9]*) log "WARN STIG-CRL-DATE-UNREADABLE $(basename "$1"): thisUpdate not parsed (\"$t\") - no older-CRL protection for this file"; echo 0;;
+               *) echo "$e";; esac
+}
+# new installed -> 0 if <new> is older. An unreadable date never makes a CRL "older" (that would block every update).
+crl_older() { [ -s "$2" ] || return 1; local a b; a=$(crl_this_update "$1"); b=$(crl_this_update "$2")
+  [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && [ "$a" -lt "$b" ]; }
 fp_of() { openssl x509 -in "$1" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d :; }
 
 split_pem() { # file.pem outdir prefix  -> one file per certificate
@@ -186,7 +202,8 @@ cmd_crl_fetch() {
   for n in $(crl_names "$a"); do
     if curl -fsSL --retry 3 -m 180 -o "$w/$n.crl" "$CRL_BASE/$n.crl" && crl_ok "$w/$n.crl" "$w/anchors.pem"; then
       # unchanged bytes: leave the installed file alone, so Keycloak does not re-read and re-verify it
-      if cmp -s "$w/$n.crl" "$d/$n.crl"; then same=$((same+1)); rm -f "$w/$n.crl"
+      if same_file "$w/$n.crl" "$d/$n.crl"; then same=$((same+1)); rm -f "$w/$n.crl"
+      elif crl_older "$w/$n.crl" "$d/$n.crl"; then log "STIG-CRL-OLDER $n.crl: the downloaded CRL is older than the installed one - kept the installed"; same=$((same+1)); rm -f "$w/$n.crl"
       else mv -f "$w/$n.crl" "$d/.$n.crl.new" && mv -f "$d/.$n.crl.new" "$d/$n.crl"; ok=$((ok+1)); fi   # atomic swap
     else log "WARN $n.crl: download or signature check failed - keeping cached copy"; bad=$((bad+1)); rm -f "$w/$n.crl"; fi
   done
@@ -199,12 +216,30 @@ cmd_crl_sync() {
   local ok=0
   for f in "$src"/*.crl "$src"/crl/*.crl; do
     [ -e "$f" ] || continue
-    if cmp -s "$f" "$d/$(basename "$f")"; then ok=$((ok+1))   # unchanged: keep the installed file (no re-read by Keycloak)
+    if same_file "$f" "$d/$(basename "$f")"; then ok=$((ok+1))   # unchanged: keep the installed file (no re-read by Keycloak)
+    elif crl_older "$f" "$d/$(basename "$f")"; then log "STIG-CRL-OLDER $(basename "$f"): older than the installed one - NOT installed"; ok=$((ok+1))
     elif crl_ok "$f" "$w/anchors.pem"; then cp "$f" "$d/.$(basename "$f").new" && mv -f "$d/.$(basename "$f").new" "$d/$(basename "$f")"; ok=$((ok+1))
     else log "STIG-CRL-UNTRUSTED $(basename "$f"): issuer not trusted or bad signature - NOT installed"; fi
   done
   rm -rf "$w"; log "CRLs synced from $src: $ok installed"
   cmd_crl_prune "$d" "$a"
+}
+
+cmd_crl_save() { # crl-dir cache-dir names-file -> cache holds exactly the expected CRLs that are installed
+  local d="$1" c="$2" names="$3" n f saved=0 removed=0
+  [ -d "$c" ] || die "crl-save: no cache directory $c"
+  while read -r n; do [ -n "$n" ] || continue
+    if [ -s "$d/$n" ]; then
+      if same_file "$d/$n" "$c/$n"; then :
+      elif crl_older "$d/$n" "$c/$n"; then log "STIG-CRL-OLDER $n: the installed CRL is older than the cached one - cache kept"
+      else cp "$d/$n" "$c/.$n.new" && mv -f "$c/.$n.new" "$c/$n"; saved=$((saved+1)); fi   # atomic swap
+    fi
+  done < "$names"
+  for f in "$c"/*.crl; do [ -e "$f" ] || continue   # pruned here (retired or re-keyed CA) or no longer expected: drop it
+    n=$(basename "$f"); { [ -s "$d/$n" ] && grep -qxF "$n" "$names"; } || { rm -f "$f"; removed=$((removed+1)); }
+  done
+  rm -f "$c"/.*.crl.new
+  log "CRL cache $c: $saved written, $removed removed, $(ls "$c"/*.crl 2>/dev/null | wc -l) held"
 }
 
 cmd_crl_coverage() { # anchors-dir crl-dir -> exit 1 (and STIG-CRL-COVERAGE-GAP per CA) if an issuing CA has no CRL
@@ -250,6 +285,6 @@ cmd_crl_health() {
 c="${1:-}"; shift || true
 case "$c" in
   bundle) cmd_bundle "$@";; compile) cmd_compile "$@";; crl-fetch) cmd_crl_fetch "$@";;
-  crl-sync) cmd_crl_sync "$@";; crl-prune) cmd_crl_prune "$@";; crl-health) cmd_crl_health "$@";;
-  crl-coverage) cmd_crl_coverage "$@";; narrow) cmd_narrow "$@";; *) sed -n '2,16p' "$0"; exit 2;;
+  crl-sync) cmd_crl_sync "$@";; crl-prune) cmd_crl_prune "$@";; crl-health) cmd_crl_health "$@";; crl-save) cmd_crl_save "$@";;
+  crl-coverage) cmd_crl_coverage "$@";; narrow) cmd_narrow "$@";; *) sed -n '2,18p' "$0"; exit 2;;
 esac
