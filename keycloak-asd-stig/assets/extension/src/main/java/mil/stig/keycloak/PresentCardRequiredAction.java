@@ -129,7 +129,7 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
                 : certs[0].getSubjectX500Principal().getName());
         f.add("isUserEnabled", "true");
         org.keycloak.forms.login.LoginFormsProvider form = context.form().setFormData(f);
-        // with a card port: our own page - "Sign in with my CAC" posts to the card port (a new connection and TLS handshake,
+        // with a card port: our own page - "Sign in with CAC/PIV" posts to the card port (a new connection and TLS handshake,
         // which asks for the certificate), "Continue without the card" posts to this page's OWN origin (the form's
         // unmodified action), so a network that blocks the card port can always go on
         if (CARD_PORT > 0) {

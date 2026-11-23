@@ -292,10 +292,14 @@ the step's form then posts there. A browser asks for a client certificate only d
 connection to the main port, typically made without a certificate (a provider sign-in); the card port is a new
 connection, TLS session and certificate decision, while the cookies (not port-scoped) keep the same authentication
 session. Unset: the form posts to its own origin, and works only if that connection already carries the card. With a card port the page is the extension's own template
-(`stig-present-card.ftl`): "Sign in with my CAC" posts to the card port; "Continue without the card" posts to the page's
+(`stig-present-card.ftl`): "Sign in with CAC/PIV" posts to the card port; "Continue without the card" posts to the page's
 own origin, so a client network that allows only 443 out (which cannot reach the card port) can always go on; a small
-script reaches the card port first and, if that fails or takes more than 10 s, says the network blocks the card step and
-points at continuing without it. A browser that scopes cookies by port (Chrome's "Origin-Bound Cookies" experiment)
+script reaches the card port first and, only if that fails with a network error (refused, reset, unreachable), says the
+network blocks the card step and points at continuing without it. There is no timeout: the probe is where the browser
+asks for the certificate and the card for its PIN, which takes a person as long as it takes (a 10 s timeout used to fire
+during the picker and report a block on a sign-in that then succeeded). After 10 s a neutral "still waiting" note says
+what is going on; a card port that silently drops packets looks exactly like an open picker, so that case gets the
+note, not the warning, until the browser itself gives up on the connection. A browser that scopes cookies by port (Chrome's "Origin-Bound Cookies" experiment)
 would break the card port (no session cookie there); continuing without the card still works. The card is
 validated exactly as a card sign-in validates it (trust, CA, validity, key usage, policy, revocation) and its identity
 extracted by the realm's own X.509 mapping; it is bound only if that identity EQUALS the named value and no account holds
@@ -347,15 +351,22 @@ lines print certificate subjects and identities. Keep those categories at INFO o
 
 With `STIG_CARD_PORT` set, the X.509 step itself uses the card port too: when the request carries no client certificate
 - typically because the browser reuses a connection to the main port made without one (a page load, an attempt with
-another method) - it does not silently fall through. It shows `stig-card-signin.ftl`: "Sign in with my CAC" re-runs
+another method) - it does not silently fall through. It shows `stig-card-signin.ftl`: "Sign in with CAC/PIV" re-runs
 this step on the card port (its refresh URL there: a new connection and TLS handshake, which asks for the card; the
 same cookies, so the same sign-in), and, where the step is an ALTERNATIVE, "Use another sign-in method" posts `cancel`
 to this step on the page's own origin and the flow goes on to the password / identity-provider methods. The same script
-probes the card port first and, if that fails or takes more than 10 s, says the network blocks the card sign-in. On the
+probes the card port first in the same way: "blocked" only on a network error, the "still waiting" note after 10 s. On the
 card port without a certificate (the prompt declined) it says so (`STIG-CARD-SIGNIN-NO-CERT`). A browser that already
 presents the card on the main port signs in as before, without the page. The page also lists the realm's identity providers
-(`social.providers`, as the stock login page does), so a person who signs in with one (e.g. Microsoft) goes straight
-there; "Use another sign-in method" remains for the password and other methods. It is offered only where the step is an
+(`social.providers`, as the stock login page does) under their display names, below an "or" divider, so a person who
+signs in with one (e.g. Microsoft Entra ID) goes straight there; "Use another sign-in method" remains, link-styled and
+last, for the password and other methods. It is the page's only "other method" control: where it is offered, the
+layout's own "Try Another Way" is hidden (it leads to the same alternatives, and the next page - the password form -
+still carries it); where it is not (no other step in the step's own flow), Keycloak's stays as the way on. Both templates carry their own small style block: `[hidden]` must beat the
+theme's alert `display` (PatternFly's alert class sets one, which overrides the browser's `[hidden]` rule - before this,
+the "blocked" warning showed on every load of the page), and the spacing and divider do not depend on the login theme.
+`keycloak-cac/tests/card-signin-browser.sh` checks the labels, the spacing at 1440 and 360 px and the blocked/waiting
+behaviour in Chromium. It is offered only where the step is an
 ALTERNATIVE with another enabled step in its flow.
 
 Two limits to know:
