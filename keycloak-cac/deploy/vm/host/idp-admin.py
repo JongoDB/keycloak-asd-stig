@@ -54,6 +54,17 @@ idp-admin.example.json beside this script for every key). Commands that talk to 
   idp-admin.py delegate-test-twin <delegate> create --secret-file F | remove
         a TEMPORARY client <delegate>--test with the delegate's exact delegation and a secret, for the live $L/$T tests
         once the delegate is on client-jwt (the live delegate untouched); the guard reports one left behind
+  idp-admin.py handoff-worker-setup [--rotate-secret]   the confidential client an application's hand-off intake accepts
+        tokens from (config handoffIntake: clientId, audience, scope, url): client credentials only, a service account
+        holding no role of any kind, fullScopeAllowed off, no default client scope, ONE optional client scope (the
+        configured scope) carrying ONE audience mapper (the configured audience). Recorded (guard: drift -> disabled;
+        check-clients: drift), secret to /srv/idp/secrets/handoff_client_secret (root 0600), and proved: a token asked
+        for the scope carries exactly that aud, scope and azp. Idempotent; re-enables.
+  idp-admin.py handoffs [list] | handoffs done|refused <id> [--note N]
+        the application's open hand-offs (oldest first), each with the idp-admin.py command(s) suggested for its kind -
+        NEVER run automatically: the operator runs the command, then records the outcome (audited to syslog, auth
+        facility). https only, the intake host resolved once to public addresses, no redirect, 20 s, 1 MiB. A note is at
+        most 200 characters, printable, with no run of ten digits.
   idp-admin.py delegation-rollback              ROLLBACK of the split only: one tree-wide permission again, the reader
         delegates the config does not list as preSplitDelegates out of it and disabled; REFUSED while a tree holds a group
         its pre-split delegate must not write
@@ -85,10 +96,15 @@ import argparse, http.client, importlib.machinery, importlib.util, json, os, re,
 
 # ------------------------------------------------------------------------- per-deployment configuration
 ADMIN_CONFIG_FILE = os.environ.get("IDP_ADMIN_CONFIG") or "/srv/idp/config/idp-admin.json"
-CONFIG_KEYS = {"applications", "entra", "smtp", "operatorSshHost", "repoClientsDir", "onboarding"}
+CONFIG_KEYS = {"applications", "entra", "smtp", "operatorSshHost", "repoClientsDir", "onboarding", "handoffIntake"}
 APP_KEYS = {"userManagerRole", "adoptable", "delegations", "preSplitDelegates"}
 DELEGATION_KEYS = {"groups", "name", "membershipOnly"}
 ENTRA_KEYS, SMTP_KEYS, ONBOARDING_KEYS = {"memberDomain", "displayName"}, {"host", "port", "from", "displayName"}, {"defaultApps"}
+HANDOFF_KEYS = {"url", "clientId", "audience", "scope", "name"}
+# client scopes Keycloak ships (or this tooling relies on): never the name of the hand-off scope
+BUILTIN_SCOPES = {"openid", "profile", "email", "address", "phone", "offline_access", "roles", "web-origins", "acr",
+                  "basic", "microprofile-jwt", "organization", "service_account", "role_list", "saml_organization",
+                  "kc-admin-api"}
 # checked again against RESERVED_CLIENTS / UNMANAGED_CLIENTS once those are built (below)
 CONFIG_RESERVED_IDS = {"realm-management", "account", "account-console", "security-admin-console", "admin-cli", "broker",
                        "admin-permissions", "stig-automation", "break-glass-recovery", "idp-onboarding", "idp-admin",
@@ -166,6 +182,28 @@ def load_admin_config(path):
         for x in strs("onboarding.defaultApps", o["defaultApps"]) if "defaultApps" in o else []:
             if x not in apps:
                 no("onboarding.defaultApps %s is not an application" % x)
+    if "handoffIntake" in c:
+        h = obj("handoffIntake", c["handoffIntake"], HANDOFF_KEYS)
+        for k in sorted(HANDOFF_KEYS - {"name"}):
+            if k not in h:
+                no("handoffIntake.%s is required" % k)
+        for k in h:
+            if k != "$comment":
+                text("handoffIntake.%s" % k, h[k])
+        u_ = urllib.parse.urlsplit(h["url"])
+        if u_.scheme != "https" or not u_.hostname or u_.username or u_.password or u_.query or u_.fragment \
+                or "*" in h["url"] or re.fullmatch(r"[0-9.]+|\[?[0-9a-fA-F:.]+\]?", u_.hostname or ""):
+            no("handoffIntake.url must be one plain https URL on a DNS name, without credentials, a query or a fragment")
+        hc = h["clientId"]
+        if hc in CONFIG_RESERVED_IDS or hc.endswith("-realm") or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", hc):
+            no("handoffIntake.clientId %r is reserved or not a client id" % hc)
+        if hc in set(apps) | set(delegates):
+            no("handoffIntake.clientId %r is also an application or a delegate" % hc)
+        for k in ("audience", "scope"):
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", h[k]):
+                no("handoffIntake.%s must be one token (letters, digits, . _ : -; no space)" % k)
+        if h["scope"] in BUILTIN_SCOPES:
+            no("handoffIntake.scope %r is one of Keycloak's own client scopes" % h["scope"])
     for k in ("operatorSshHost", "repoClientsDir"):
         if k in c:
             text(k, c[k])
@@ -1805,6 +1843,607 @@ def cmd_onboarding_client_setup(a):
           "/roles/<app>-user-manager, each within their delegation." % (a.client_id, ", ".join(apps), redirect, origin,
                                                                        "+".join(ONBOARDING_SCOPE_ROLES), a.max_auth_age))
 
+# ------------------------------------------------------------------------- hand-off intake
+# An application files requests for the IdP team ("hand-offs": link a card, reset someone's sign-in, unlock, ...) and
+# exposes them at an intake API. `handoffs` reads the open ones and records what the operator did, so nobody copies
+# details from one site to the other. It is a pull: the application never calls the IdP, and NOTHING here changes an
+# account - the operator runs the suggested idp-admin.py command, then marks the hand-off done (or refused).
+# Config (handoffIntake):
+#   url       the intake API: GET <url>/handoffs?status=open, POST <url>/handoffs/<id>/outcome
+#   clientId  the confidential client whose client-credentials token the intake accepts (azp); service account only,
+#             no role of any kind (handoff-worker-setup creates and records it; guard and check-clients report drift)
+#   audience  what the intake requires in aud: an audience mapper, inside the client scope below
+#   scope     what the intake requires in scope: an OPTIONAL client scope of that name, the worker's only scope
+HANDOFF = dict(_AC.get("handoffIntake") or {})
+HANDOFF_CLIENT_IDS = (HANDOFF["clientId"],) if HANDOFF else ()
+HANDOFF_STATE = "/srv/idp/state/handoff-worker.json"      # root-only: the worker's recorded shape
+HANDOFF_SECRET_FILE = os.path.join(SECRETS, "handoff_client_secret")   # root 0600
+HANDOFF_TOKEN_LIFESPAN = 300          # seconds the worker's access token lives (an intake may refuse more than 600)
+HANDOFF_MAX_LIFETIME, HANDOFF_SKEW = 600, 60
+HANDOFF_MAX_BYTES = 1 << 20           # an answer larger than this is refused (100 hand-offs are a few kB)
+HANDOFF_DEADLINE = 20                 # seconds for a whole request: connect, TLS, answer
+HANDOFF_NOTE_MAX = 200
+# ten or more digits, alone or in groups split by single spaces, dots or hyphens (an EDIPI, written any way): a note
+# never carries one - stricter than the intake's own check, so it never answers 400 for this
+HANDOFF_DIGITS = re.compile(r"\d(?:[ .-]?\d){9,}")
+HANDOFF_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")       # used with fullmatch
+HANDOFF_SAFE_USERNAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}")     # used with fullmatch: printable in a command
+# tests replace these: the intake host must resolve to public addresses only; the resolver; the TLS context
+HANDOFF_PUBLIC_ONLY, HANDOFF_RESOLVER, HANDOFF_CTX = True, None, None
+
+def handoff_audit_syslog(line):
+    """One audit line to the system log (facility auth, tag idp-admin): what reaches the SIEM with the host's logs."""
+    import syslog
+    syslog.openlog("idp-admin", syslog.LOG_PID, syslog.LOG_AUTH)
+    syslog.syslog(syslog.LOG_NOTICE, line)
+    syslog.closelog()
+
+HANDOFF_AUDIT = handoff_audit_syslog      # tests replace it
+
+def handoff_config():
+    if not HANDOFF:
+        sys.exit("no handoffIntake in %s: url, clientId, audience and scope (see idp-admin.example.json)" % ADMIN_CONFIG_FILE)
+    return HANDOFF
+
+def load_handoff():
+    try:
+        return json.load(open(HANDOFF_STATE))
+    except FileNotFoundError:
+        return {}
+
+def handoff_attrs():
+    return {"access.token.lifespan": str(HANDOFF_TOKEN_LIFESPAN), "client_credentials.use_refresh_token": "false",
+            "use.refresh.tokens": "false", "oauth2.device.authorization.grant.enabled": "false",
+            "oidc.ciba.grant.enabled": "false", "standard.token.exchange.enabled": "false",
+            "client.use.lightweight.access.token.enabled": "false"}
+
+def handoff_rep(cid, name=None):
+    """A confidential client whose only grant is client credentials (its service account)."""
+    return {"clientId": cid, "name": name or "Hand-off intake worker (client credentials, no roles)",
+            "protocol": "openid-connect", "enabled": True, "publicClient": False, "bearerOnly": False,
+            "clientAuthenticatorType": "client-secret", "serviceAccountsEnabled": True, "standardFlowEnabled": False,
+            "implicitFlowEnabled": False, "directAccessGrantsEnabled": False, "fullScopeAllowed": False,
+            "consentRequired": False, "frontchannelLogout": False, "redirectUris": [], "webOrigins": [],
+            "authenticationFlowBindingOverrides": {}, "attributes": handoff_attrs()}
+
+HANDOFF_MAPPER_NAME = "intake audience"
+def handoff_mapper(aud):
+    return {"name": HANDOFF_MAPPER_NAME, "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+            "config": {"included.custom.audience": aud, "access.token.claim": "true", "id.token.claim": "false",
+                       "introspection.token.claim": "true"}}
+
+def handoff_scope_attrs():
+    return {"include.in.token.scope": "true", "display.on.consent.screen": "false"}
+
+def _mapper_ok(m, aud):
+    cfg = m.get("config") or {}
+    return m.get("protocolMapper") == "oidc-audience-mapper" and cfg.get("included.custom.audience") == aud \
+        and cfg.get("access.token.claim") == "true" and cfg.get("id.token.claim") in (None, "false") \
+        and not cfg.get("included.client.audience")
+
+def find_scope(kc, name):
+    return next((s_ for s_ in kc.api("GET", "/client-scopes") or [] if s_["name"] == name), None)
+
+def clients_carrying_scope(kc, sid, name, but=None):
+    """clientIds (other than `but`) that carry the client scope, as a default or an optional scope."""
+    out = []
+    for c_ in kc.api("GET", "/clients") or []:
+        if c_["clientId"] == but:
+            continue
+        if "defaultClientScopes" in c_ and "optionalClientScopes" in c_:
+            names = set(c_.get("defaultClientScopes") or []) | set(c_.get("optionalClientScopes") or [])
+            if name in names:
+                out.append(c_["clientId"])
+            continue
+        for kind in ("default", "optional"):
+            if any(x["id"] == sid for x in kc.api("GET", "/clients/%s/%s-client-scopes" % (c_["id"], kind)) or []):
+                out.append(c_["clientId"]); break
+    return out
+
+def handoff_problems(kc, cid, want, allow_disabled=False):
+    """Every way the live worker differs from its record (empty = as recorded). `want`: {audience, scope}."""
+    probs = []
+    if HANDOFF and cid == HANDOFF.get("clientId") and (want.get("audience"), want.get("scope")) != (HANDOFF["audience"], HANDOFF["scope"]):
+        probs.append("recorded with audience %r and scope %r, the config says %r and %r: re-run handoff-worker-setup"
+                     % (want.get("audience"), want.get("scope"), HANDOFF["audience"], HANDOFF["scope"]))
+    c = find_client(kc, cid)
+    if c is None:
+        return probs + ["recorded as the hand-off worker, but no such client exists"]
+    c = kc.api("GET", "/clients/%s" % c["id"])
+    for k, v in handoff_rep(cid).items():
+        if k in ("attributes", "name") or (k == "enabled" and allow_disabled):
+            continue
+        have = c.get(k)
+        if k == "authenticationFlowBindingOverrides":
+            have = {k_: v_ for k_, v_ in (have or {}).items() if v_}
+        if k in ("redirectUris", "webOrigins"):
+            have = sorted(have or [])
+        if have != v:
+            probs.append("%s is %r, recorded %r" % (k, have, v))
+    la = c.get("attributes") or {}
+    for k, v in handoff_attrs().items():
+        if la.get(k) != v:
+            probs.append("attribute %s is %r, recorded %r" % (k, la.get(k), v))
+    if la.get(ROTATED_SECRET_ATTR) not in (None, ""):
+        probs.append("keeps a rotated (previous) client secret: it still authenticates until it expires")
+    keyed = sorted(k for k in JWKS_ATTRS if la.get(k) not in (None, "", "false"))
+    if keyed:
+        probs.append("carries %s (it authenticates with its client secret only)" % keyed)
+    if c.get("protocolMappers"):
+        probs.append("has its own protocol mappers %s (none allowed: the audience comes from its scope only)"
+                     % sorted(m.get("name") for m in c["protocolMappers"]))
+    ds = sorted(x["name"] for x in kc.api("GET", "/clients/%s/default-client-scopes" % c["id"]) or [])
+    if ds:
+        probs.append("default client scopes %s (none allowed: each adds claims)" % ds)
+    os_ = sorted(x["name"] for x in kc.api("GET", "/clients/%s/optional-client-scopes" % c["id"]) or [])
+    if os_ != [want.get("scope")]:
+        probs.append("optional client scopes %s, expected exactly [%r]" % (os_, want.get("scope")))
+    sc = find_scope(kc, want.get("scope"))
+    if sc is None:
+        probs.append("no client scope %r" % want.get("scope"))
+    else:
+        sa_ = sc.get("attributes") or {}
+        if sc.get("protocol") != "openid-connect" or sa_.get("include.in.token.scope") != "true":
+            probs.append("client scope %s is not an openid-connect scope included in the token's scope" % sc["name"])
+        ms = sc.get("protocolMappers") or []
+        if len(ms) != 1 or not _mapper_ok(ms[0], want.get("audience")):
+            probs.append("client scope %s has mappers %s, expected exactly one audience mapper adding %r"
+                         % (sc["name"], sorted((m.get("name"), m.get("protocolMapper")) for m in ms), want.get("audience")))
+        for kind in ("default-default", "default-optional"):
+            if any(x["id"] == sc["id"] for x in kc.api("GET", "/%s-client-scopes" % kind) or []):
+                probs.append("client scope %s is a realm %s client scope (every new client would get it)" % (sc["name"], kind))
+        others = clients_carrying_scope(kc, sc["id"], sc["name"], but=cid)
+        if others:
+            probs.append("client scope %s is also on %s (only the worker may carry it)" % (sc["name"], others))
+    sm = kc.api("GET", "/clients/%s/scope-mappings" % c["id"]) or {}
+    if sm.get("realmMappings") or any(v.get("mappings") for v in (sm.get("clientMappings") or {}).values()):
+        probs.append("has role scope mappings (none allowed)")
+    sa = kc.api("GET", "/clients/%s/service-account-user" % c["id"], ok404=True) if c.get("serviceAccountsEnabled") else None
+    if sa:
+        rm = kc.api("GET", "/users/%s/role-mappings" % sa["id"]) or {}
+        held = [r["name"] for r in rm.get("realmMappings") or []]
+        held += ["%s:%s" % (k, r["name"]) for k, v in (rm.get("clientMappings") or {}).items() for r in v.get("mappings") or []]
+        if held:
+            probs.append("its service account holds roles %s (none of any kind allowed)" % sorted(held))
+        gs = [g["path"] for g in kc.api("GET", "/users/%s/groups" % sa["id"]) or []]
+        if gs:
+            probs.append("its service account is in groups %s (none allowed)" % gs)
+    return probs
+
+def handoff_guard(kc, fix):
+    """Violations among hand-off workers (each a printed line). A worker that drifted from its record (or has none, or
+    is no longer configured) is a violation and, with fix, is DISABLED (verified): turning it off only stops the
+    polling. `fix` is the run's own --fix."""
+    out = []
+    recorded = load_handoff()
+    for cid in sorted(set(recorded) | set(HANDOFF_CLIENT_IDS)):
+        c = find_client(kc, cid)
+        if c is None:
+            if cid in recorded:
+                print("info  hand-off worker %s is recorded but absent: run handoff-worker-setup, or remove its record" % cid)
+            continue
+        c = kc.api("GET", "/clients/%s" % c["id"])
+        why = []
+        if cid not in recorded:
+            why.append("no record in %s (create it with handoff-worker-setup)" % HANDOFF_STATE)
+        else:
+            why += handoff_problems(kc, cid, recorded[cid], allow_disabled=True)
+        if cid not in HANDOFF_CLIENT_IDS:
+            why.append("recorded, but no longer the configured handoffIntake.clientId")
+        if not why:
+            if not c.get("enabled"):
+                print("info  hand-off worker %s matches its record and is DISABLED (re-enable with handoff-worker-setup)" % cid)
+            continue
+        if not c.get("enabled"):
+            print("info  hand-off worker %s is DISABLED and differs from its record: %s" % (cid, "; ".join(why)))
+            continue
+        for w in why:
+            print("STIG-HANDOFF-WORKER-DRIFT client=%s %s" % (cid, w), file=sys.stderr)
+        out.append(cid)
+        if fix:
+            c["enabled"] = False
+            kc.api("PUT", "/clients/%s" % c["id"], c)
+            if kc.api("GET", "/clients/%s" % c["id"]).get("enabled"):
+                raise RuntimeError("could not disable the drifted hand-off worker %s" % cid)
+            print("STIG-HANDOFF-WORKER-DRIFT client=%s DISABLED (verified); fix the cause, then re-run handoff-worker-setup"
+                  % cid, file=sys.stderr)
+    return out
+
+def jwt_claims(tok):
+    """The payload of a compact JWS, decoded (never trusted for anything but the self-check: the token came straight from
+    the IdP over verified TLS)."""
+    import base64
+    parts = tok.split(".") if isinstance(tok, str) else []
+    if len(parts) != 3:
+        raise ValueError("not a compact JWT")
+    pl = parts[1] + "=" * (-len(parts[1]) % 4)
+    c = json.loads(base64.urlsafe_b64decode(pl.encode()))
+    if not isinstance(c, dict):
+        raise ValueError("the JWT payload is not an object")
+    return c
+
+def handoff_token_problems(claims, cid, aud, scope, issuer, now=None):
+    """Why the intake would refuse this token, or why it carries more than it should (empty = exactly as agreed): iss,
+    azp, aud EXACTLY [aud], scope EXACTLY scope, typ Bearer, a lifetime of at most HANDOFF_MAX_LIFETIME, no iat from
+    the future."""
+    now = time.time() if now is None else now
+    probs = []
+    if claims.get("iss") != issuer:
+        probs.append("iss is %r, expected %r" % (claims.get("iss"), issuer))
+    if claims.get("azp") != cid:
+        probs.append("azp is %r, expected %r" % (claims.get("azp"), cid))
+    auds = claims.get("aud")
+    auds = [auds] if isinstance(auds, str) else auds if isinstance(auds, list) else []
+    if auds != [aud]:
+        probs.append("aud is %r, expected exactly [%r]" % (claims.get("aud"), aud))
+    scopes = claims.get("scope").split() if isinstance(claims.get("scope"), str) else []
+    if scopes != [scope]:
+        probs.append("scope is %r, expected exactly %r" % (claims.get("scope"), scope))
+    if claims.get("typ") not in (None, "Bearer"):
+        probs.append("typ is %r, not an access token" % claims.get("typ"))
+    iat, exp = claims.get("iat"), claims.get("exp")
+    if not all(isinstance(x, int) and not isinstance(x, bool) for x in (iat, exp)):
+        probs.append("iat/exp missing or not integers")
+    else:
+        if exp - iat > HANDOFF_MAX_LIFETIME:
+            probs.append("lives %d s (exp - iat), at most %d allowed" % (exp - iat, HANDOFF_MAX_LIFETIME))
+        if iat > now + HANDOFF_SKEW:
+            probs.append("iat is %d s in the future" % (iat - now))
+    return probs
+
+class HandoffError(Exception):
+    pass
+
+def handoff_get_token(post, cid, secret, scope):
+    """A client-credentials access token for the worker, asking for exactly its scope. `post(path, body, headers) ->
+    (status, text)`: through Keycloak's own network namespace (setup) or the public URL (handoffs)."""
+    body = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": cid, "client_secret": secret,
+                                   "scope": scope}).encode()
+    st, text = post("/realms/%s/protocol/openid-connect/token" % REALM, body,
+                    {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+    try:
+        d = json.loads(text)
+    except ValueError:
+        d = {}
+    if st != 200 or not isinstance(d, dict) or not isinstance(d.get("access_token"), str):
+        raise HandoffError("the IdP refused the worker's token request: HTTP %s %s" % (st, clean((d or {}).get("error") if isinstance(d, dict) else "", 80)))
+    return d["access_token"]
+
+def handoff_issuer():
+    base = CFG.get("CAC_PUBLIC_URL", "").rstrip("/")
+    if not base or not REALM:
+        sys.exit("no CAC_PUBLIC_URL / CAC_REALM in %s: run this ON the IdP host" % CFG_FILE)
+    return "%s/realms/%s" % (base, REALM)
+
+def clean(v, n=200):
+    """A value from another system, safe to print on a terminal: printable characters only, at most n."""
+    s = v if isinstance(v, str) else "" if v is None else str(v)
+    s = "".join(ch if ch.isprintable() else "?" for ch in s)
+    return s if len(s) <= n else s[:n - 3] + "..."
+
+class _Deadline:
+    """An overall deadline for one request (SIGALRM, main thread only; per-socket timeouts bound each read anyway)."""
+    def __init__(self, seconds):
+        self.s, self.on = seconds, False
+    def __enter__(self):
+        import signal, threading
+        if hasattr(signal, "setitimer") and threading.current_thread() is threading.main_thread():
+            def fire(*_):
+                raise TimeoutError("no complete answer within %d s" % self.s)
+            self.prev = signal.signal(signal.SIGALRM, fire); signal.setitimer(signal.ITIMER_REAL, self.s); self.on = True
+        return self
+    def __exit__(self, *exc):
+        if self.on:
+            import signal
+            signal.setitimer(signal.ITIMER_REAL, 0); signal.signal(signal.SIGALRM, self.prev)
+        return False
+
+def https_call(url, method="GET", headers=None, body=None, limit=HANDOFF_MAX_BYTES, public_only=True, resolver=None,
+               ctx=None, deadline=HANDOFF_DEADLINE):
+    """One HTTPS request, safely: https only, no credentials in the URL; the name resolved ONCE (every address public
+    when public_only) and the connection made to that validated address, certificate verified for the name; no
+    redirect followed (a 3xx raises); at most `limit` bytes; at most `deadline` seconds in all. -> (status, lower-case
+    headers, text); raises ValueError / OSError / ssl.SSLError / TimeoutError otherwise."""
+    p_ = urllib.parse.urlsplit(url)
+    if p_.scheme != "https" or not p_.hostname or p_.username or p_.password or p_.fragment:
+        raise ValueError("not a plain https URL")
+    host, port = p_.hostname, p_.port or 443
+    with _Deadline(deadline):
+        addrs = sorted({ai[4][0] for ai in (resolver or socket.getaddrinfo)(host, port, proto=socket.IPPROTO_TCP)})
+        if not addrs:
+            raise ValueError("%s resolves to nothing" % host)
+        bad = [x for x in addrs if not _public_ip(x)] if public_only else []
+        if bad:
+            raise ValueError("%s resolves to a non-public address %s" % (host, bad))
+        ctx = ctx or ssl.create_default_context()
+        sock = socket.create_connection((addrs[0], port), timeout=min(10, deadline))
+        try:
+            ss = ctx.wrap_socket(sock, server_hostname=host)
+            con = http.client.HTTPSConnection(host, port, context=ctx, timeout=min(10, deadline)); con.sock = ss
+            h = {"Host": host if port == 443 else "%s:%d" % (host, port), "Accept": "application/json",
+                 "User-Agent": "idp-admin"}
+            h.update(headers or {})
+            con.request(method, (p_.path or "/") + ("?" + p_.query if p_.query else ""), body=body, headers=h)
+            r = con.getresponse()
+            hd = {k.lower(): v for k, v in r.getheaders()}
+            data = b""
+            while len(data) <= limit:
+                chunk = r.read1(min(65536, limit + 1 - len(data)))
+                if not chunk:
+                    break
+                data += chunk
+        finally:
+            sock.close()
+    if 300 <= r.status < 400:
+        raise ValueError("%s answered a redirect (%s); redirects are refused" % (host, r.status))
+    if len(data) > limit:
+        raise ValueError("%s answered more than %d bytes" % (host, limit))
+    return r.status, hd, data.decode("utf-8", "replace")
+
+def handoff_note(note):
+    """The outcome note, checked: at most HANDOFF_NOTE_MAX characters, printable, no run of ten digits (-> the note;
+    exits REFUSED otherwise, before anything is sent)."""
+    n = (note or "").strip()
+    if len(n) > HANDOFF_NOTE_MAX:
+        sys.exit("REFUSED: the note is %d characters, at most %d" % (len(n), HANDOFF_NOTE_MAX))
+    if any(not ch.isprintable() for ch in n):
+        sys.exit("REFUSED: the note holds a control character or a line break")
+    if HANDOFF_DIGITS.search(n):
+        sys.exit("REFUSED: the note holds a run of ten or more digits (a card number never goes in a hand-off note)")
+    return n
+
+def handoff_session():
+    """(token, intake url) for the configured worker, from the PUBLIC token endpoint (this host's own resolver, never
+    Keycloak's network namespace: the intake is reached from the host). The token is checked before it is used."""
+    h = handoff_config()
+    try:
+        secret = open(HANDOFF_SECRET_FILE).read().strip()
+    except OSError as e:
+        sys.exit("cannot read the worker's secret %s (%s): run handoff-worker-setup first" % (HANDOFF_SECRET_FILE, e.strerror))
+    issuer = handoff_issuer()
+    base = issuer[:issuer.index("/realms/")]
+    def post(path, body, headers):
+        st, _, text = https_call(base + path, "POST", headers, body, public_only=False, resolver=HANDOFF_RESOLVER, ctx=HANDOFF_CTX)
+        return st, text
+    try:
+        tok = handoff_get_token(post, h["clientId"], secret, h["scope"])
+        probs = handoff_token_problems(jwt_claims(tok), h["clientId"], h["audience"], h["scope"], issuer)
+    except (HandoffError, ValueError, OSError, ssl.SSLError, http.client.HTTPException) as e:
+        sys.exit("FAILED: worker token: %s" % e)
+    if probs:
+        sys.exit("REFUSED: the IdP issued the worker a token the intake would refuse or that carries more than agreed: %s. "
+                 "Run idp-admin.py check-clients, then handoff-worker-setup" % "; ".join(probs))
+    return tok, h["url"].rstrip("/")
+
+def intake_call(url, token, method, path, obj=None):
+    hdr = {"Authorization": "Bearer " + token}
+    body = None
+    if obj is not None:
+        body = json.dumps(obj).encode(); hdr["Content-Type"] = "application/json"
+    return https_call(url + path, method, hdr, body, public_only=HANDOFF_PUBLIC_ONLY, resolver=HANDOFF_RESOLVER, ctx=HANDOFF_CTX)
+
+def intake_error(st, hd, text):
+    """A refusal from the intake in one line: its problem+json title/detail, and what to do."""
+    try:
+        pj = json.loads(text)
+    except ValueError:
+        pj = {}
+    pj = pj if isinstance(pj, dict) else {}
+    why = clean(pj.get("detail") or pj.get("title") or text[:120], 200)
+    hint = {401: "the token was not accepted (bad, expired, or another issuer)",
+            403: "the token lacks the audience, the scope or the client the intake requires: check-clients, handoff-worker-setup",
+            404: "no such hand-off", 409: "it is closed with another outcome, or cancelled",
+            429: "rate limited%s" % (" - retry after %s s" % clean(hd.get("retry-after"), 10) if hd.get("retry-after") else "")}.get(st, "")
+    return "HTTP %s %s%s" % (st, why, " (%s)" % hint if hint else "")
+
+# The idp-admin.py command(s) suggested for each kind (with the username only; anything in <> the operator fills in from
+# what they verify themselves). Never run automatically.
+HANDOFF_SUGGESTIONS = {
+    "link_cac": ([], "No command binds a card to an EXISTING account: read the EDIPI from the card holder (never from the "
+                     "hand-off), then an IdP administrator sets cac_edipi on {u} in the admin console (Users -> {u} -> "
+                     "Attributes); an EDIPI already on another account is refused. A card-only account that already carries "
+                     "this EDIPI gets a role with user-create-cac ... --existing."),
+    "link_entra": (["link-entra {u} <Entra object id>"],
+                   "The object id: Entra admin center -> Users -> the person -> Object ID (or az ad user show --id <upn> --query id -o tsv)."),
+    "reset_credentials": (["reset-user {u}", "rename {u} {u} --email <address>", "send-setup {u}"],
+                          "reset-user also clears the e-mail: set it again (the address you verified) before send-setup."),
+    "disable_enable_unlock": (["user-enable {u} false", "user-enable {u} true", "user-unlock {u}"],
+                              "One kind, three actions: confirm with the filer which one. An account the guard disabled needs reset-user before user-enable true."),
+    "change_name_email": (["rename {u} {u} --email <address> --first <First> --last <Last>"],
+                          "The new values are not in the hand-off: confirm them with the filer. A new username: rename {u} <new.username> (same user id)."),
+    "delete_account": (["user-delete {u}"],
+                       "Cannot be undone: a new account gets a new user id. Prefer user-enable {u} false unless deletion was approved."),
+    "consider_disable": (["user-enable {u} false"],
+                         "Their last role in the filing application was removed. Disable only if they hold no other application's role (guard lists accounts with none: info STIG-ACCOUNT-NO-APP-ROLE)."),
+}
+
+def handoff_suggestion(kind, username):
+    """(command lines, note) for one hand-off. An unsafe username gives no command line, never a quoted one."""
+    cmds, note = HANDOFF_SUGGESTIONS.get(kind, ([], "An unknown kind: handle it by hand."))
+    if not isinstance(username, str) or not HANDOFF_SAFE_USERNAME.fullmatch(username):
+        return [], "The username has characters a command cannot carry: check the hand-off by hand."
+    return ["sudo idp-admin.py " + c.format(u=username) for c in cmds], note.format(u=username)
+
+def handoff_items(text):
+    """The list answer, validated: [{id, kind, username, status, filedBy, filedAt}]; raises ValueError."""
+    d = json.loads(text)
+    items = d.get("items") if isinstance(d, dict) else None
+    if not isinstance(items, list):
+        raise ValueError("the answer has no items list")
+    out = []
+    for it in items:
+        if not isinstance(it, dict) or not isinstance(it.get("id"), str) or not HANDOFF_ID_RE.fullmatch(it["id"]):
+            raise ValueError("an item without a usable id: %s" % clean(json.dumps(it)[:120]))
+        out.append(it)
+    return out
+
+def cmd_handoffs(a):
+    """List the open hand-offs with the suggested command for each, or record an outcome (done / refused)."""
+    action = a.action or "list"
+    if action == "list":
+        if a.id or a.note is not None:
+            sys.exit("REFUSED: list takes no id and no --note")
+        tok, url = handoff_session()
+        try:
+            st, hd, text = intake_call(url, tok, "GET", "/handoffs?status=open")
+        except (ValueError, OSError, ssl.SSLError, http.client.HTTPException) as e:
+            sys.exit("FAILED: %s: %s" % (url, e))
+        if st != 200:
+            sys.exit("FAILED: listing hand-offs: %s" % intake_error(st, hd, text))
+        try:
+            items = handoff_items(text)
+        except ValueError as e:
+            sys.exit("FAILED: the intake's answer is not a hand-off list: %s" % e)
+        if not items:
+            print("no open hand-offs"); return
+        for it in items:
+            print("%s  %-22s %-28s filed %s by %s" % (clean(it["id"], 64), clean(it.get("kind"), 22), clean(it.get("username"), 60),
+                                                      clean(it.get("filedAt"), 30), clean(it.get("filedBy"), 120)))
+            cmds, note = handoff_suggestion(it.get("kind"), it.get("username"))
+            for c in cmds:
+                print("    run:  %s" % c)
+            if note:
+                print("    note: %s" % note)
+        print("%d open. Nothing was changed. After acting: idp-admin.py handoffs done <id> [--note ...], or "
+              "handoffs refused <id> --note <why>" % len(items))
+        return
+    if not a.id or not HANDOFF_ID_RE.fullmatch(a.id):
+        sys.exit("REFUSED: %s needs the hand-off's id (as listed)" % action)
+    if action == "refused" and not (a.note or "").strip():
+        sys.exit("REFUSED: refused needs --note: why (the filer reads it)")
+    note = handoff_note(a.note)
+    tok, url = handoff_session()
+    line = "STIG-HANDOFF-OUTCOME id=%s outcome=%s operator=%s intake=%s note=%s" % (
+        a.id, action, clean(operator(), 64), urllib.parse.urlsplit(url).hostname, json.dumps(note))
+    try:
+        st, hd, text = intake_call(url, tok, "POST", "/handoffs/%s/outcome" % q(a.id), {"outcome": action, "note": note})
+    except (ValueError, OSError, ssl.SSLError, http.client.HTTPException) as e:
+        HANDOFF_AUDIT("%s result=error reason=%s" % (line, json.dumps(clean(str(e), 120))))
+        sys.exit("FAILED: %s: %s (the outcome may or may not be recorded: list again)" % (url, e))
+    if st == 200:
+        try:
+            item = json.loads(text)
+        except ValueError:
+            item = None
+        item = item if isinstance(item, dict) else {}
+        if item.get("id") != a.id or item.get("status") != action:
+            HANDOFF_AUDIT("%s result=unexpected status=%s" % (line, json.dumps(clean(item.get("status"), 20))))
+            sys.exit("FAILED: the intake answered 200 but the hand-off is %r, not %r" % (clean(item.get("status"), 20), action))
+        HANDOFF_AUDIT("%s result=recorded kind=%s username=%s" % (line, clean(item.get("kind"), 40).replace(" ", "_"),
+                                                                    clean(item.get("username"), 100).replace(" ", "_")))
+        print("hand-off %s (%s, %s): %s recorded" % (a.id, clean(item.get("kind"), 40), clean(item.get("username"), 100), action))
+        return
+    HANDOFF_AUDIT("%s result=refused-by-intake http=%s" % (line, st))
+    sys.exit("REFUSED by the intake: %s" % intake_error(st, hd, text))
+
+def cmd_handoff_worker_setup(a):
+    """Create or converge the hand-off worker (handoffIntake.clientId): a confidential client, service account only, no
+    role of any kind, fullScopeAllowed off, no default client scope, exactly one OPTIONAL client scope (handoffIntake.scope)
+    carrying exactly one audience mapper (handoffIntake.audience). Records it first (HANDOFF_STATE; guard and check-clients
+    report drift), writes its secret to HANDOFF_SECRET_FILE (root 0600; --rotate-secret makes a new one), verifies the
+    shape, then asks for a token and checks it carries exactly the agreed aud, scope and azp. Idempotent; re-enables."""
+    h = handoff_config()
+    cid, aud, scope = h["clientId"], h["audience"], h["scope"]
+    kc = KC()
+    want = {"audience": aud, "scope": scope, "url": h["url"], "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "operator": operator()}
+    rec = load_handoff(); rec[cid] = want; _write_json(HANDOFF_STATE, rec)
+    # the scope: openid-connect, in the token's scope claim, exactly one audience mapper; never a realm default
+    sc = find_scope(kc, scope)
+    if sc is None:
+        kc.api("POST", "/client-scopes", {"name": scope, "protocol": "openid-connect", "attributes": handoff_scope_attrs(),
+                                           "description": "hand-off intake: read open hand-offs, record outcomes"})
+        sc = find_scope(kc, scope); print("client scope %s created" % scope)
+    sc = kc.api("GET", "/client-scopes/%s" % sc["id"])
+    if sc.get("protocol") != "openid-connect":
+        sys.exit("REFUSED: client scope %s exists with protocol %s: remove or rename it first" % (scope, sc.get("protocol")))
+    if any((sc.get("attributes") or {}).get(k) != v for k, v in handoff_scope_attrs().items()):
+        full = dict(sc); full["attributes"] = dict(sc.get("attributes") or {}, **handoff_scope_attrs()); full.pop("protocolMappers", None)
+        kc.api("PUT", "/client-scopes/%s" % sc["id"], full); print("client scope %s updated" % scope)
+    ms = kc.api("GET", "/client-scopes/%s/protocol-mappers/models" % sc["id"]) or []
+    keep = next((m for m in ms if _mapper_ok(m, aud)), None)
+    for m in ms:
+        if m is not keep:
+            kc.api("DELETE", "/client-scopes/%s/protocol-mappers/models/%s" % (sc["id"], m["id"]))
+            print("client scope %s: mapper %r removed" % (scope, m.get("name")))
+    if keep is None:
+        kc.api("POST", "/client-scopes/%s/protocol-mappers/models" % sc["id"], handoff_mapper(aud))
+        print("client scope %s: audience mapper (%s) added" % (scope, aud))
+    for kind in ("default-default", "default-optional"):
+        if any(x["id"] == sc["id"] for x in kc.api("GET", "/%s-client-scopes" % kind) or []):
+            kc.api("DELETE", "/%s-client-scopes/%s" % (kind, sc["id"])); print("client scope %s: no longer a realm %s scope" % (scope, kind))
+    for other in clients_carrying_scope(kc, sc["id"], scope, but=cid):
+        oc = find_client(kc, other)
+        for kind in ("default", "optional"):
+            kc.api("DELETE", "/clients/%s/%s-client-scopes/%s" % (oc["id"], kind, sc["id"]), ok=(200, 204, 404), ok404=True)
+        print("client scope %s: taken off client %s (only the worker may carry it)" % (scope, other))
+    # the client
+    rep = handoff_rep(cid, h.get("name"))
+    ex = find_client(kc, cid)
+    if not ex:
+        kc.api("POST", "/clients", rep); print("client %s created (service account only, no roles)" % cid)
+    c = kc.api("GET", "/clients/%s" % find_client(kc, cid)["id"])
+    if ex:
+        cur = dict(c); cur.update({k: v for k, v in rep.items() if k not in ("attributes", "name")})
+        if h.get("name"):
+            cur["name"] = h["name"]
+        cur["attributes"] = dict(c.get("attributes") or {}, **rep["attributes"])
+        if any((c.get("attributes") or {}).get(k) not in (None, "", "false") for k in JWKS_ATTRS):
+            cur["attributes"].update(CLEARED_JWKS)           # sent empty: an attribute left out would be kept
+        cur["authenticationFlowBindingOverrides"] = {k: "" for k, v in (c.get("authenticationFlowBindingOverrides") or {}).items() if v}
+        cur.pop("protocolMappers", None)
+        if cur != {k: v for k, v in c.items() if k != "protocolMappers"}:
+            kc.api("PUT", "/clients/%s" % c["id"], cur); print("client %s updated" % cid)
+    for m in c.get("protocolMappers") or []:
+        kc.api("DELETE", "/clients/%s/protocol-mappers/models/%s" % (c["id"], m["id"])); print("client %s: own mapper %r removed" % (cid, m.get("name")))
+    for kind in ("default", "optional"):
+        for x in kc.api("GET", "/clients/%s/%s-client-scopes" % (c["id"], kind)) or []:
+            if not (kind == "optional" and x["id"] == sc["id"]):
+                kc.api("DELETE", "/clients/%s/%s-client-scopes/%s" % (c["id"], kind, x["id"]))
+    if not any(x["id"] == sc["id"] for x in kc.api("GET", "/clients/%s/optional-client-scopes" % c["id"]) or []):
+        kc.api("PUT", "/clients/%s/optional-client-scopes/%s" % (c["id"], sc["id"]))
+    sm = kc.api("GET", "/clients/%s/scope-mappings" % c["id"]) or {}
+    if sm.get("realmMappings"):
+        kc.api("DELETE", "/clients/%s/scope-mappings/realm" % c["id"], sm["realmMappings"])
+    for k, v in (sm.get("clientMappings") or {}).items():
+        if v.get("mappings"):
+            kc.api("DELETE", "/clients/%s/scope-mappings/clients/%s" % (c["id"], find_client(kc, k)["id"]), v["mappings"])
+    # its service account: no role of any kind (the realm's default roles included), in no group
+    sa = kc.api("GET", "/clients/%s/service-account-user" % c["id"])
+    rm = kc.api("GET", "/users/%s/role-mappings" % sa["id"]) or {}
+    if rm.get("realmMappings"):
+        kc.api("DELETE", "/users/%s/role-mappings/realm" % sa["id"], rm["realmMappings"])
+    for k, v in (rm.get("clientMappings") or {}).items():
+        if v.get("mappings"):
+            kc.api("DELETE", "/users/%s/role-mappings/clients/%s" % (sa["id"], v.get("id") or find_client(kc, k)["id"]), v["mappings"])
+    for g in kc.api("GET", "/users/%s/groups" % sa["id"]) or []:
+        kc.api("DELETE", "/users/%s/groups/%s" % (sa["id"], g["id"])); print("client %s: service account taken out of %s" % (cid, g["path"]))
+    # the secret: a new one on --rotate-secret; never a rotated (previous) one left authenticating; root 0600 file
+    if a.rotate_secret:
+        kc.api("POST", "/clients/%s/client-secret" % c["id"]); print("client %s: new secret" % cid)
+    kc.api("DELETE", "/clients/%s/client-secret/rotated" % c["id"], ok=(200, 204, 404), ok404=True)
+    secret = kc.api("GET", "/clients/%s/client-secret" % c["id"])["value"]
+    try:
+        write_secret_private(HANDOFF_SECRET_FILE, secret, mode=0o600)
+    except (ValueError, OSError) as e:
+        raise RuntimeError("could not write the worker's secret to %s: %s" % (HANDOFF_SECRET_FILE, e))
+    probs = handoff_problems(kc, cid, want)
+    if probs:
+        raise RuntimeError("%s does not match its record after setup: %s" % (cid, "; ".join(probs)))
+    # proof: a token, asked for exactly the scope, carries exactly the agreed aud, scope and azp
+    issuer = handoff_issuer()
+    try:
+        tok = handoff_get_token(lambda path, body, hdr: kc.req("POST", path, body, hdr, auth=False), cid, secret, scope)
+        cl = jwt_claims(tok)
+    except (HandoffError, ValueError) as e:
+        raise RuntimeError("%s: %s" % (cid, e))
+    tp = handoff_token_problems(cl, cid, aud, scope, issuer)
+    if tp:
+        raise RuntimeError("%s's token is not as agreed: %s" % (cid, "; ".join(tp)))
+    print("%s: confidential client, service account only, no roles; token aud=%s scope=%s azp=%s, lives %d s; secret in %s "
+          "(root 0600). Intake: %s. List with: idp-admin.py handoffs" % (cid, aud, scope, cid, cl["exp"] - cl["iat"],
+                                                                         HANDOFF_SECRET_FILE, h["url"]))
+
 def effective_client_roles(kc, uid, client_id):
     """The names of `client_id`'s roles the account holds effectively (direct, composite or through a group)."""
     c = find_client(kc, client_id)
@@ -2153,9 +2792,10 @@ def guard(kc, fix):
             take_out_of_app_groups(kc, uid)          # raises unless verified gone
             print("STIG-ADMIN-IN-DELEGATED-GROUP user=%s fixed (verified: no application-tree membership)" % name, file=sys.stderr)
     onboarding = onboarding_guard(kc, fix_requested, marker)
+    onboarding += handoff_guard(kc, fix_requested)      # the hand-off worker: drift -> disabled, like an onboarding client
     print("guard: %d administrators protected (idp-admin-only permission); %d were in an application group; "
-          "%d allowlist violations; %d onboarding-client violations%s" % (len(admins), len(bad), len(untrusted), len(onboarding),
-                                                                  " - fixed" if (bad or untrusted or onboarding) and fix else ""))
+          "%d allowlist violations; %d onboarding-client / hand-off-worker violations%s" % (
+              len(admins), len(bad), len(untrusted), len(onboarding), " - fixed" if (bad or untrusted or onboarding) and fix else ""))
     if failures:
         raise RuntimeError("remediation steps failed: %s" % failures)
     if (bad or untrusted or mapped) and not fix:
@@ -3376,7 +4016,7 @@ ROLE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")          # used with fu
 MAX_URIS = 20
 # not managed by client files: Keycloak's own clients and the ones this deployment creates by other means
 UNMANAGED_CLIENTS = ("realm-management", "account", "account-console", "security-admin-console", "admin-cli", "broker",
-                     "admin-permissions") + DELEGATE_CLIENTS + ONBOARDING_CLIENT_IDS
+                     "admin-permissions") + DELEGATE_CLIENTS + ONBOARDING_CLIENT_IDS + HANDOFF_CLIENT_IDS
 # never registered by add-client: Keycloak's built-ins, the master realm's own clients (<realm>-realm, stig-automation,
 # the break-glass client) and this deployment's sensitive clients. Any *-realm id is refused too.
 RESERVED_CLIENTS = UNMANAGED_CLIENTS + ("stig-automation", "break-glass-recovery", "master-realm") \
@@ -3747,12 +4387,13 @@ def write_host_file(cid, raw, d=None):
             os.remove(tmp)
     return path
 
-def write_secret_private(path, value, owner=0):
+def write_secret_private(path, value, owner=0, mode=0o400):
     """Write a secret so that nobody but `owner` (root) can ever read it, whatever was at the path before:
       - the directory must be a real directory (not a link), owned by `owner`, not group- or world-writable;
       - an existing target that is not a regular file (a symlink, a FIFO, ...) is refused, never followed;
       - the value goes into a FRESH file created with O_CREAT|O_EXCL|O_NOFOLLOW (mode 0400) in that directory, checked
-        with fstat (regular, 0400, owned by `owner`), then os.replace()d onto the path (atomic, replaces a link itself).
+        with fstat (regular, `mode` - 0400 by default -, owned by `owner`), then os.replace()d onto the path (atomic,
+        replaces a link itself).
     Raises ValueError with the reason."""
     import stat as st_, secrets as sec_
     path = os.path.abspath(path); d = os.path.dirname(path)
@@ -3765,12 +4406,14 @@ def write_secret_private(path, value, owner=0):
     if os.path.lexists(path) and not st_.S_ISREG(os.lstat(path).st_mode):
         raise ValueError("%s exists and is not a regular file (a symlink?): refused, never followed" % path)
     tmp = os.path.join(d, ".%s.%s.tmp" % (os.path.basename(path), sec_.token_hex(8)))
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), 0o400)
+    if mode & 0o077:
+        raise ValueError("a secret file is never readable or writable by group or others (mode %o)" % mode)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), mode)
     try:
-        os.fchmod(fd, 0o400)
+        os.fchmod(fd, mode)
         fs = os.fstat(fd)
-        if not st_.S_ISREG(fs.st_mode) or fs.st_mode & 0o777 != 0o400 or fs.st_uid != owner:
-            raise ValueError("the new file is not a regular 0400 file owned by uid %d" % owner)
+        if not st_.S_ISREG(fs.st_mode) or fs.st_mode & 0o777 != mode or fs.st_uid != owner:
+            raise ValueError("the new file is not a regular %04o file owned by uid %d" % (mode, owner))
         os.write(fd, value.encode()); os.fsync(fd)
     except BaseException:
         os.close(fd); os.unlink(tmp); raise
@@ -4151,6 +4794,23 @@ def check_clients(kc, repo_dir=None, out=None, resolved=None):
                 print("ok    %s: serves /%s (writers: /roles/idp-user-manager, /roles/%s)" % (cid, x, app_manager_role(x)), file=out)
             else:
                 bad("%s: recorded as serving %s, no longer configured (re-run onboarding-client-setup with the current --app list)" % (cid, x))
+    hrec = load_handoff()
+    for cid in sorted(set(hrec) | set(HANDOFF_CLIENT_IDS)):
+        hw = find_client(kc, cid)
+        if cid not in hrec:
+            if hw is not None:
+                bad("%s: the configured hand-off worker exists with no record (create it with handoff-worker-setup)" % cid)
+            continue
+        probs = handoff_problems(kc, cid, hrec[cid], allow_disabled=True)
+        if cid not in HANDOFF_CLIENT_IDS:
+            probs.append("recorded as a hand-off worker, but no longer the configured handoffIntake.clientId")
+        if hw and not hw.get("enabled", True):
+            print("info  %s: hand-off worker is DISABLED (by the guard?): re-enable with handoff-worker-setup" % cid, file=out)
+        for pr_ in probs:
+            bad("%s: %s" % (cid, pr_))
+        if not probs:
+            print("ok    %s: hand-off worker matches its record (aud %s, scope %s)" % (cid, hrec[cid].get("audience"),
+                                                                                    hrec[cid].get("scope")), file=out)
     for c_ in kc.api("GET", "/clients") or []:
         if c_["clientId"] not in files and c_["clientId"] not in UNMANAGED_CLIENTS:
             print("info  %s: live client with no host file (not managed by client files; a restart leaves it alone)" % c_["clientId"], file=out)
@@ -4249,6 +4909,16 @@ def build_parser():
                     % ("|".join(ONBOARDING_OPERATIONS), ",".join(ONBOARDING_DEFAULT_OPS)))
     ob.add_argument("--require-dpop", action="store_true", help="bind its tokens to a key the page holds (DPoP): the page must send DPoP proofs")
     ob.set_defaults(fn=cmd_onboarding_client_setup)
+    hw = sp.add_parser("handoff-worker-setup", help="create or converge the hand-off intake worker client (config handoffIntake): "
+                       "service account only, no roles, one optional scope with one audience mapper; secret to a root 0600 file")
+    hw.add_argument("--rotate-secret", action="store_true", help="give it a new client secret (the old one stops working at once)")
+    hw.set_defaults(fn=cmd_handoff_worker_setup)
+    ho = sp.add_parser("handoffs", help="list an application's open hand-offs (with the suggested command for each), or record an "
+                       "outcome: handoffs done|refused <id> [--note ...]. Never changes an account")
+    ho.add_argument("action", nargs="?", choices=["list", "done", "refused"], default="list")
+    ho.add_argument("id", nargs="?", help="done / refused: the hand-off's id, as listed")
+    ho.add_argument("--note", help="done / refused: at most %d characters, no run of ten digits (required for refused)" % HANDOFF_NOTE_MAX)
+    ho.set_defaults(fn=cmd_handoffs)
     rb = sp.add_parser("delegation-rollback", help="ROLLBACK ONLY: back to one tree-wide permission (refused once a tree holds a group its pre-split delegate must not write)")
     rb.set_defaults(fn=cmd_delegation_rollback)
     gr = sp.add_parser("grant"); gr.add_argument("username"); gr.add_argument("roles", nargs="+", help="idp-admin | idp-user-manager | idp-auditor | <app>-user-manager | <client>:<ROLE>")
