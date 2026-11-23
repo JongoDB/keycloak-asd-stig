@@ -26,7 +26,7 @@ if os.path.exists(req):
         try:
             age = time.time() - int(open(os.path.join(d, ".started")).read().strip())
         except (OSError, ValueError):
-            age = 0
+            age = float("inf")   # no start time: treat the grace as elapsed (never-ready would bring back the kill loop)
         if grace < 0 or age < grace:
             print("not ready: %s%s" % (what, " (ready without them after the %ds grace)" % grace if grace >= 0 else ""))
             sys.exit(1)

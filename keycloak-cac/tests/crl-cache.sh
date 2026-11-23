@@ -57,7 +57,11 @@ out=$(CAC_CRL_READY_GRACE=600 health) || true
 echo "$out" | grep -q "not ready: 1 of 2 CRLs not installed: DODROOTCA6.crl (ready without them after the 600s grace)" && pass "within a longer grace: still not ready, names it and the grace" || no "grace 600: $out"
 out=$(CAC_CRL_READY_GRACE=-1 health) || true
 echo "$out" | grep -q "not ready: 1 of 2 CRLs not installed" && pass "CAC_CRL_READY_GRACE=-1: never ready without every CRL" || no "grace -1: $out"
-touch $D/.crl-loaded
+rm -f $D/.started; out=$(CAC_CRL_READY_GRACE=600 health) || true
+echo "$out" | grep -q "CRLs not installed" && no "no .started: $out" || pass "no (or unreadable) .started: the grace counts as elapsed - never a never-ready kill loop"
+echo garbage > $D/.started; out=$(CAC_CRL_READY_GRACE=600 health) || true
+echo "$out" | grep -q "CRLs not installed" && no "unreadable .started: $out" || pass "unreadable .started: same"
+date +%s > $D/.started; touch $D/.crl-loaded
 rm $D/.crl-required; out=$(health) || true
 echo "$out" | grep -q "CRLs not installed" && no "no .crl-required (file/ocsp mode): $out" || pass "no .crl-required (file, ocsp, none modes): unchanged behavior"
 
@@ -83,4 +87,7 @@ bash "$PKI" crl-save mono/live mono/cache mono/names 2>/dev/null
 cp mono/old.crl mono/live/DODIDCA_70.crl; cp mono/new.crl mono/src/DODIDCA_70.crl
 bash "$PKI" crl-sync mono/src anchors mono/live 2>/dev/null
 [ "$(sha256sum < mono/live/DODIDCA_70.crl)" = "$(sha256sum < mono/new.crl)" ] && pass "crl-sync: a newer CRL does replace the installed older one" || no "crl-sync newer"
+printf 'not a CRL' > mono/live/DODIDCA_70.crl; cp mono/new.crl mono/cache/DODIDCA_70.crl
+bash "$PKI" crl-save mono/live mono/cache mono/names 2>mono/log
+grep -q "WARN STIG-CRL-DATE-UNREADABLE DODIDCA_70.crl" mono/log && pass "an unparsable thisUpdate is logged (STIG-CRL-DATE-UNREADABLE), never silently treated as older" || no "date warning: $(cat mono/log)"
 exit $fail

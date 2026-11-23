@@ -40,6 +40,9 @@ if [ -n "$TAG" ]; then
   [ -f "$LOCK" ] || : > "$LOCK"
   TS=$(date -u +%Y%m%dT%H%M%SZ)
   cp -p "$ENVF" "$ENVF.prev-$TS"; cp -p "$LOCK" "$LOCK.prev-$TS"
+  for f in "$ENVF" "$LOCK"; do   # keep the last 5 of each (the UTC time in the name sorts by age)
+    ls -1 "$f".prev-* 2>/dev/null | sort -r | tail -n +6 | while read -r old; do rm -f "$old"; done
+  done
   trap 'rc=$?; [ "$rc" -eq 0 ] || log "ROLLBACK (only if the image itself is at fault): cp -p $ENVF.prev-$TS $ENVF && cp -p $LOCK.prev-$TS $LOCK && $C up -d --no-deps keycloak   - or: idp-restart --image ${OLD:-<old tag>}"; exit "$rc"' EXIT
   awk -v t="$TAG" 'BEGIN{d=0} /^KEYCLOAK_IMAGE=/{print "KEYCLOAK_IMAGE=" t; d=1; next} {print} END{if(!d) print "KEYCLOAK_IMAGE=" t}' \
     "$ENVF" > "$ENVF.new" && mv -f "$ENVF.new" "$ENVF"

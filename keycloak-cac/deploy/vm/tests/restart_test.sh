@@ -88,6 +88,15 @@ grep -qx "KEYCLOAK_IMAGE=idp/keycloak-cac:26.8.2-fips-aaaaaaa" "$W/srv/compose/.
 reset; STUB_RUN_ID=$OLDID run --image idp/keycloak-cac:26.8.2-fips-bbbbbbb; rc=$?
 [ $rc -ne 0 ] && grep -q ROLLBACK "$W/err" && ok "--image, container runs another image: rollback printed too" || no "mismatch rollback"
 
+# the .prev copies are pruned to the last 5 of each
+reset; for t in 20260101T000001Z 20260101T000002Z 20260101T000003Z 20260101T000004Z 20260101T000005Z 20260101T000006Z 20260101T000007Z; do
+  echo old > "$W/srv/compose/.env.prev-$t"; echo old > "$W/srv/compose/images.lock.prev-$t"; done
+run --image idp/keycloak-cac:26.8.2-fips-bbbbbbb; rc=$?
+ne=$(ls "$W"/srv/compose/.env.prev-* | wc -l); nl=$(ls "$W"/srv/compose/images.lock.prev-* | wc -l)
+[ $rc -eq 0 ] && [ "$ne" -eq 5 ] && [ "$nl" -eq 5 ] && [ ! -e "$W/srv/compose/.env.prev-20260101T000003Z" ] && [ -e "$W/srv/compose/.env.prev-20260101T000004Z" ] \
+  && grep -qx "KEYCLOAK_IMAGE=idp/keycloak-cac:26.8.2-fips-aaaaaaa" "$(ls "$W"/srv/compose/.env.prev-* | sort | tail -1)" \
+  && ok ".prev copies pruned to the last 5 of each; the newest is the pair just replaced" || no "prune: $ne $nl $(ls -A "$W/srv/compose")"
+
 # healthy but DEGRADED (past CAC_CRL_READY_GRACE, a CRL still missing): waits for the full set, then warns, exit 0
 reset; STUB_HEALTH_OUT="ready DEGRADED: 1 of 20 CRLs not installed: DODIDCA_70.crl - cards of those CAs are refused until they arrive" \
   run --image idp/keycloak-cac:26.8.2-fips-bbbbbbb; rc=$?

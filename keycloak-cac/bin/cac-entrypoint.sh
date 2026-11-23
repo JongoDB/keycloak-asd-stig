@@ -13,6 +13,8 @@ die() { log "ERROR $*"; exit 1; }
 truthy() { case "${1,,}" in 1|true|yes|on) return 0;; *) return 1;; esac; }
 [ "${1:-}" = "--help" ] && { sed -n '/<!-- env-start -->/,/<!-- env-end -->/p' /opt/keycloak-cac/README.md | grep -v '^<!--'; exit 0; }
 [ "${1:-}" = "health" ] && exec python3 "$TOOLS/cac-health.py"
+# container start, for cac-health.py's CAC_CRL_READY_GRACE: written first, so a slow (FIPS) start-up counts against it
+mkdir -p "$D" && date +%s > "$D/.started"
 
 # ---- 1. secrets: KC_X_FILE / CAC_X_FILE -> KC_X / CAC_X for secret-like names (paths such as
 #         KC_HTTPS_CERTIFICATE_FILE are Keycloak options and are left alone)
@@ -279,7 +281,7 @@ crl_loop() {
   done
 }
 # ---- 5./6. worker: apply the realm once Keycloak is ready, then keep revocation data fresh
-rm -f "$D/.applied" "$D/.crl-loaded"; date +%s > "$D/.started"   # cac-health.py: CAC_CRL_READY_GRACE counts from here
+rm -f "$D/.applied" "$D/.crl-loaded"
 if truthy "${CAC_APPLY:-true}"; then
   ( if apply; then crl_loop; else log "ERROR STIG apply failed: stopping (fail secure)"; kill -TERM $KC_PID; fi ) </dev/null &
 else

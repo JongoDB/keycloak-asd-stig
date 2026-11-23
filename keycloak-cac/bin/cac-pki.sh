@@ -38,11 +38,15 @@ same_file() { [ -f "$1" ] && [ -f "$2" ] && [ "$(sha256sum < "$1")" = "$(sha256s
 # A CRL never goes backwards: one whose thisUpdate is EARLIER than the installed (or cached) copy's is not installed,
 # even though its signature verifies - CRLs are fetched over plain HTTP, so an old one can be replayed, and an old one
 # planted in the cache must not be restored over a newer one. STIG-CRL-OLDER names it; the newer copy stays.
-crl_this_update() { # crl -> epoch seconds of thisUpdate, 0 if unreadable
-  local t; t=$(openssl crl -inform DER -in "$1" -noout -lastupdate 2>/dev/null || openssl crl -in "$1" -noout -lastupdate 2>/dev/null) || { echo 0; return; }
-  date -d "${t#lastUpdate=}" +%s 2>/dev/null || echo 0
+crl_this_update() { # crl -> epoch seconds of thisUpdate; 0 (and a warning) if it cannot be read
+  local t e; t=$(openssl crl -inform DER -in "$1" -noout -lastupdate 2>/dev/null || openssl crl -in "$1" -noout -lastupdate 2>/dev/null || true)
+  e=""; case "$t" in lastUpdate=?*) e=$(date -d "${t#lastUpdate=}" +%s 2>/dev/null || true);; esac   # date -d "" is today
+  case "$e" in ''|*[!0-9]*) log "WARN STIG-CRL-DATE-UNREADABLE $(basename "$1"): thisUpdate not parsed (\"$t\") - no older-CRL protection for this file"; echo 0;;
+               *) echo "$e";; esac
 }
-crl_older() { [ -s "$2" ] && [ "$(crl_this_update "$1")" -lt "$(crl_this_update "$2")" ]; }   # new installed
+# new installed -> 0 if <new> is older. An unreadable date never makes a CRL "older" (that would block every update).
+crl_older() { [ -s "$2" ] || return 1; local a b; a=$(crl_this_update "$1"); b=$(crl_this_update "$2")
+  [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && [ "$a" -lt "$b" ]; }
 fp_of() { openssl x509 -in "$1" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d :; }
 
 split_pem() { # file.pem outdir prefix  -> one file per certificate
