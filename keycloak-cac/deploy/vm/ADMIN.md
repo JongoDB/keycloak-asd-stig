@@ -94,6 +94,17 @@ sudo idp-admin.py link-cac jane.doe --bind-edipi --confirm-direct-bind   # only 
   attach one. A card bound by presentation is not "set by the operator's tooling" in `binding_provenance` (Keycloak
   records the person, not the tool, as the writer), so a later `promote` of that account refuses it until it is
   reviewed (`--clear-bindings` removes it). That outcome is deliberate.
+  The extension enforces the same rule itself, whoever wrote the request: an "any card" request on an account that
+  is an IdP administrator (any effective realm-management role, or a member of `/roles` or a group beneath it) is
+  refused at the sign-in, before the page is shown, and again at bind time. It is cleared and audited. `link-cac`
+  records `<ms> admin` when the account was an administrator at the request, so an account demoted since then still
+  gets a named card only.
+- **Who can write the request.** `stig_card_link` is declared admin-only with `cac-identity-guard`, so through the
+  admin API only a realm administrator (`realm-admin`) or a master-realm administrator may set it. Delegates and user
+  managers cannot, and neither can the onboarding client, whose admin-API profile allows only the `stig-accounts`
+  calls and group membership. `stig-accounts` never writes it, the person's own account API refuses it (read-only),
+  and it is concealed from delegates. The extension ignores a link request while the user profile does not guard
+  the attribute this way (`STIG-CARD-LINK-UNGUARDED`; run `roles-setup`).
 - **Audit.** Each attempt (requested, bound, cancelled, refused, or failed) writes one `STIG-LINK-CAC` line to the
   system log (facility auth, tag `idp-admin`): `user`, `mode` (present / reserve / bind / cancel), `card` (masked,
   `any`, `invalid`, or `-`), `replace`, `allow_admin`, `operator`, `result`, and `reason` for a refusal.

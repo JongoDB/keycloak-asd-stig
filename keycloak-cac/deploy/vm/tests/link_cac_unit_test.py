@@ -249,6 +249,11 @@ kc = FakeKC(); kc.add("boss.admin", groups=["/roles/idp-admin"])
 code, out, al = run(kc, ["boss.admin", "--allow-admin", "--edipi"], E2 + "\n")
 check("admin: --allow-admin --edipi -> a reserved request (the holder must present exactly that card)",
       code is None and kc.rep("boss.admin")["attributes"].get("cac_edipi_pending") == [E2], repr(code))
+check("admin: the request records that the account was an administrator (\"<ms> admin\": the step then binds a named card only)",
+      re.fullmatch(r"[0-9]{13} admin", (kc.rep("boss.admin")["attributes"].get("stig_card_link") or [""])[0] or ""),
+      kc.rep("boss.admin")["attributes"].get("stig_card_link"))
+kc_ = FakeKC(); kc_.add("jane.doe"); run(kc_, ["jane.doe"])
+check("admin: a non-administrator's request is the plain time", re.fullmatch(r"[0-9]{13}", kc_.rep("jane.doe")["attributes"]["stig_card_link"][0]))
 check("admin: ... audited allow_admin=yes mode=reserve", audited(al, "allow_admin=yes", "mode=reserve", "result=requested"), al)
 
 # ---- --replace: the old card removed, sessions ended
@@ -289,6 +294,7 @@ kc = FakeKC(); now = int(time.time() * 1000)
 kc.add("fresh", attrs={"stig_card_link": [str(now - DAY)]})
 kc.add("stale", attrs={"stig_card_link": [str(now - 8 * DAY)], "cac_edipi_pending": [E1]})
 kc.add("garbled", attrs={"stig_card_link": ["soon"]})
+kc.add("fresh.admin", attrs={"stig_card_link": [str(now - DAY) + " admin"], "cac_edipi_pending": [E2]})
 kc.add("plain")
 exp, pend = M.card_links(kc, now)
 check("guard: an expired request -> STIG-CARD-LINK-EXPIRED (exit 2), with the cancel command",
@@ -296,6 +302,8 @@ check("guard: an expired request -> STIG-CARD-LINK-EXPIRED (exit 2), with the ca
 check("guard: an unreadable request time counts as expired", any("user=garbled" in l for l in exp), exp)
 check("guard: a live request -> information only", pend and pend[0].startswith("info  CARD-LINK-PENDING user=fresh") and "any card" in pend[0]
       and not any("fresh" in l for l in exp), pend)
+check("guard: a live administrator's request (\"<ms> admin\") is read as live", any("user=fresh.admin" in l for l in pend)
+      and not any("fresh.admin" in l for l in exp), pend)
 check("guard: no card number in a guard line", not any(TEN.search(l) for l in exp + pend))
 
 # ---- the whole run: never a ten-digit run in any output, refusal or audit line

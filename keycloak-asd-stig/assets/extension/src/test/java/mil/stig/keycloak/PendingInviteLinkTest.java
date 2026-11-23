@@ -143,6 +143,17 @@ public final class PendingInviteLinkTest {
         t("link request: expired after 7 days", AccountsPolicy.linkLive(NOW - 8 * DAY, NOW), false);
         t("link request: one dated in the future (beyond 5 min) is not live", AccountsPolicy.linkLive(NOW + DAY, NOW), false);
         t("link request: no time = not live", AccountsPolicy.linkLive(null, NOW), false);
+        t("link request: \"<ms> admin\" carries the time", AccountsPolicy.linkTime(NOW + " admin"), NOW);
+        t("link request: \"<ms> admin\" records an administrator", AccountsPolicy.linkForAdmin(NOW + " admin"), true);
+        t("link request: a plain time records none", AccountsPolicy.linkForAdmin(String.valueOf(NOW)), false);
+        t("link request: any other suffix is no time", AccountsPolicy.linkTime(NOW + " root"), null);
+        t("admin: any card on an account that is an administrator NOW -> refused",
+                AccountsPolicy.adminLinkRefusal(null, false, true) != null, true);
+        t("admin: any card on an account that WAS an administrator at the request -> refused",
+                AccountsPolicy.adminLinkRefusal(null, true, false) != null, true);
+        t("admin: a named card on an administrator -> allowed (link-cac --allow-admin --edipi)",
+                AccountsPolicy.adminLinkRefusal("1234567890", true, true), null);
+        t("admin: any card on a non-administrator -> allowed", AccountsPolicy.adminLinkRefusal(null, false, false), null);
         t("present: the named card, free -> bind", AccountsPolicy.presentRefusal("1234567890", "1234567890", null, false, false, true), null);
         t("present: any card (a link request without one), free -> bind", AccountsPolicy.presentRefusal(null, "1234567890", null, false, false, true), null);
         t("present: another card than the administrator named -> refused",

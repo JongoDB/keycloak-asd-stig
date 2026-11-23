@@ -84,10 +84,22 @@ final class AccountsPolicy {
      *  from the request - not from the account's creation, as an invite's pending card is. */
     static final String LINK_ATTRIBUTE = "stig_card_link";
     static final int LINK_DAYS = 7;
-    /** The time a link request records, or null (absent, or not a plain epoch-ms). */
+    /** The time a link request records, or null (absent, or not "<epoch-ms>" / "<epoch-ms> admin"). */
     static Long linkTime(String v) {
-        if (v == null || !v.trim().matches("[0-9]{1,15}")) return null;
-        return Long.parseLong(v.trim());
+        if (v == null || !v.trim().matches("[0-9]{1,15}( admin)?")) return null;
+        return Long.parseLong(v.trim().split(" ")[0]);
+    }
+    /** The request was made while the account was an IdP administrator ("<epoch-ms> admin"). */
+    static boolean linkForAdmin(String v) {
+        return v != null && v.trim().matches("[0-9]{1,15} admin");
+    }
+    /** Why a link request must not run for this account (null: it may). An IdP administrator - when the request was
+     *  made, or now - gets only a card an administrator NAMED (expected != null), never "any card": whoever could
+     *  write the request must not be able to make an administrator's next sign-in bind the card in the reader. */
+    static String adminLinkRefusal(String expected, boolean adminAtRequest, boolean adminNow) {
+        if (expected == null && (adminAtRequest || adminNow))
+            return "an IdP administrator gets only a card an administrator named (link-cac --allow-admin --edipi), never any card";
+        return null;
     }
     /** A link request is live for 7 days from its time; one dated more than five minutes in the future is not. */
     static boolean linkLive(Long requestMs, long nowMs) {

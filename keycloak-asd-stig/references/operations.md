@@ -339,6 +339,12 @@ may stay off.
 - With `<card attribute>_pending` also set, only that card binds, as for an invite.
 - Without it, the card the holder presents binds.
 
+The request counts only while the user profile declares `stig_card_link` with `cac-identity-guard` (realm
+administrators only); otherwise the extension ignores it (`STIG-CARD-LINK-UNGUARDED`). An IdP administrator (any
+effective realm-management role, or a member of `/roles` or a group beneath it), or an account recorded as one when
+the request was made (`<ms> admin`), never binds "any card". That request is refused before the page is shown and
+again at bind time, then cleared and audited. Only a named card binds.
+
 A card is never bound if another account holds it, another account's pending value names it, or the account already
 holds a different card. A bind or a refusal clears the request, and each is logged with `request=link`
 (`STIG-CARD-PRESENT-BOUND` / `-REFUSED`, last four digits) and recorded as an admin event.

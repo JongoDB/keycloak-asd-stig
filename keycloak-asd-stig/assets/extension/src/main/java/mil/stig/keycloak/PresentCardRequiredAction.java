@@ -112,11 +112,13 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
      *  and whether it is an administrator's link request rather than an invite. */
     record Request(String attr, String expected, boolean link) { }
 
-    /** The account's live request, or null. An account carrying a link request is judged by it alone (live or not). */
-    static Request request(RealmModel realm, UserModel u, long nowMs) {
+    /** The account's live request, or null. An account carrying a link request is judged by it alone (live or not). A
+     *  link request counts only while the realm's user profile declares the request attribute guarded by
+     *  cac-identity-guard (only realm administrators may write it): otherwise it is ignored (fail closed). */
+    static Request request(KeycloakSession session, RealmModel realm, UserModel u, long nowMs) {
         String marker = u.getFirstAttribute(AccountsPolicy.LINK_ATTRIBUTE);
         if (marker != null && !marker.isBlank()) {
-            if (!AccountsPolicy.linkLive(AccountsPolicy.linkTime(marker), nowMs)) return null;
+            if (!AccountsPolicy.linkLive(AccountsPolicy.linkTime(marker), nowMs) || !linkGuarded(session)) return null;
             AuthenticatorConfigModel cfg = x509Config(realm);
             String ca = cfg == null || cfg.getConfig() == null ? null : AccountsPolicy.cardAttribute(cfg.getConfig().get(USER_ATTR_KEY));
             String p = ca == null ? null : u.getFirstAttribute(ca + AccountsPolicy.PENDING_SUFFIX);
@@ -124,6 +126,45 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
         }
         String p = livePending(realm, u, nowMs);
         return p == null ? null : new Request(cardAttr(realm), p, false);
+    }
+
+    /** The user profile declares the link-request attribute with the cac-identity-guard validator (writes by realm
+     *  administrators only, through the admin API). */
+    static boolean linkGuarded(KeycloakSession session) {
+        try {
+            org.keycloak.userprofile.UserProfileProvider up = session.getProvider(org.keycloak.userprofile.UserProfileProvider.class);
+            org.keycloak.representations.userprofile.config.UPAttribute at = up == null ? null : up.getConfiguration().getAttribute(AccountsPolicy.LINK_ATTRIBUTE);
+            return at != null && at.getValidations() != null && at.getValidations().containsKey(CacIdentityGuardValidatorFactory.ID);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** An IdP administrator: any realm-management role (effectively), or a member of /roles or any group beneath it. */
+    static boolean idpAdministrator(RealmModel realm, UserModel u) {
+        if (StigAdministrators.isAdministrator(realm, u)) return true;
+        return u.getGroupsStream().anyMatch(g -> {
+            org.keycloak.models.GroupModel t = g;
+            for (int d = 0; t.getParent() != null && d < 32; d++) t = t.getParent();
+            return "roles".equals(t.getName());
+        });
+    }
+
+    /** An "any card" link request on an IdP administrator (one when the request was made, or now): refused, settled and
+     *  audited here, before any page is shown or anything bound. True when it was refused. */
+    private boolean refusedForAdministrator(RequiredActionContext context, Request req) {
+        if (!req.link()) return false;
+        UserModel u = context.getUser(); RealmModel realm = context.getRealm();
+        String why = AccountsPolicy.adminLinkRefusal(req.expected(),
+                AccountsPolicy.linkForAdmin(u.getFirstAttribute(AccountsPolicy.LINK_ATTRIBUTE)), idpAdministrator(realm, u));
+        if (why == null) return false;
+        if (req.attr() != null) u.removeAttribute(req.attr() + AccountsPolicy.PENDING_SUFFIX);
+        u.removeAttribute(AccountsPolicy.LINK_ATTRIBUTE);
+        LOG.warnf("STIG-CARD-PRESENT-REFUSED realm=%s user=%s request=link pending=any: %s - nothing bound, the request cleared",
+                realm.getName(), u.getUsername(), why);
+        audit(context, "{\"stig\":\"card refused: " + why + "\",\"request\":\"link\",\"card\":\"any\"}");
+        context.success();
+        return true;
     }
 
     static String shown(Request r) {
@@ -135,17 +176,23 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
         UserModel u = context.getUser();
         // not again in the sign-in where the person just skipped it (Keycloak re-evaluates triggers after each action)
         if (context.getAuthenticationSession() != null && context.getAuthenticationSession().getAuthNote(SKIPPED) != null) return;
-        Request r = request(context.getRealm(), u, Time.currentTimeMillis());
+        Request r = request(context.getSession(), context.getRealm(), u, Time.currentTimeMillis());
+        String marker = u.getFirstAttribute(AccountsPolicy.LINK_ATTRIBUTE);
+        if (r == null && marker != null && !marker.isBlank() && AccountsPolicy.linkLive(AccountsPolicy.linkTime(marker), Time.currentTimeMillis()))
+            LOG.warnf("STIG-CARD-LINK-UNGUARDED realm=%s user=%s: a link request is ignored - the user profile does not declare %s with "
+                    + "cac-identity-guard (run the operator's roles-setup)", context.getRealm().getName(), u.getUsername(), AccountsPolicy.LINK_ATTRIBUTE);
         if (r != null && (r.link() || u.getFirstAttribute(IdpLinkByAdminAttributeAuthenticatorFactory.ATTR) != null))
             u.addRequiredAction(ID);
     }
 
     @Override
     public void requiredActionChallenge(RequiredActionContext context) {
-        if (request(context.getRealm(), context.getUser(), Time.currentTimeMillis()) == null) {
+        Request req = request(context.getSession(), context.getRealm(), context.getUser(), Time.currentTimeMillis());
+        if (req == null) {
             context.success();                       // nothing (left) to bind
             return;
         }
+        if (refusedForAdministrator(context, req)) return;
         context.challenge(page(context, null));
     }
 
@@ -160,7 +207,7 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
                 : certs[0].getSubjectX500Principal().getName());
         f.add("isUserEnabled", "true");
         org.keycloak.forms.login.LoginFormsProvider form = context.form().setFormData(f);
-        Request r = request(context.getRealm(), context.getUser(), Time.currentTimeMillis());
+        Request r = request(context.getSession(), context.getRealm(), context.getUser(), Time.currentTimeMillis());
         form.setAttribute("cardIntro", r != null && r.link() ? "stigPresentCardIntroLink" : "stigPresentCardIntro");
         // with a card port: our own page - "Sign in with CAC/PIV" posts to the card port (a new connection and TLS handshake,
         // which asks for the certificate), "Continue without the card" posts to this page's OWN origin (the form's
@@ -189,8 +236,9 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
     @Override
     public void processAction(RequiredActionContext context) {
         RealmModel realm = context.getRealm(); UserModel u = context.getUser(); KeycloakSession session = context.getSession();
-        Request req = request(realm, u, Time.currentTimeMillis());
+        Request req = request(session, realm, u, Time.currentTimeMillis());
         if (req == null || (!req.link() && req.attr() == null)) { context.success(); return; }
+        if (refusedForAdministrator(context, req)) return;              // checked again at bind time
         String pending = req.expected(), ca = req.attr(), kind = req.link() ? "link" : "invite";
         if (context.getHttpRequest().getDecodedFormParameters().containsKey("cancel")) {
             LOG.infof("STIG-CARD-PRESENT-SKIPPED realm=%s user=%s request=%s card=%s: asked again at the next sign-in, until the %s expires",

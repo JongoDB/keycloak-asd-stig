@@ -3585,7 +3585,7 @@ def cmd_link_entra(a):
 # ------------------------------------------------------------------------- link-cac: a card for an EXISTING account
 CARD_ATTR = "cac_edipi"                   # the attribute the realm's X.509 step maps cards by (checked live)
 CARD_PENDING = CARD_ATTR + "_pending"     # the card a request names: only that card binds (reserved meanwhile)
-CARD_LINK = "stig_card_link"              # stig-extensions AccountsPolicy.LINK_ATTRIBUTE: "<epoch-ms>" of the request
+CARD_LINK = "stig_card_link"              # stig-extensions AccountsPolicy.LINK_ATTRIBUTE: "<epoch-ms>[ admin]" of the request
 PRESENT_CARD = "stig-present-card"        # stig-extensions PresentCardRequiredAction
 CARD_LINK_DAYS = 7                        # AccountsPolicy.LINK_DAYS: a request is live this long from the time it was made
 EDIPI_RE = re.compile(r"[0-9]{10}")       # used with fullmatch
@@ -3718,7 +3718,8 @@ def link_cac(a, mode, st):
         if nat.get(CARD_LINK) or nat.get(CARD_PENDING) or PRESENT_CARD in (now.get("requiredActions") or []):
             raise RuntimeError("%s: the link request is still there after the cancel" % name)
         return "cancelled", "%s: link request cancelled (no card was bound; the present-card step is no longer asked)" % name
-    if is_admin(kc, u["id"]):
+    admin = is_admin(kc, u["id"])
+    if admin:
         if not a.allow_admin:
             raise LinkRefused("%s is an IdP administrator: a card is an administrator's strongest sign-in. If that is "
                               "intended: link-cac %s --allow-admin --edipi (only the card you verified binds, and only when "
@@ -3767,7 +3768,9 @@ def link_cac(a, mode, st):
     if mode == "bind":
         attrs[CARD_ATTR] = [edipi]
     else:
-        attrs[CARD_LINK] = [str(now_ms())]
+        # "<ms> admin" records that the account was an IdP administrator when asked: the present-card step then binds
+        # only a named card, even if the account is no administrator by the time it is presented
+        attrs[CARD_LINK] = [str(now_ms()) + (" admin" if admin else "")]
         if edipi:
             attrs[CARD_PENDING] = [edipi]
         ra.append(PRESENT_CARD)
@@ -3810,7 +3813,8 @@ def card_links(kc, now_ms_=None):
         if not v:
             continue
         named = "a named card" if (at.get(CARD_PENDING) or [""])[0] else "any card"
-        age = (now_ - int(v)) / 86_400_000 if v.isdigit() else None
+        t_ = v.split()[0] if re.fullmatch(r"[0-9]{1,15}( admin)?", v) else ""
+        age = (now_ - int(t_)) / 86_400_000 if t_ else None
         if age is None or age > CARD_LINK_DAYS or age < -1 / 288:
             expired.append("STIG-CARD-LINK-EXPIRED user=%s: its link request (link-cac, %s) was not completed in %d days (%s); "
                            "it is ignored - link-cac %s --cancel, or request again" % (
