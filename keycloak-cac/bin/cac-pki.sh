@@ -7,7 +7,9 @@
 #   cac-pki.sh compile <anchors-dir> <out-dir>    client-ca.p12 (DoD-only client trust store), ca-subject-dns.txt,
 #                                                 crl-names.txt (CRL file names the issuing CAs publish)
 #   cac-pki.sh crl-fetch <anchors-dir> <crl-dir>  download + signature-check the CRLs of the issuing CAs (online mode)
-#   cac-pki.sh crl-sync  <src-dir> <anchors-dir> <crl-dir>   copy signature-checked CRLs from a mounted dir (air-gapped)
+#   cac-pki.sh crl-sync  <src-dir> <anchors-dir> <crl-dir> [expired-list]   copy signature-checked CRLs from a mounted
+#                                                 dir (air-gapped; the cache); expired-list gets the name of every
+#                                                 installed CRL past its nextUpdate
 #   cac-pki.sh crl-prune <crl-dir> <anchors-dir>  delete CRLs whose issuer is no longer an anchor (also after fetch/sync)
 #   cac-pki.sh crl-save <crl-dir> <cache-dir> <crl-names.txt>  write the expected installed CRLs to a persistent cache
 #                                                 (CAC_CRL_CACHE_DIR); a new container installs them with crl-sync
@@ -177,9 +179,19 @@ crl_name_of() { # anchor.pem [log] -> DISA CRL base name (DOD SW CA-75 -> DODSWC
   return 1
 }
 
-crl_ok() { # crl anchors-pem -> installs only if the signature verifies against a trusted anchor
-  local fmt=DER; openssl crl -inform DER -in "$1" -noout 2>/dev/null || fmt=PEM
-  openssl crl -inform $fmt -in "$1" -CAfile "$2" -noout 2>&1 | grep -q 'verify OK'
+# PEM if a PEM CRL header is in the first 4 KiB (text may precede it), otherwise DER - told without parsing the CRL:
+# a DoD CRL is up to ~24 MB and every full parse costs about a second on a small FIPS host.
+crl_fmt() { head -c 4096 "$1" | grep -aq -- '-----BEGIN X509 CRL-----' && echo PEM || echo DER; }
+# crl past nextUpdate (or without one)? -> 0. $2: openssl output already holding "nextUpdate=..." (saves a parse).
+crl_expired() { local nu="${2:-}" e
+  [ -n "$nu" ] || nu=$(openssl crl -inform "$(crl_fmt "$1")" -in "$1" -noout -nextupdate 2>/dev/null || true)
+  nu=$(sed -n 's/^nextUpdate=//p' <<<"$nu"); e=$(date -d "$nu" +%s 2>/dev/null || echo 0); [ -n "$nu" ] || e=0
+  [ "$e" -le "$(date +%s)" ]; }
+crl_ok() { # crl anchors-pem [expired-list [name]] -> 0 only if the signature verifies against a trusted anchor (one
+           # parse); with expired-list, appends name (default: the file's) to it when the CRL is past its nextUpdate
+  local out; out=$(openssl crl -inform "$(crl_fmt "$1")" -in "$1" -CAfile "$2" -noout -nextupdate 2>&1 || true)
+  grep -q 'verify OK' <<<"$out" || return 1
+  [ -z "${3:-}" ] || ! crl_expired "$1" "$out" || echo "${4:-$(basename "$1")}" >> "$3"
 }
 
 # Keycloak evaluates EVERY configured CRL on every card login, and one whose issuer is not a trust anchor throws
@@ -189,9 +201,11 @@ crl_ok() { # crl anchors-pem -> installs only if the signature verifies against 
 # key no longer verifies and is pruned (and the new one arrives with the next fetch; until then that CA's cards fail
 # closed). While both the old and the new CA certificate are anchors, CRLs from either key verify and are kept, and
 # Keycloak picks the CRL by issuer name - keep only the current CA certificate once DISA retires the old one.
-cmd_crl_prune() { # crl-dir anchors-dir -> delete every *.crl that does not verify against the current anchors
-  local d="$1" a="$2" w n=0; [ -d "$d" ] || return 0; w=$(mktemp -d); cat "$a"/*.pem > "$w/anchors.pem"
+cmd_crl_prune() { # crl-dir anchors-dir [verified-list] -> delete every *.crl that does not verify against the current
+                  # anchors; names in verified-list were just checked against them by the caller and are skipped
+  local d="$1" a="$2" v="${3:-}" w n=0; [ -d "$d" ] || return 0; w=$(mktemp -d); cat "$a"/*.pem > "$w/anchors.pem"
   for f in "$d"/*.crl; do [ -e "$f" ] || continue
+    [ -n "$v" ] && grep -qxF "$(basename "$f")" "$v" && continue
     crl_ok "$f" "$w/anchors.pem" || { rm -f "$f"; n=$((n+1)); log "STIG-CRL-PRUNED $(basename "$f"): issuer is not a current trust anchor - removed"; }
   done; rm -rf "$w"; [ $n -eq 0 ] || log "CRLs pruned: $n"
 }
@@ -202,27 +216,38 @@ cmd_crl_fetch() {
   for n in $(crl_names "$a"); do
     if curl -fsSL --retry 3 -m 180 -o "$w/$n.crl" "$CRL_BASE/$n.crl" && crl_ok "$w/$n.crl" "$w/anchors.pem"; then
       # unchanged bytes: leave the installed file alone, so Keycloak does not re-read and re-verify it
-      if same_file "$w/$n.crl" "$d/$n.crl"; then same=$((same+1)); rm -f "$w/$n.crl"
+      if same_file "$w/$n.crl" "$d/$n.crl"; then same=$((same+1)); rm -f "$w/$n.crl"; echo "$n.crl" >> "$w/.verified"
       elif crl_older "$w/$n.crl" "$d/$n.crl"; then log "STIG-CRL-OLDER $n.crl: the downloaded CRL is older than the installed one - kept the installed"; same=$((same+1)); rm -f "$w/$n.crl"
-      else mv -f "$w/$n.crl" "$d/.$n.crl.new" && mv -f "$d/.$n.crl.new" "$d/$n.crl"; ok=$((ok+1)); fi   # atomic swap
+      else mv -f "$w/$n.crl" "$d/.$n.crl.new" && mv -f "$d/.$n.crl.new" "$d/$n.crl"; ok=$((ok+1)); echo "$n.crl" >> "$w/.verified"; fi   # atomic swap
     else log "WARN $n.crl: download or signature check failed - keeping cached copy"; bad=$((bad+1)); rm -f "$w/$n.crl"; fi
   done
-  rm -rf "$w"; log "CRLs refreshed: $ok replaced, $same unchanged, $bad failed (from $CRL_BASE)"
-  cmd_crl_prune "$d" "$a"
+  log "CRLs refreshed: $ok replaced, $same unchanged, $bad failed (from $CRL_BASE)"
+  cmd_crl_prune "$d" "$a" "$w/.verified"; rm -rf "$w"
 }
 
-cmd_crl_sync() {
-  local src="$1" a="$2" d="$3" w; w=$(mktemp -d); mkdir -p "$d"; cat "$a"/*.pem > "$w/anchors.pem"
-  local ok=0
+cmd_crl_sync() { # src-dir anchors-dir crl-dir [expired-list]
+  # expired-list: every CRL left installed in crl-dir that is past its nextUpdate - whether it came from src-dir now or
+  # was there before (a persisted data directory)
+  local src="$1" a="$2" d="$3" x="${4:-}" w; w=$(mktemp -d); mkdir -p "$d"; cat "$a"/*.pem > "$w/anchors.pem"
+  local ok=0 n; : > "$w/.verified"
   for f in "$src"/*.crl "$src"/crl/*.crl; do
-    [ -e "$f" ] || continue
-    if same_file "$f" "$d/$(basename "$f")"; then ok=$((ok+1))   # unchanged: keep the installed file (no re-read by Keycloak)
-    elif crl_older "$f" "$d/$(basename "$f")"; then log "STIG-CRL-OLDER $(basename "$f"): older than the installed one - NOT installed"; ok=$((ok+1))
-    elif crl_ok "$f" "$w/anchors.pem"; then cp "$f" "$d/.$(basename "$f").new" && mv -f "$d/.$(basename "$f").new" "$d/$(basename "$f")"; ok=$((ok+1))
-    else log "STIG-CRL-UNTRUSTED $(basename "$f"): issuer not trusted or bad signature - NOT installed"; fi
+    [ -e "$f" ] || continue; n=$(basename "$f")
+    if same_file "$f" "$d/$n"; then ok=$((ok+1))   # unchanged: keep the installed file (no re-read by Keycloak)
+    elif crl_older "$f" "$d/$n"; then log "STIG-CRL-OLDER $n: older than the installed one - NOT installed"; ok=$((ok+1))
+    else
+      # the copy is what gets verified and installed - never the source after the check (it could change in between)
+      # (an unreadable source or a full disk is a refusal of that one file, never an abort: set -e, and the entrypoint)
+      if cp "$f" "$d/.$n.new" 2>/dev/null && crl_ok "$d/.$n.new" "$w/anchors.pem" "$x" "$n"; then mv -f "$d/.$n.new" "$d/$n"; ok=$((ok+1)); echo "$n" >> "$w/.verified"
+      else rm -f "$d/.$n.new"; log "STIG-CRL-UNTRUSTED $n: unreadable, issuer not trusted or bad signature - NOT installed"; fi
+    fi
   done
-  rm -rf "$w"; log "CRLs synced from $src: $ok installed"
-  cmd_crl_prune "$d" "$a"
+  log "CRLs synced from $src: $ok installed"
+  cmd_crl_prune "$d" "$a" "$w/.verified"
+  if [ -n "$x" ]; then   # installed CRLs this sync did not just check: past nextUpdate? (only a persisted directory has any)
+    for f in "$d"/*.crl; do [ -e "$f" ] || continue; n=$(basename "$f")
+      grep -qxF "$n" "$w/.verified" || ! crl_expired "$f" || echo "$n" >> "$x"; done
+  fi
+  rm -rf "$w"
 }
 
 cmd_crl_save() { # crl-dir cache-dir names-file -> cache holds exactly the expected CRLs that are installed
