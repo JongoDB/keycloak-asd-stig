@@ -42,11 +42,12 @@ idp-admin.example.json beside this script for every key). Commands that talk to 
   idp-admin.py delegate-setup <delegate> [--jwks-url U]   a membership-only delegate (config: "membershipOnly": true):
         its service-account client, writing membership of exactly the role groups the config lists for it, for accounts
         already in its application's tree; no realm-management role
-  idp-admin.py onboarding-client-setup --redirect-uri U [--max-auth-age 300]   the PUBLIC client an application page
+  idp-admin.py onboarding-client-setup --redirect-uri U [--client-id C] [--max-auth-age 300]   the PUBLIC client an application page
         (e.g. an application's own portal) uses to create, re-send, disable and move accounts with the signed-in user manager's OWN token:
         PKCE, one redirect, one CORS origin, no refresh token, scope mappings realm-management query-users+query-groups
         only, stig-extensions admin-API profile `account-onboarding` (only those calls; writes need a fresh sign-in).
         Its shape is recorded and guarded (drift -> disabled). Refused unless the deployed extension enforces the profile.
+        One client per page: idp-onboarding, or C from the config's onboarding.clientIds for another application's page.
   idp-admin.py delegate-client-setup <delegate> --jwks-url U [--alg ES256|RS256] | --client-secret
         a delegate (any configured delegation) to client-jwt with the app's JWKS (https, public
         name, resolved now), or back. Records it (guard / check-clients report a difference), regenerates the client
@@ -110,7 +111,10 @@ ADMIN_CONFIG_FILE = os.environ.get("IDP_ADMIN_CONFIG") or "/srv/idp/config/idp-a
 CONFIG_KEYS = {"applications", "entra", "smtp", "operatorSshHost", "repoClientsDir", "onboarding", "handoffIntake"}
 APP_KEYS = {"userManagerRole", "adoptable", "delegations", "preSplitDelegates"}
 DELEGATION_KEYS = {"groups", "name", "membershipOnly"}
-ENTRA_KEYS, SMTP_KEYS, ONBOARDING_KEYS = {"memberDomain", "displayName"}, {"host", "port", "from", "displayName"}, {"defaultApps"}
+ENTRA_KEYS, SMTP_KEYS, ONBOARDING_KEYS = {"memberDomain", "displayName"}, {"host", "port", "from", "displayName"}, {"defaultApps", "clientIds"}
+# The onboarding client every deployment has; onboarding.clientIds names more, one per application page (each its own
+# redirect and origin - a client has exactly one), all built, recorded and guarded the same way.
+DEFAULT_ONBOARDING_CLIENT = "idp-onboarding"
 HANDOFF_KEYS = {"url", "clientId", "audience", "scope", "app", "name"}
 # client scopes Keycloak ships (or this tooling relies on): never the name of the hand-off scope
 BUILTIN_SCOPES = {"openid", "profile", "email", "address", "phone", "offline_access", "roles", "web-origins", "acr",
@@ -193,6 +197,17 @@ def load_admin_config(path):
         for x in strs("onboarding.defaultApps", o["defaultApps"]) if "defaultApps" in o else []:
             if x not in apps:
                 no("onboarding.defaultApps %s is not an application" % x)
+        extra = strs("onboarding.clientIds", o["clientIds"]) if "clientIds" in o else []
+        if len(set(extra)) != len(extra):
+            no("onboarding.clientIds names a client twice")
+        for x in extra:
+            # never a built-in, this tooling's own (the default onboarding client included), an application, a delegate
+            # or the hand-off worker: the onboarding shape (and its guard) would otherwise be applied to - or drift-fix
+            # - a client that is something else
+            if x in CONFIG_RESERVED_IDS or x.endswith("-realm") or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", x):
+                no("onboarding.clientIds %r is reserved or not a client id" % x)
+            if x in set(apps) | set(delegates) or x == (c.get("handoffIntake") or {}).get("clientId"):
+                no("onboarding.clientIds %r is also an application, a delegate or the hand-off worker" % x)
     if "handoffIntake" in c:
         h = obj("handoffIntake", c["handoffIntake"], HANDOFF_KEYS)
         for k in sorted(HANDOFF_KEYS - {"name"}):
@@ -1560,7 +1575,7 @@ def cmd_delegate_client_setup(a):
 # realm-admin, whoever signs in. What it may do is still decided per person by FGAP (the user manager's delegation).
 # The expected shape of each such client is recorded in ONBOARDING_STATE (root-only) by onboarding-client-setup; the
 # guard compares the live client to it and, with --fix, DISABLES a drifted one (it holds nothing, so off is safe).
-ONBOARDING_CLIENT_IDS = ("idp-onboarding",)
+ONBOARDING_CLIENT_IDS = (DEFAULT_ONBOARDING_CLIENT,) + tuple((_AC.get("onboarding") or {}).get("clientIds") or ())
 ONBOARDING_STATE = "/srv/idp/state/onboarding-clients.json"
 ONBOARDING_PROFILE_ATTR, ONBOARDING_PROFILE = "stig.admin-api.profile", "account-onboarding"
 ONBOARDING_MAX_AGE_ATTR = "stig.admin-api.max-auth-age"

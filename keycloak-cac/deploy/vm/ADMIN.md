@@ -34,6 +34,7 @@ refuse to run without it, and unknown keys are refused like a typo. Start from
 | `applications.<client>.delegations.<delegate>.name` | display name of that delegate's client (optional) |
 | `applications.<client>.preSplitDelegates` | the delegates that existed before the per-group split; `delegation-rollback` keeps only these |
 | `onboarding.defaultApps` | the trees `onboarding-client-setup` records when no `--app` is given |
+| `onboarding.clientIds` | onboarding clients besides `idp-onboarding`, one per application page (a client has exactly one redirect and origin): `onboarding-client-setup --client-id <id> --redirect-uri <that page's callback> --app <its tree>`. Each is built, recorded and guarded exactly like `idp-onboarding` (drift disables that client alone); `tests/onboarding_live_check.py --client-id <id>` checks one. Never a built-in, an application, a delegate or the hand-off worker |
 | `entra.memberDomain`, `entra.displayName` | the one UPN domain whose tenant members may sign in through Entra (required by `entra`, or `--member-domain`), and the button label |
 | `smtp.host`, `smtp.port`, `smtp.from`, `smtp.displayName` | defaults for `smtp` (each is otherwise a required option) |
 | `handoffIntake.url` | an application's hand-off intake API (optional section): `GET <url>/handoffs?status=open`, `POST <url>/handoffs/<id>/outcome`. One plain https URL on a DNS name |

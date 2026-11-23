@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live check of the onboarding client `idp-onboarding` on the deployed image (operating guide, "Portal account
+"""Live check of an onboarding client (`idp-onboarding`, or --client-id one of the config's onboarding.clientIds) on the deployed image (operating guide, "Portal account
 administration", apply step 4). Runs ON the VM as root; joins the Keycloak container's network namespace itself.
 
 A throwaway person `t.onb.<stamp>` is made a user manager by the operator's tooling (idp-admin.py grant, all apps:
@@ -8,7 +8,7 @@ recorded redirect URI; the flow stops at the redirect, so nothing ever reaches a
   1. the token: azp idp-onboarding; realm-management roles exactly query-users + query-groups; allowed-origins exactly
      the recorded origin; no refresh token;
   2. a call outside the profile (GET clients) -> 403, with CORS for the portal's origin;
-  3. a read inside the profile (the /app-a group) -> 200 with Access-Control-Allow-Origin = the portal; the
+  3. a read inside the profile (the first tree the client serves, e.g. /app-a) -> 200 with Access-Control-Allow-Origin = the portal; the
      same call with another Origin -> refused (403), no CORS grant for it;
   4. a stale write (the token's authentication older than max-auth-age; the test waits for it) -> 401 with the RFC 9470
      challenge (insufficient_user_authentication, max_age), WWW-Authenticate exposed to the page. The access token
@@ -19,7 +19,7 @@ recorded redirect URI; the flow stops at the redirect, so nothing ever reaches a
 It changes nothing else and removes the person (and so its allowlist entry, at the guard run it ends with). The
 preflight through the path filter is checked from the operator Mac (the operating guide's curl line).
 
-  sudo python3 onboarding_live_check.py [--skill <keycloak-asd-stig skill dir>]
+  sudo python3 onboarding_live_check.py [--client-id <onboarding client>] [--skill <keycloak-asd-stig skill dir>]
 Run it under tmux or nohup: it waits out max-auth-age. A hang-up or SIGTERM still ends through the cleanup below; if
 the run does not end with its "cleanup: ... deleted" line, run tests/cleanup_test_fixtures.py (it removes t.onb.*).
 """
@@ -41,9 +41,13 @@ socket.getaddrinfo = lambda h, p, *r, **k: _gai("127.0.0.1", PORT, *r, **k) if h
 BASE = "https://%s" % HOST
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import persona      # noqa: E402
 sys.path.insert(0, os.path.join(SKILL, "scripts")); import e2e_check as E            # noqa: E402
-OB = M.ONBOARDING_CLIENT_IDS[0]
+# --client-id: which onboarding client to check (default the first, idp-onboarding); any of the config's onboarding.clientIds
+OB = sys.argv[sys.argv.index("--client-id") + 1] if "--client-id" in sys.argv else M.ONBOARDING_CLIENT_IDS[0]
+if OB not in M.ONBOARDING_CLIENT_IDS:
+    sys.exit("%s is not an onboarding client (idp-onboarding or the config's onboarding.clientIds: %s)" % (OB, ", ".join(M.ONBOARDING_CLIENT_IDS)))
 rec = M.load_onboarding().get(OB) or sys.exit("no record for %s: run onboarding-client-setup first" % OB)
 REDIRECT, ORIGIN, MAXAGE = rec["redirect"], rec["origin"], int(rec.get("max_age", 300))
+TREE = "/" + (rec.get("apps") or ["app-a"])[0]          # the first application tree the client serves (its record)
 res = []
 def check(n, ok, d=""): res.append(bool(ok)); print("%s  %-90s %s" % ("PASS" if ok else "FAIL", n, d), flush=True)
 
@@ -93,9 +97,9 @@ try:
     st, hd = call(tok, "GET", "clients")
     check("2. outside the profile (GET clients): 403, CORS for the portal", st == 403 and hd.get("access-control-allow-origin") == ORIGIN,
           (st, hd.get("access-control-allow-origin")))
-    g = M.group_by_path(kc, "/app-a")
+    g = M.group_by_path(kc, TREE)
     st, hd = call(tok, "GET", "groups/%s/children" % g["id"])
-    check("3. inside the profile (the /app-a group's children): 200, CORS = the portal only",
+    check("3. inside the profile (the %s group's children): 200, CORS = the portal only" % TREE,
           st == 200 and hd.get("access-control-allow-origin") == ORIGIN, (st, hd.get("access-control-allow-origin")))
     st, hd = call(tok, "GET", "groups/%s/children" % g["id"], origin="https://example.invalid")
     check("3. the same call from another origin: refused, no CORS grant for it",
@@ -114,7 +118,7 @@ try:
           tok2 is not None and cl2.get("auth_time") == cl.get("auth_time") and cl2.get("exp", 0) > time.time(), (seen2, cl2.get("auth_time")))
     tok = tok2 or tok
     st, hd = call(tok, "POST", "stig-accounts/users", {"username": "INVALID", "email": "x", "firstName": "x", "lastName": "x",
-                                                       "group": "/app-a/viewer"})
+                                                       "group": TREE + "/viewer"})
     wa = hd.get("www-authenticate", "")
     check("4. a stale write: 401 with the RFC 9470 challenge (insufficient_user_authentication, max_age=%d), CORS" % MAXAGE,
           st == 401 and "insufficient_user_authentication" in wa and 'max_age="%d"' % MAXAGE in wa
