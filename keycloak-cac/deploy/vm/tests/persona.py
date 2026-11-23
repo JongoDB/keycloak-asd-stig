@@ -8,6 +8,32 @@ password + TOTP on the realm's admin console client. .token() returns a fresh ac
 """
 import argparse, json, time, urllib.error, urllib.parse, urllib.request, uuid
 
+# With STIG_CARD_PORT set, a browser that presented no card first meets the X.509 step's card sign-in choice
+# (stig-card-signin.ftl), not the password form: a person without a card takes "Use another sign-in method".
+CARD_CHOICE = "login-stig-card-signin"
+
+
+def past_card_choice(E, b, k, u, p, stop):
+    """(kind, url, page) after the card sign-in choice, if this is it; else what was given."""
+    if k == "page" and 'id="kc-form-login"' not in (p or "") and (
+            E.page_id(p or "") == CARD_CHOICE or 'id="stig-card-other"' in (p or "")):
+        act, f = E.form(p, "stig-card-other")
+        if not act:
+            raise RuntimeError("the card sign-in choice offers no other sign-in method (page %s)" % E.page_id(p or ""))
+        f["cancel"] = "Use another sign-in method"
+        return b.go(act, f, stop)
+    return k, u, p
+
+
+def password_step(E, b, k, u, p, username, password, stop):
+    """Through the card sign-in choice (when shown) and the password form: what the realm shows next."""
+    k, u, p = past_card_choice(E, b, k, u, p, stop)
+    act, f = E.form(p or "", "kc-form-login")
+    if not act:
+        raise RuntimeError("expected the password form, got %s page %s" % (k, E.page_id(p or "")))
+    f.update({"username": username, "password": password})
+    return b.go(act, f, stop)
+
 
 class Person:
     def __init__(self, M, kc, E, run, base, realm, username, role, email_domain="notify.example.mil"):
@@ -32,12 +58,23 @@ class Person:
     def _sign_in(self):
         fl = self._flow(); b = self.E.Browser(); url, ver = fl.auth_url()
         k, u, p = b.go(url, None, self.console)
-        act, f = self.E.form(p, "kc-form-login"); f.update({"username": self.username, "password": self.pw})
-        k, u, p = b.go(act, f, self.console)
+        k, u, p = password_step(self.E, b, k, u, p, self.username, self.pw, self.console)
         final, seen = fl.finish(b, k, u, p, self.ctx)
         if not final or "code=" not in final:
             raise RuntimeError("%s could not sign in: %s" % (self.username, seen))
         return fl.token(urllib.parse.parse_qs(urllib.parse.urlparse(final).query)["code"][0], ver)
+
+    def sign_in_client(self, client, redirect, extra=None, cacert=None):
+        """A fresh sign-in (password + TOTP) to `client` (public, PKCE), as an application's page does it:
+        (token or None, pages seen, flow, browser) - the flow and browser keep the IdP session for a silent re-sign-in."""
+        fl = self.E.Flow(argparse.Namespace(url=self.base, realm=self.realm, client=client, redirect=redirect, admin_url=None,
+                                            client_secret=None, cacert=cacert))
+        b = self.E.Browser(cacert) if cacert else self.E.Browser(); url, ver = fl.auth_url(extra=extra)
+        k, u, p = b.go(url, None, redirect)
+        k, u, p = password_step(self.E, b, k, u, p, self.username, self.pw, redirect)
+        final, seen = fl.finish(b, k, u, p, self.ctx)
+        code = urllib.parse.parse_qs(urllib.parse.urlparse(final).query)["code"][0] if final and "code=" in final else None
+        return (fl.token(code, ver) if code else None), seen, fl, b
 
     def token(self):
         if time.time() - self.at > 45:
