@@ -360,7 +360,9 @@ card port without a certificate (the prompt declined) it says so (`STIG-CARD-SIG
 presents the card on the main port signs in as before, without the page. The page also lists the realm's identity providers
 (`social.providers`, as the stock login page does) under their display names, below an "or" divider, so a person who
 signs in with one (e.g. Microsoft Entra ID) goes straight there; "Use another sign-in method" remains, link-styled and
-last, for the password and other methods. Both templates carry their own small style block: `[hidden]` must beat the
+last, for the password and other methods. It is the page's only "other method" control: where it is offered, the
+layout's own "Try Another Way" is hidden (it leads to the same alternatives, and the next page - the password form -
+still carries it); where it is not (no other step in the step's own flow), Keycloak's stays as the way on. Both templates carry their own small style block: `[hidden]` must beat the
 theme's alert `display` (PatternFly's alert class sets one, which overrides the browser's `[hidden]` rule - before this,
 the "blocked" warning showed on every load of the page), and the spacing and divider do not depend on the login theme.
 `keycloak-cac/tests/card-signin-browser.sh` checks the labels, the spacing at 1440 and 360 px and the blocked/waiting

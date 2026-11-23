@@ -11,7 +11,7 @@
                 <span class="${properties.kcAlertTitleClass!}">${msg(cardError)}</span>
             </div>
         </#if>
-        <p id="stig-card-intro">${msg("stigCardSignInIntro")}</p>
+        <p id="stig-card-intro">${msg("stigCardSignInIntro")}<#if social?? && social.providers?? && social.providers?has_content> ${msg("stigCardSignInIntroIdp")}<#elseif cardOther> ${msg("stigCardSignInIntroOther")}</#if></p>
         <#-- [hidden] must win over the theme's alert display (PatternFly sets display on .pf-*-c-alert, which beats the
              browser's own [hidden] rule: without this the "blocked" alert showed on every load) -->
         <style>
@@ -26,6 +26,12 @@
             #stig-card-idps a span { flex: 0 1 auto !important; text-align: center; }
             #stig-card-other { margin-top: 24px; text-align: center; }
             #kc-card-other { background: transparent; border-color: transparent; box-shadow: none; text-decoration: underline; width: auto; }
+            <#-- ONE "other method" control: with ours on the page, the layout's own "Try Another Way" is hidden (it offers
+                 the same alternatives; the next page, the password form, still carries it). Without ours (no other step
+                 in this flow, e.g. a hand-built one), Keycloak's stays as the only way on. -->
+            <#if cardOther>
+            #kc-select-try-another-way-form { display: none !important; }
+            </#if>
         </style>
         <div id="stig-card-blocked" class="${properties.kcAlertClass!} pf-m-warning" role="alert" hidden>
             <span class="${properties.kcAlertTitleClass!}">${msg("stigCardSignInBlocked")}</span>

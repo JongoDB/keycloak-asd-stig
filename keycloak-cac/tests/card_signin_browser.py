@@ -168,6 +168,14 @@ with sync_playwright() as pw:
         check("[layout %d] >= 16 px between the introduction and the card button" % w, g0 >= 16, "%.0f px" % g0)
         check("[layout %d] the card and provider buttons have the same width" % w, abs(bc["width"] - bi["width"]) <= 2,
               "%.0f / %.0f" % (bc["width"], bi["width"]))
+        others = page.evaluate("""() => ['kc-card-other', 'try-another-way'].filter(id => {
+            const e = document.getElementById(id); if (!e) return false;
+            const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; })""")
+        check("[layout %d] exactly one \"another method\" control is shown (ours; Keycloak's \"Try Another Way\" hidden)" % w,
+              others == ["kc-card-other"], others)
+        intro = page.inner_text("#stig-card-intro")
+        check("[layout %d] the introduction: US English, names the organization's account" % w,
+              "organization's account (Microsoft Entra ID)" in intro and "organisation" not in intro, repr(intro[:140]))
         sw = page.evaluate("document.documentElement.scrollWidth")
         check("[layout %d] no horizontal scroll" % w, sw <= w, "scrollWidth %s" % sw)
         check("[layout %d] no blocked message on load" % w, not page.is_visible("#stig-card-blocked"))
