@@ -70,11 +70,14 @@ intake, or failed) is one `STIG-HANDOFF-OUTCOME` line in the system log (facilit
   is drift: re-run `handoff-worker-setup` after touching the client by hand. The secret is written to
   `/srv/idp/secrets/handoff_client_secret` (root, 0600); `--rotate-secret` replaces it and the old one stops working.
 - **A wrong or compromised intake cannot steer the operator.** `handoffs` looks each username up in Keycloak and
-  prints the account's state next to the hand-off (enabled, card bound, Entra bound, application trees - never the card
-  number or the object id). It suggests NO command, with a WARNING, when the account does not exist, is an IdP
-  administrator (a `/roles/*` group or any effective realm-management role), or is not a member of the filing
-  application's tree (`handoffIntake.app`); for `consider_disable`, filed after the last role was removed, when the
-  account still holds any application tree's group. If Keycloak cannot be asked, no command is suggested at all.
+  prints the account's state next to the hand-off (enabled, card bound, Entra bound, application trees, application
+  roles held effectively - never the card number or the object id). It suggests NO command, with a WARNING, when the
+  account does not exist, is an IdP administrator (`/roles` or a `/roles/*` group, or any effective realm-management
+  role), or is not a member of the filing application's tree (`handoffIntake.app`); for `consider_disable`, filed after
+  the last role was removed, when the account still holds any application's group or role (direct, composite or
+  through a group). A whole-account action (`delete_account`, `reset_credentials`, `disable_enable_unlock`) on an
+  account another application also uses keeps its command under a CAUTION. If Keycloak cannot be asked, no command is
+  suggested at all.
 - **Each request** (`handoffs`): the token comes from the realm's public token endpoint and is checked before use
   (issuer, `azp`, `aud` and `scope` exactly, at most 600 s, no `iat` in the future); the intake is reached over https
   only, its host resolved once and every address public, no redirect followed, 20 s and 1 MiB at most; anything the

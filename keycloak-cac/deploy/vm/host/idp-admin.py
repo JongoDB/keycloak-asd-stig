@@ -2263,37 +2263,51 @@ HANDOFF_SUGGESTIONS = {
                          "Their last role in the filing application was removed. Disable only if they hold no other application's role (guard lists accounts with none: info STIG-ACCOUNT-NO-APP-ROLE)."),
 }
 
+HANDOFF_SHARED_KINDS = ("delete_account", "reset_credentials", "disable_enable_unlock")   # act on the whole account
+
 def handoff_account(kc, username, kind):
     """What the IdP itself says about a hand-off's account, so a wrong or compromised intake cannot steer the operator:
-    (state line, warning or None). A warning means NO command is suggested: no such account; an IdP administrator
-    (a /roles/* group or any effective realm-management role); not a member of the filing application's tree
-    (handoffIntake.app) - except consider_disable, filed after the last role was removed, which is warned instead when
-    the account still holds ANY application tree's group. Never prints a card number or an Entra object id."""
+    (state line, warning or None, caution or None). A WARNING means NO command is suggested: no such account; an IdP
+    administrator (/roles or a /roles/* group, or any effective realm-management role); not a member of the filing
+    application's tree (handoffIntake.app) - except consider_disable, filed after the last role was removed, which is
+    warned instead when the account still holds ANY application's group or role (direct, composite or through a
+    group). A CAUTION keeps the command: a whole-account action (delete, reset, disable/enable/unlock) on an account
+    another application also uses. Never prints a card number or an Entra object id."""
     app = HANDOFF.get("app")
     if not isinstance(username, str) or not HANDOFF_SAFE_USERNAME.fullmatch(username):
-        return "", "the username has characters a command cannot carry"
+        return "", "the username has characters a command cannot carry", None
     us = [u for u in kc.api("GET", "/users?exact=true&username=%s" % q(username)) or []
           if (u.get("username") or "").lower() == username.lower()]
     if len(us) != 1:
-        return "no such account", "there is NO account %s in the realm" % username
+        return "no such account", "there is NO account %s in the realm" % username, None
     u = kc.api("GET", "/users/%s" % us[0]["id"])
     at = u.get("attributes") or {}
     links = sorted(l.get("identityProvider") for l in kc.api("GET", "/users/%s/federated-identity" % u["id"]) or [])
     groups = [g["path"] for g in paged(kc, "/users/%s/groups" % u["id"])]
     trees = sorted({p_.strip("/").split("/")[0] for p_ in groups if p_.strip("/").split("/")[0] in APP_CLIENTS})
-    state = "%s; card %s; Entra %s%s; application trees %s" % (
+    roles = {cid: sorted(effective_client_roles(kc, u["id"], cid)) for cid in APP_CLIENTS}
+    roles = {cid: r for cid, r in roles.items() if r}
+    state = "%s; card %s; Entra %s%s; application trees %s; application roles %s" % (
         "enabled" if u.get("enabled") else "DISABLED", "bound" if any(at.get("cac_edipi") or []) else "not bound",
         "bound" if any(at.get("entra_oid") or []) else "not bound", " (linked)" if "entra" in links else "",
-        ", ".join("/" + t for t in trees) or "none")
-    admin = [p_ for p_ in groups if p_.startswith("/roles/")] or sorted(rm_roles(kc, u["id"]))
+        ", ".join("/" + t for t in trees) or "none",
+        ", ".join("%s:%s" % (cid, r) for cid in sorted(roles) for r in roles[cid]) or "none")
+    admin = [p_ for p_ in groups if p_ == "/roles" or p_.startswith("/roles/")] or sorted(rm_roles(kc, u["id"]))
     if admin:
-        return state, "%s is an IdP ADMINISTRATOR (%s): an application never files for an administrator" % (username, ", ".join(admin))
+        return state, "%s is an IdP ADMINISTRATOR (%s): an application never files for an administrator" % (username, ", ".join(admin)), None
+    used_by = sorted(set(trees) | set(roles))
     if kind == "consider_disable":
-        if trees:
-            return state, "%s still holds groups of %s: do not disable for this hand-off" % (username, ", ".join("/" + t for t in trees))
-    elif app not in trees:
-        return state, "%s is not a member of /%s, the filing application's tree" % (username, app)
-    return state, None
+        if used_by:
+            return state, "%s still holds groups or roles of %s: do not disable for this hand-off" % (
+                username, ", ".join(used_by)), None
+        return state, None, None
+    if app not in trees:
+        return state, "%s is not a member of /%s, the filing application's tree" % (username, app), None
+    others = [x for x in used_by if x != app]
+    if kind in HANDOFF_SHARED_KINDS and others:
+        return state, None, "%s is also used by %s: this acts on the WHOLE account, for those applications too - confirm with them first" % (
+            username, ", ".join(others))
+    return state, None, None
 
 def handoff_suggestion(kind, username):
     """(command lines, note) for one hand-off. An unsafe username gives no command line, never a quoted one."""
@@ -2343,11 +2357,12 @@ def cmd_handoffs(a):
         for it in items:
             print("%s  %-22s %-28s filed %s by %s" % (clean(it["id"], 64), clean(it.get("kind"), 22), clean(it.get("username"), 60),
                                                       clean(it.get("filedAt"), 30), clean(it.get("filedBy"), 120)))
+            caution = None
             if kc is None:
                 state, warn = "", "the account was not checked"
             else:
                 try:
-                    state, warn = handoff_account(kc, it.get("username"), it.get("kind"))
+                    state, warn, caution = handoff_account(kc, it.get("username"), it.get("kind"))
                 except SystemExit as e:
                     state, warn = "", "the account could not be read (%s)" % e
             if state:
@@ -2356,6 +2371,8 @@ def cmd_handoffs(a):
                 print("    WARNING: %s. No command suggested: check this hand-off by hand with the filer (the intake may be "
                       "wrong or compromised)." % warn)
                 continue
+            if caution:
+                print("    CAUTION: %s." % caution)
             cmds, note = handoff_suggestion(it.get("kind"), it.get("username"))
             for c in cmds:
                 print("    run:  %s" % c)

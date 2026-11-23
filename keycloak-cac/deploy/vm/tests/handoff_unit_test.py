@@ -43,10 +43,15 @@ class Mock:
         for i, (kind, user) in enumerate([("delete_account", "ghost.user"), ("reset_credentials", "boss.admin"),
                                           ("disable_enable_unlock", "rm.holder"), ("delete_account", "other.app"),
                                           ("consider_disable", "gone.user"), ("consider_disable", "still.member"),
-                                          ("disable_enable_unlock", "off.user")]):
+                                          ("disable_enable_unlock", "off.user"), ("consider_disable", "direct.role"),
+                                          ("disable_enable_unlock", "roles.root"), ("delete_account", "shared.user"),
+                                          ("reset_credentials", "shared.direct"), ("change_name_email", "shared.user"),
+                                          ("disable_enable_unlock", "plain.member")]):
             iid = "%08d-5555-4555-8555-555555555555" % (i + 1)
+            if user == "shared.user" and kind == "change_name_email":
+                iid = "%08d-6666-4666-8666-666666666666" % (i + 1)
             self.items[iid] = {"id": iid, "kind": kind, "username": user, "status": "open", "filedBy": "mgr@example.mil",
-                               "filedAt": "2026-11-21T1%d:00:00Z" % i}
+                               "filedAt": "2026-11-21T%02d:00:00Z" % (10 + i)}
 M_ = Mock(); M_.reset()
 
 def b64(o):
@@ -209,10 +214,13 @@ class FakeKC:
     """Just enough of the admin API for handoff_account: users, their groups, links and realm-management roles."""
     def __init__(self):
         self.users = {}
-    def add(self, name, groups=(), rm=(), enabled=True, attrs=None, links=()):
+    def add(self, name, groups=(), rm=(), enabled=True, attrs=None, links=(), roles=None):
+        """roles: {client: [role]} held effectively (direct, composite or group); rm: realm-management roles."""
         uid = "u-%s" % name
+        cr = {k: [{"name": r} for r in v] for k, v in (roles or {}).items()}
+        cr["realm-management"] = [{"name": r} for r in rm]
         self.users[name] = {"rep": {"id": uid, "username": name, "enabled": enabled, "attributes": attrs or {}},
-                            "groups": [{"id": "g-" + g, "path": g} for g in groups], "rm": [{"name": r} for r in rm],
+                            "groups": [{"id": "g-" + g, "path": g} for g in groups], "roles": cr,
                             "links": [{"identityProvider": l} for l in links]}
     def by_id(self, uid):
         return next(v for v in self.users.values() if v["rep"]["id"] == uid)
@@ -222,18 +230,18 @@ class FakeKC:
             u = self.users.get(qs.get("username"))
             return [copy.deepcopy(u["rep"])] if u else []
         if p_.path == "/clients":
-            return [{"id": "RM", "clientId": qs.get("clientId")}]
+            return [{"id": "C-" + qs.get("clientId"), "clientId": qs.get("clientId")}]
         if parts[0] == "users" and len(parts) == 2:
             return copy.deepcopy(self.by_id(parts[1])["rep"])
         if parts[0] == "users" and parts[2] == "groups":
             return copy.deepcopy(self.by_id(parts[1])["groups"]) if qs.get("first", "0") == "0" else []
         if parts[0] == "users" and parts[2] == "federated-identity":
             return copy.deepcopy(self.by_id(parts[1])["links"])
-        if parts[0] == "users" and parts[2] == "role-mappings":
-            return copy.deepcopy(self.by_id(parts[1])["rm"])
+        if parts[0] == "users" and parts[2:4] == ["role-mappings", "clients"] and parts[-1] == "composite":
+            return copy.deepcopy(self.by_id(parts[1])["roles"].get(parts[4][2:], []))
         raise AssertionError("unexpected admin call %s %s" % (method, path))
 FK = FakeKC()
-FK.add("jane.doe", groups=["/app-a", "/app-a/viewer"], attrs={"cac_edipi": ["1234567890"], "entra_oid": ["0b1c2d3e-0000-4000-8000-000000000001"]},
+FK.add("jane.doe", groups=["/app-a", "/app-a/viewer"], roles={"app-a": ["viewer"]}, attrs={"cac_edipi": ["1234567890"], "entra_oid": ["0b1c2d3e-0000-4000-8000-000000000001"]},
        links=["entra"])
 FK.add("boss.admin", groups=["/roles/idp-admin"])
 FK.add("rm.holder", groups=["/app-a/viewer"], rm=["manage-users"])
@@ -241,6 +249,11 @@ FK.add("other.app", groups=["/app-b/owner"])
 FK.add("gone.user", enabled=True)
 FK.add("still.member", groups=["/app-c/lead"])
 FK.add("off.user", groups=["/app-a/editor"], enabled=False)
+FK.add("direct.role", roles={"app-b": ["owner"]})                    # user-create-cac style: a direct mapping, no group
+FK.add("roles.root", groups=["/roles"])                             # the bare /roles group
+FK.add("shared.user", groups=["/app-a/viewer", "/app-c/lead"], roles={"app-a": ["viewer"], "app-c": ["lead"]})
+FK.add("shared.direct", groups=["/app-a/viewer"], roles={"app-a": ["viewer"], "app-b": ["owner"]})
+FK.add("plain.member", groups=["/app-a/viewer"], roles={"app-a": ["viewer"]})
 M.KC = lambda: FK
 check("module: UNMANAGED_CLIENTS (so add-client refuses it, check-clients does not call it unmanaged) names the worker",
       CID in M.UNMANAGED_CLIENTS and CID in M.RESERVED_CLIENTS)
@@ -345,21 +358,44 @@ def block(user):
     return "\n".join(ls[i:j])
 b = block("jane.doe")
 check("account: a member of the filing tree gets its state (enabled, card bound, Entra bound + linked, trees) and the command",
-      "account: enabled; card bound; Entra bound (linked); application trees /app-a" in b and "run:  sudo idp-admin.py user-unlock jane.doe" in b
+      "account: enabled; card bound; Entra bound (linked); application trees /app-a; application roles app-a:viewer" in b and "run:  sudo idp-admin.py user-unlock jane.doe" in b
       and "WARNING" not in b, b.replace("\n", " | ")[:160])
 check("account: the card number and the Entra object id are never printed", "1234567890" not in out and "0b1c2d3e" not in out)
 for user, want, name in [("ghost.user", "NO account ghost.user", "an account that does not exist"),
                          ("boss.admin", "IdP ADMINISTRATOR (/roles/idp-admin)", "an IdP administrator by /roles/* group"),
                          ("rm.holder", "IdP ADMINISTRATOR (manage-users)", "an administrator by an effective realm-management role (even inside the tree)"),
                          ("other.app", "not a member of /app-a", "an account outside the filing application's tree"),
-                         ("still.member", "still holds groups of /app-c", "consider_disable for an account still in another application's tree")]:
+                         ("still.member", "still holds groups or roles of app-c", "consider_disable for an account still in another application's tree"),
+                         ("direct.role", "still holds groups or roles of app-b", "consider_disable for an account holding another app's role by a DIRECT mapping (no group)"),
+                         ("roles.root", "IdP ADMINISTRATOR (/roles)", "a member of the bare /roles group")]:
     b = block(user)
     check("account: %s -> a WARNING and NO command line" % name, want in b and "WARNING" in b and "run:" not in b, b.replace("\n", " | ")[-150:])
+b = block("direct.role")
+check("account: the state line names the application roles held (role names only)", "application roles app-b:owner" in b, b.replace("\n", " | ")[:160])
+def blocks(user):
+    ls = out.splitlines(); res_ = []
+    for i, l in enumerate(ls):
+        if "  %s " % user in l and "filed" in l:
+            j = next((n for n in range(i + 1, len(ls)) if not ls[n].startswith("    ")), len(ls)); res_.append("\n".join(ls[i:j]))
+    return res_
+for user, kind, other, cmd in [("shared.user", "delete_account", "app-c", "user-delete shared.user"),
+                               ("shared.direct", "reset_credentials", "app-b", "reset-user shared.direct")]:
+    b = next((x for x in blocks(user) if kind in x), "")
+    check("account: %s on an account another app also uses (%s, %s) keeps the command and a clear CAUTION"
+          % (kind, other, "tree" if user == "shared.user" else "direct role"),
+          "CAUTION: %s is also used by %s" % (user, other) in b and "WHOLE account" in b and ("run:  sudo idp-admin.py " + cmd) in b
+          and "WARNING" not in b, b.replace("\n", " | ")[-170:])
+b = next((x for x in blocks("shared.user") if "change_name_email" in x), "")
+check("account: change_name_email on a shared account: no caution (not a whole-account action on access)", "CAUTION" not in b and "run:" in b,
+      b.replace("\n", " | ")[-120:])
+b = block("plain.member")
+check("account: a whole-account action on an account only the filing app uses: no caution", "CAUTION" not in b and "run:" in b and "WARNING" not in b,
+      b.replace("\n", " | ")[-120:])
 b = block("gone.user")
 check("account: consider_disable for an account in no application tree gets its command (user-enable ... false)",
-      "application trees none" in b and "run:  sudo idp-admin.py user-enable gone.user false" in b and "WARNING" not in b, b.replace("\n", " | ")[-120:])
+      "application trees none; application roles none" in b and "run:  sudo idp-admin.py user-enable gone.user false" in b and "WARNING" not in b, b.replace("\n", " | ")[-120:])
 b = block("off.user")
-check("account: a disabled account is shown DISABLED", "account: DISABLED; card not bound; Entra not bound; application trees /app-a" in b, b.replace("\n", " | ")[-120:])
+check("account: a disabled account is shown DISABLED", "account: DISABLED; card not bound; Entra not bound; application trees /app-a; application roles none" in b, b.replace("\n", " | ")[-120:])
 b = block("x; rm -rf /")
 check("account: an unsafe username is never looked up and gets no command", "WARNING" in b and "run:" not in b, b.replace("\n", " | ")[-100:])
 def kc_down():
