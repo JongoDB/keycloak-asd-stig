@@ -349,6 +349,18 @@ A card is never bound if another account holds it, another account's pending val
 holds a different card. A bind or a refusal clears the request, and each is logged with `request=link`
 (`STIG-CARD-PRESENT-BOUND` / `-REFUSED`, last four digits) and recorded as an admin event.
 
+An "any card" request binds only in a sign-in where the person entered credentials: one that reuses the SSO session
+(`AuthenticationManager.SSO_AUTH`) skips the step and keeps the request (`STIG-CARD-PRESENT-NEEDS-SIGNIN`). The card
+is claimed (`stig-accounts-card:<realm>:<card>`, the key `stig-accounts` uses) before it is checked and bound.
+
+**`/admin/realms/{realm}/stig-bindings/users/{id}`** (realm administrators only, 403 otherwise; refused under an
+admin-API profile) writes identity bindings server-side. It sets `cac_edipi` or `cac_edipi_pending` (ten digits),
+`stig_card_link` or `entra_oid`, and removes those or `stig_created_by`, with an optional `presentCard` add/remove
+and a `reason`. It can also write a `profile` (username, e-mail, names, `enabled`, `emailVerified`, and the exact
+required actions) without touching any attribute. A value held by another account answers 409; nothing else may be written (400). Its admin event shows
+the card masked. Keycloak's admin event for `PUT /users/{id}` holds the account's attributes, even when the request
+sent none, so any such update of a card account stores the full EDIPI there.
+
 Possession is what makes this safe without the administrator ever typing the number: only the person who can sign
 in to the account AND holds the card can attach it.
 

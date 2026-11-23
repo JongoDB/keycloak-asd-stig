@@ -87,6 +87,7 @@ idp-admin.example.json beside this script for every key). Commands that talk to 
   idp-admin.py client-delete <clientId|uuid> / role-delete <role|clientId:role|uuid>   act on a REVIEW line
   idp-admin.py link-entra <username> <oid>      bind an account to one Entra identity (object id)
   idp-admin.py link-cac <username> [--edipi] [--replace] [--allow-admin] | --bind-edipi --confirm-direct-bind | --cancel
+  idp-admin.py link-cac --cancel-all            withdraw every pending link request (the realm-wide stop)
         a CAC for an EXISTING account: its holder is asked to present the card at the next sign-in (password + OTP, or
         Entra) and that card is bound then (stig-extensions' present-card step; live 7 days); --edipi: only the card whose
         EDIPI you type at the prompt binds. Only if the person cannot present a card: --bind-edipi binds it now. Refused: a
@@ -2929,13 +2930,73 @@ def review_actor(kc, st, uid, entry):
             if since else "its first event (never vetted)" if proven else "its first event (the point it became unvetted is unknown)")
     return when, out
 
+class BindingConflict(Exception):
+    pass
+
+class NoBindingsEndpoint(Exception):
+    pass
+
+def write_bindings(kc, uid, set_=None, remove=(), present=None, reason=None):
+    """Write identity bindings server-side through stig-extensions' stig-bindings endpoint (realm administrators only):
+    its admin event carries the card MASKED. A PUT of the user representation would store the full EDIPI in the admin
+    event (Keycloak records the request body). 409 -> BindingConflict; no endpoint (an older image) -> NoBindingsEndpoint."""
+    body = {}
+    if set_:
+        body["set"] = dict(set_)
+    if remove:
+        body["remove"] = list(remove)
+    if present:
+        body["presentCard"] = present
+    if reason:
+        body["reason"] = reason
+    st, data = kc.req("POST", "/admin/realms/%s/stig-bindings/users/%s" % (REALM, uid), json.dumps(body).encode(),
+                      {"Content-Type": "application/json"})
+    if st == 200:
+        return
+    if st == 409:
+        raise BindingConflict(mask_digits(clean(data, 200)))
+    if st in (404, 405):
+        raise NoBindingsEndpoint("the running image has no stig-bindings endpoint (deploy the image with it)")
+    raise RuntimeError("stig-bindings: HTTP %s %s" % (st, mask_digits(clean(data, 200))))
+
+PROFILE_FIELDS = ("username", "email", "firstName", "lastName", "emailVerified", "enabled", "requiredActions")
+
+def put_user(kc, uid, rep):
+    """Update a user's profile fields (username, e-mail, names, the two flags, required actions) server-side through
+    stig-bindings: Keycloak stores a PUT's representation in the admin event WITH every attribute (the card included, even
+    when the request sent none), the endpoint's event holds only the fields. An image without the endpoint (or a test
+    double without raw requests): the former PUT, without the attributes."""
+    prof = {k: rep[k] for k in PROFILE_FIELDS if k in rep and rep[k] is not None}
+    if getattr(kc, "req", None) is not None:
+        st, data = kc.req("POST", "/admin/realms/%s/stig-bindings/users/%s" % (REALM, uid),
+                          json.dumps({"profile": prof, "reason": "profile"}).encode(), {"Content-Type": "application/json"})
+        if st == 200:
+            return
+        if st not in (404, 405):
+            sys.exit("stig-bindings profile update -> HTTP %s %s" % (st, mask_digits(clean(data, 200))))
+    kc.api("PUT", "/users/%s" % uid, {k: v for k, v in rep.items() if k != "attributes"})
+
+def bindings_or_put(kc, uid, set_=None, remove=(), reason=None):
+    """write_bindings, or - on an image without the endpoint - the former full PUT, with a warning (the admin event then
+    stores the account's attributes as they are)."""
+    try:
+        write_bindings(kc, uid, set_=set_, remove=remove, reason=reason)
+    except NoBindingsEndpoint:
+        print("WARNING: this image has no stig-bindings endpoint: written with a user PUT (its admin event stores the "
+              "account's attributes in full)", file=sys.stderr)
+        rep_ = kc.api("GET", "/users/%s" % uid); attrs = dict(rep_.get("attributes") or {})
+        for k in remove:
+            attrs.pop(k, None)
+        attrs.update({k: [v] for k, v in (set_ or {}).items()})
+        rep_["attributes"] = attrs
+        kc.api("PUT", "/users/%s" % uid, rep_)
+
 def clear_bindings(kc, u):
     """Remove the administrator-set identity bindings (entra_oid, cac_edipi), verified. Returns what was removed."""
-    rep_ = kc.api("GET", "/users/%s" % u["id"]); attrs = dict(rep_.get("attributes") or {})
-    had = [k for k in IDENTITY_BINDINGS if attrs.pop(k, None)]
+    attrs = kc.api("GET", "/users/%s" % u["id"]).get("attributes") or {}
+    had = [k for k in IDENTITY_BINDINGS if attrs.get(k)]
     if had:
-        rep_["attributes"] = attrs
-        kc.api("PUT", "/users/%s" % u["id"], rep_)
+        bindings_or_put(kc, u["id"], remove=had, reason="clear bindings")
     left = [k for k in IDENTITY_BINDINGS if (kc.api("GET", "/users/%s" % u["id"]).get("attributes") or {}).get(k)]
     if left:
         raise RuntimeError("%s: identity bindings still set: %s" % (u["username"], left))
@@ -2965,7 +3026,7 @@ def contain_user(kc, st, uid, why, pre=()):
     lines, failures, reset_ok = [], [], False
     steps = list(pre) + [
         ("reset", lambda: reset_factors(kc, kc.api("GET", "/users/%s" % uid), [why])),
-        ("disable", lambda: kc.api("PUT", "/users/%s" % uid, dict(kc.api("GET", "/users/%s" % uid), enabled=False))),
+        ("disable", lambda: put_user(kc, uid, dict(kc.api("GET", "/users/%s" % uid), enabled=False))),
         ("logout", lambda: kc.api("POST", "/users/%s/logout" % uid))]
     for label, step in steps:
         try:
@@ -3383,9 +3444,9 @@ def promote_or_pend(kc, u, roles, st, reset, lifespan=43200, email=None, clear=F
         st["reset_at"][uid] = int(time.time() * 1000); save_state(st)
         if email:
             rep = kc.api("GET", "/users/%s" % uid); rep["email"], rep["emailVerified"] = email, False
+            put_user(kc, uid, rep); gone.append("e-mail set by the operator")
             if creator:     # the operator has now reset it and set its address: no longer the delegate's
-                rep["attributes"] = {k: v for k, v in (rep.get("attributes") or {}).items() if k != CREATED_BY}
-            kc.api("PUT", "/users/%s" % uid, rep); gone.append("e-mail set by the operator")
+                bindings_or_put(kc, uid, remove=[CREATED_BY], reason="operator reset")
             if creator and (kc.api("GET", "/users/%s" % uid).get("attributes") or {}).get(CREATED_BY):
                 raise RuntimeError("could not clear the delegate-created marker of %s" % u["username"])
         print("%s: reset %s%s" % (u["username"], gone or "nothing", ("; application groups -> direct roles: %s" % moved) if moved else ""))
@@ -3489,13 +3550,13 @@ def cmd_rename(a):
     u.update({"username": a.new, "email": a.email or u.get("email"), "firstName": a.first or u.get("firstName"),
               "lastName": a.last or u.get("lastName"), "emailVerified": True})
     if same:
-        kc.api("PUT", "/users/%s" % u["id"], u)
+        put_user(kc, u["id"], u)
     else:
         # The STIG realm keeps usernames read-only (editUsernameAllowed=false, also for admins): open it for this one
         # change, then close it again whatever happens.
         kc.api("PUT", "", {"editUsernameAllowed": True})
         try:
-            kc.api("PUT", "/users/%s" % u["id"], u)
+            put_user(kc, u["id"], u)
         finally:
             kc.api("PUT", "", {"editUsernameAllowed": False})
     after = kc.api("GET", "/users/%s" % u["id"])
@@ -3515,7 +3576,7 @@ def cmd_set_password(a):
     pw = "".join(_s.choice(alphabet) for _ in range(20)) + "-" + _s.choice("!#%+") + _s.choice(string.digits) + "aZ"
     kc.api("PUT", "/users/%s/reset-password" % u["id"], {"type": "password", "value": pw, "temporary": True})
     u["requiredActions"] = sorted(set(u.get("requiredActions") or []) | {"CONFIGURE_TOTP"})
-    kc.api("PUT", "/users/%s" % u["id"], u)
+    put_user(kc, u["id"], u)
     sys.stdout.write(pw)
 
 def cmd_smtp(a):
@@ -3549,16 +3610,20 @@ def cmd_invite(a):
     first, last = (a.first or a.username.split(".")[0].title()), (a.last or a.username.split(".", 1)[1].title())
     rep = {"username": a.username, "email": a.email, "firstName": first, "lastName": last, "enabled": True,
            "emailVerified": False, "requiredActions": ["UPDATE_PASSWORD", "CONFIGURE_TOTP", "TERMS_AND_CONDITIONS"]}
-    attrs = {}
+    binds = {}
     if a.edipi:
-        attrs["cac_edipi"] = [a.edipi]
+        binds["cac_edipi"] = a.edipi
     if a.entra_oid:
-        attrs["entra_oid"] = [a.entra_oid]
-    if attrs:
-        rep["attributes"] = attrs
+        binds["entra_oid"] = a.entra_oid
     roles = [r for r in a.groups.split(",") if r]
     kc.api("POST", "/users", rep)
     u = user(kc, a.username)
+    if binds:                # server-side (stig-bindings): the admin event never holds the full EDIPI
+        try:
+            bindings_or_put(kc, u["id"], set_=binds, reason="invite")
+        except BindingConflict as e:
+            kc.api("DELETE", "/users/%s" % u["id"])
+            sys.exit("REFUSED: %s (the new account was removed again)" % e)
     if admin_role_args(roles):
         # never an administrator by invitation: created with no group (out of every delegate's reach), promoted
         # only after the person has enrolled a second factor through this link (idp-admin.py promote)
@@ -3578,8 +3643,10 @@ def cmd_link_entra(a):
     if not _re.fullmatch(r"[0-9a-f-]{36}", a.oid):
         sys.exit("not an Entra object id")
     kc = KC(); u = kc.api("GET", "/users/%s" % user(kc, a.username)["id"])
-    u["attributes"] = dict(u.get("attributes") or {}, entra_oid=[a.oid])
-    kc.api("PUT", "/users/%s" % u["id"], u)
+    try:
+        bindings_or_put(kc, u["id"], set_={"entra_oid": a.oid}, reason="link-entra")
+    except BindingConflict as e:
+        sys.exit("REFUSED: %s" % e)
     print("%s: entra_oid set; their next Entra sign-in links to this account" % a.username)
 
 # ------------------------------------------------------------------------- link-cac: a card for an EXISTING account
@@ -3648,6 +3715,14 @@ def ensure_present_card_step(kc):
 def cmd_link_cac(a):
     """Bind a card to an EXISTING account (see link_cac). One audit line per attempt (syslog, auth facility), the card
     masked; an EDIPI is never printed or logged in full."""
+    if a.cancel_all:
+        if a.username or a.stray or a.cancel or a.edipi or a.bind_edipi or a.replace or a.allow_admin or a.confirm_direct_bind:
+            CARD_AUDIT("STIG-LINK-CAC user=* mode=cancel-all card=- replace=no allow_admin=no operator=%s result=refused "
+                       "reason=\"--cancel-all takes no username and no other option\"" % clean(operator(), 64))
+            sys.exit("REFUSED: --cancel-all takes no username and no other option")
+        return cancel_all_links(a)
+    if not a.username:
+        sys.exit("REFUSED: link-cac needs a username (or --cancel-all)")
     mode = "cancel" if a.cancel else "bind" if a.bind_edipi else "reserve" if a.edipi else "present"
     st = {"card": "-" if mode == "cancel" else "any" if mode == "present" else "?"}
     def audit(result, reason=None):
@@ -3709,11 +3784,8 @@ def link_cac(a, mode, st):
         if not link:
             raise LinkRefused("%s has no link request to cancel%s" % (
                 name, " (its pending card is an invite's: link-cac --replace drops it)" if pend else ""))
-        rep = kc.api("GET", "/users/%s" % u["id"]); attrs = dict(rep.get("attributes") or {})
-        for k in (CARD_LINK, CARD_PENDING):
-            attrs.pop(k, None)
-        rep["attributes"] = attrs; rep["requiredActions"] = [x for x in rep.get("requiredActions") or [] if x != PRESENT_CARD]
-        kc.api("PUT", "/users/%s" % u["id"], rep)
+        bindings_link(kc, u["id"], remove=[k for k in (CARD_LINK, CARD_PENDING) if first(k)], present="remove",
+                      reason="link-cac cancel")
         now = kc.api("GET", "/users/%s" % u["id"]); nat = now.get("attributes") or {}
         if nat.get(CARD_LINK) or nat.get(CARD_PENDING) or PRESENT_CARD in (now.get("requiredActions") or []):
             raise RuntimeError("%s: the link request is still there after the cancel" % name)
@@ -3760,22 +3832,19 @@ def link_cac(a, mode, st):
             raise LinkRefused("card %s is already bound to or reserved for another account (%s): one card, one account"
                               % (mask_edipi(edipi), ", ".join(sorted(str(n) for n in others.values()))))
     step = ensure_present_card_step(kc) if mode != "bind" else ""
-    rep = kc.api("GET", "/users/%s" % u["id"]); attrs = dict(rep.get("attributes") or {})
-    for k in (CARD_PENDING, CARD_LINK):
-        attrs.pop(k, None)
-    removed = bool(attrs.pop(CARD_ATTR, None)) if a.replace else False
-    ra = [x for x in rep.get("requiredActions") or [] if x != PRESENT_CARD]
+    removed = bool(card) and a.replace
     if mode == "bind":
-        attrs[CARD_ATTR] = [edipi]
+        set_ = {CARD_ATTR: edipi}
     else:
         # "<ms> admin" records that the account was an IdP administrator when asked: the present-card step then binds
         # only a named card, even if the account is no administrator by the time it is presented
-        attrs[CARD_LINK] = [str(now_ms()) + (" admin" if admin else "")]
+        set_ = {CARD_LINK: str(now_ms()) + (" admin" if admin else "")}
         if edipi:
-            attrs[CARD_PENDING] = [edipi]
-        ra.append(PRESENT_CARD)
-    rep["attributes"], rep["requiredActions"] = attrs, ra
-    kc.api("PUT", "/users/%s" % u["id"], rep)
+            set_[CARD_PENDING] = edipi
+    drop = [k for k, v in ((CARD_PENDING, pend), (CARD_LINK, link), (CARD_ATTR, card if a.replace else "")) if v and k not in set_]
+    # written server-side (stig-bindings): the admin event shows the card masked, never the full EDIPI
+    bindings_link(kc, u["id"], set_=set_, remove=drop, present="remove" if mode == "bind" else "add",
+                  reason="link-cac %s%s" % (mode, " replace" if a.replace else ""))
     if removed:
         kc.api("POST", "/users/%s/logout" % u["id"])          # whoever signed in with the removed card is signed out
     now = kc.api("GET", "/users/%s" % u["id"]); nat = now.get("attributes") or {}
@@ -3801,6 +3870,36 @@ def link_cac(a, mode, st):
     which = "only card %s binds" % mask_edipi(edipi) if edipi else "the card they present binds"
     return "requested", ("%s: at the next sign-in (password + OTP, or Entra) the holder is asked to present their CAC; %s. "
                          "Live %d days; then it is ignored (guard reports it)%s" % (name, which, CARD_LINK_DAYS, tail))
+
+def bindings_link(kc, uid, **kw):
+    """write_bindings for link-cac: a conflict or an image without the endpoint is a refusal (nothing written)."""
+    try:
+        write_bindings(kc, uid, **kw)
+    except BindingConflict as e:
+        raise LinkRefused("the IdP refused it: %s (one card, one account)" % e)
+    except NoBindingsEndpoint as e:
+        raise LinkRefused("%s: link-cac needs it" % e)
+
+def cancel_all_links(a):
+    """link-cac --cancel-all: withdraw EVERY pending link request at once (the realm-wide stop). One audit line per
+    account and one for the run."""
+    kc = KC(); n = 0
+    for u in paged(kc, "/users?briefRepresentation=false"):
+        at = u.get("attributes") or {}
+        if not (at.get(CARD_LINK) or [""])[0]:
+            continue
+        try:
+            write_bindings(kc, u["id"], remove=[k for k in (CARD_LINK, CARD_PENDING) if (at.get(k) or [""])[0]],
+                           present="remove", reason="link-cac cancel-all")
+            res, n = "cancelled", n + 1
+        except (BindingConflict, NoBindingsEndpoint, RuntimeError) as e:
+            res = "error reason=%s" % json.dumps(mask_digits(clean(str(e), 200)))
+        CARD_AUDIT("STIG-LINK-CAC user=%s mode=cancel-all card=- replace=no allow_admin=no operator=%s result=%s"
+                   % (clean(u["username"], 100).replace(" ", "_"), clean(operator(), 64), res))
+        print("%s: %s" % (u["username"], res.split(" ")[0]))
+    CARD_AUDIT("STIG-LINK-CAC user=* mode=cancel-all card=- replace=no allow_admin=no operator=%s result=done cancelled=%d"
+               % (clean(operator(), 64), n))
+    print("cancel-all: %d link request(s) cancelled" % n)
 
 def card_links(kc, now_ms_=None):
     """(expired, pending) lines for link-cac requests (stig_card_link) never completed. Live for 7 days from the request;
@@ -3846,7 +3945,7 @@ def cmd_user_enable(a):
     if u["enabled"] and held:
         sys.exit("REFUSED: the guard disabled %s (%s, %s): run reset-user (or a grant/promote that passes its checks) "
                  "first" % (a.username, held.get("why"), time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(held.get("at", 0) / 1000))))
-    kc.api("PUT", "/users/%s" % u["id"], u); print("%s enabled=%s" % (a.username, u["enabled"]))
+    put_user(kc, u["id"], u); print("%s enabled=%s" % (a.username, u["enabled"]))
 
 def cmd_user_delete(a):
     kc = KC(); u = user(kc, a.username); kc.api("DELETE", "/users/%s" % u["id"]); allowlist_drop(u["id"], kc); print("deleted", a.username)
@@ -4177,13 +4276,29 @@ def binding_provenance(kc, uid, events=None, current=None, created_ms=None):
             r = json.loads(e.get("representation") or "null")
         except ValueError:
             continue
-        if not isinstance(r, dict) or "attributes" not in r:
+        if not isinstance(r, dict):
+            continue
+        sb = r.get("stigBindings")
+        if isinstance(sb, dict):            # stig-bindings (this tooling): the card masked, the object id as it is
+            for b in IDENTITY_BINDINGS:
+                if b in sb:
+                    v = None if sb[b] is None else (("masked", sb[b]) if b == "cac_edipi" else (sb[b],))
+                    if v != last[b]:
+                        last[b], who[b] = v, operator_actor(kc, e.get("authDetails") or {})
+            continue
+        if str(r.get("stig") or "").startswith("card bound"):      # the present-card step: bound by its holder
+            last["cac_edipi"], who["cac_edipi"] = ("masked", r.get("card")), None
+            continue
+        if "attributes" not in r:
             continue
         for b in IDENTITY_BINDINGS:
             v = tuple((r.get("attributes") or {}).get(b) or ()) or None
             if v != last[b]:
                 last[b], who[b] = v, operator_actor(kc, e.get("authDetails") or {})
-    return {b: (who[b] if last[b] == tuple(current.get(b) or ()) else None) for b in IDENTITY_BINDINGS if current.get(b)}
+    def now_(b):
+        vals = tuple(current.get(b) or ())
+        return ("masked", mask_edipi(vals[0])) if vals and isinstance(last[b], tuple) and last[b][:1] == ("masked",) else vals
+    return {b: (who[b] if last[b] == now_(b) else None) for b in IDENTITY_BINDINGS if current.get(b)}
 
 def nonoperator_bindings(kc, uid, **kw):
     """The identity bindings the account holds now that someone OTHER than the operator's tooling set."""
@@ -4255,7 +4370,7 @@ def reset_factors(kc, u, why):
     if rep.get("email"):
         gone.append("email")
     rep["email"], rep["emailVerified"] = "", False          # "" clears it; None would mean "unchanged"
-    kc.api("PUT", "/users/%s" % u["id"], rep)
+    put_user(kc, u["id"], rep)
     kc.api("POST", "/users/%s/logout" % u["id"])
     if kc.api("GET", "/users/%s" % u["id"]).get("email"):
         raise RuntimeError("factor reset of %s: the e-mail address is still set" % u["username"])
@@ -4319,8 +4434,13 @@ def cmd_user_create_cac(a):
         outcome = "updated"
     else:
         kc.api("POST", "/users", {"username": a.username, "email": a.email, "firstName": a.first, "lastName": a.last,
-                                  "enabled": True, "emailVerified": True, "attributes": {"cac_edipi": [a.edipi]}})
+                                  "enabled": True, "emailVerified": True})
         u = user(kc, a.username); outcome = "created"
+        try:                 # the card server-side (stig-bindings): the admin event never holds the full EDIPI
+            bindings_or_put(kc, u["id"], set_={"cac_edipi": a.edipi}, reason="user-create-cac")
+        except BindingConflict as e:
+            kc.api("DELETE", "/users/%s" % u["id"])
+            sys.exit("REFUSED: %s (the new account was removed again)" % e)
     cid, role = a.role.split(":", 1); cu = client_uuid(kc, cid)
     kc.api("POST", "/users/%s/role-mappings/clients/%s" % (u["id"], cu), [kc.api("GET", "/clients/%s/roles/%s" % (cu, q(role)))])
     print("%s: %s (cac_edipi verified, no identity-provider link), role %s:%s" % (outcome, a.username, cid, role))
@@ -5289,7 +5409,7 @@ def build_parser():
     le = sp.add_parser("link-entra"); le.add_argument("username"); le.add_argument("oid"); le.set_defaults(fn=cmd_link_entra)
     lc = sp.add_parser("link-cac", help="bind a CAC to an EXISTING account: its holder presents it at the next sign-in "
                                         "(--edipi: only that card), or - only if they cannot - --bind-edipi --confirm-direct-bind")
-    lc.add_argument("username")
+    lc.add_argument("username", nargs="?")
     lc.add_argument("stray", nargs="*", help=argparse.SUPPRESS)          # an EDIPI typed here is refused, never echoed
     lc.add_argument("--edipi", nargs="?", const=True, default=None,
                     help="only the card with this EDIPI binds (typed at a prompt that does not show it; never on the command line)")
@@ -5299,6 +5419,7 @@ def build_parser():
     lc.add_argument("--replace", action="store_true", help="the account already has a card (or an invite's pending one): remove it, end its sessions")
     lc.add_argument("--allow-admin", action="store_true", help="the account is an IdP administrator: allowed with --edipi only")
     lc.add_argument("--cancel", action="store_true", help="withdraw a pending link request")
+    lc.add_argument("--cancel-all", action="store_true", help="withdraw EVERY pending link request in the realm (the realm-wide stop)")
     lc.set_defaults(fn=cmd_link_cac)
     am = sp.add_parser("entra-amr"); am.add_argument("username"); am.set_defaults(fn=cmd_entra_amr)
     ul = sp.add_parser("user-unlock"); ul.add_argument("username"); ul.set_defaults(fn=cmd_user_unlock)

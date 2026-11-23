@@ -40,6 +40,7 @@ class FakeKC:
     realm-management roles, logout), the realm's browser flow and its X.509 step, the user profile, required actions."""
     def __init__(self, x509_attr="cac_edipi", declared=True):
         self.users, self.logouts, self.puts, self.fail_q = {}, [], [], False
+        self.bindings, self.no_endpoint = [], False
         self.ra = None                     # the present-card required action: None = not registered
         self.x509_attr = x509_attr
         self.profile = ["username", "email", "cac_edipi"] + (["cac_edipi_pending", "stig_card_link"] if declared else [])
@@ -52,6 +53,31 @@ class FakeKC:
         return uid
     def rep(self, name):
         return self.users["u-" + name]["rep"]
+    def req(self, method, path, body=None, headers=None):
+        """stig-extensions' stig-bindings endpoint: set/remove the bindings, the present-card step; 409 on a card or an
+        object id held elsewhere; 404 when this image has none (no_endpoint)."""
+        m = re.fullmatch(r"/admin/realms/[^/]+/stig-bindings/users/([^/]+)", path)
+        if method != "POST" or not m:
+            raise AssertionError("unexpected request %s %s" % (method, path))
+        if self.no_endpoint:
+            return 404, '{"error":"not found"}'
+        b = json.loads(body); x = self.users[m.group(1)]; at = x["rep"]["attributes"]
+        for n, v in (b.get("set") or {}).items():
+            for other in self.users.values():
+                if other is not x and any(v in (other["rep"]["attributes"].get(k) or []) for k in
+                                          (("cac_edipi", "cac_edipi_pending") if n.startswith("cac_") else (n,))):
+                    return 409, '{"error":"%s is already held by another account"}' % n
+        self.bindings.append(b)
+        for n in b.get("remove") or []:
+            at.pop(n, None)
+        for n, v in (b.get("set") or {}).items():
+            at[n] = [v]
+        ra = x["rep"]["requiredActions"]
+        if b.get("presentCard") == "add" and "stig-present-card" not in ra:
+            ra.append("stig-present-card")
+        if b.get("presentCard") == "remove":
+            x["rep"]["requiredActions"] = [r for r in ra if r != "stig-present-card"]
+        return 200, '{}'
     def api(self, method, path, obj=None, ok=(200, 201, 204), ok404=False):
         u = urllib.parse.urlsplit(path); qs = dict(urllib.parse.parse_qsl(u.query)); p = u.path; parts = p.strip("/").split("/")
         if method == "GET" and p == "/users" and "q" in qs:
@@ -288,6 +314,40 @@ code, out, al = run(kc, ["jane.doe", "--edipi"], E1 + "\n")
 check("error: an admin-API failure exits non-zero, its message masked (the path carried the EDIPI)",
       isinstance(code, str) and "HTTP 500" in code and E1 not in code and "******7890" in code, code)
 check("error: ... audited result=error, masked", audited(al, "result=error") and E1 not in al[0], al)
+
+# ---- server-side writes (stig-bindings): never a user PUT carrying the card; the realm-wide stop
+kc = FakeKC(); kc.add("jane.doe"); kc.add("john.roe", creds=())
+run(kc, ["jane.doe", "--edipi"], E1 + "\n"); run(kc, ["john.roe", "--bind-edipi", "--confirm-direct-bind"], E2 + "\n")
+check("server-side: link-cac writes through stig-bindings only (no user PUT that would store the EDIPI in the admin event)",
+      not kc.puts and len(kc.bindings) == 2 and kc.bindings[0]["set"].get("cac_edipi_pending") == E1
+      and kc.bindings[0].get("presentCard") == "add" and kc.bindings[1]["set"] == {"cac_edipi": E2}, (kc.puts, kc.bindings))
+kc = FakeKC(); kc.add("jane.doe"); kc.no_endpoint = True; b = snap(kc)
+code, out, al = run(kc, ["jane.doe"])
+check("server-side: an image without the endpoint -> refused (link-cac never falls back to a PUT), nothing changed",
+      isinstance(code, str) and "stig-bindings" in code and unchanged(kc, b) and not kc.puts, code)
+kc = FakeKC(); kc.add("jane.doe"); kc.add("racer", attrs={})
+orig = kc.req
+def racing(method, path, body=None, headers=None):      # another writer bound the card between the check and the write
+    kc.users["u-racer"]["rep"]["attributes"]["cac_edipi"] = [E1]
+    return orig(method, path, body, headers)
+kc.req = racing
+code, out, al = run(kc, ["jane.doe", "--bind-edipi", "--confirm-direct-bind"], E1 + "\n")
+check("server-side: the endpoint's 409 (a card bound elsewhere meanwhile) -> refused, audited", isinstance(code, str) and "refused it" in code
+      and not kc.rep("jane.doe")["attributes"].get("cac_edipi") and audited(al, "result=refused"), code)
+kc = FakeKC(); kc.add("a.one"); kc.add("b.two"); kc.add("c.three")
+run(kc, ["a.one"]); run(kc, ["b.two", "--edipi"], E1 + "\n")
+n0 = len(AUDIT); M.KC = lambda: kc; out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    a_ = M.parse_cli(["link-cac", "--cancel-all"]); a_.fn(a_)
+lines = AUDIT[n0:]; ALL.extend(lines + [out.getvalue()])
+check("cancel-all: every pending request withdrawn (request, named card, step), accounts without one untouched",
+      not any(kc.rep(n)["attributes"].get(k) for n in ("a.one", "b.two") for k in ("stig_card_link", "cac_edipi_pending"))
+      and not any("stig-present-card" in kc.rep(n)["requiredActions"] for n in ("a.one", "b.two")) and "2 link request(s) cancelled" in out.getvalue(),
+      out.getvalue().strip())
+check("cancel-all: one audit line per account and one for the run", len(lines) == 3 and all("mode=cancel-all" in l for l in lines)
+      and "cancelled=2" in lines[-1], lines)
+code, out, al = run(kc, ["a.one", "--cancel-all"])
+check("cancel-all: with a username -> refused", isinstance(code, str) and "takes no username" in code, code)
 
 # ---- guard: requests never completed
 kc = FakeKC(); now = int(time.time() * 1000)

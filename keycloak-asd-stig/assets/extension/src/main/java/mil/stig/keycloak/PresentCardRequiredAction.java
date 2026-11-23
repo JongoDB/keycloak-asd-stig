@@ -167,6 +167,19 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
         return true;
     }
 
+    /** An "any card" link request binds only in a sign-in where the person entered their credentials (password + OTP,
+     *  or the identity provider) - never one that rode an existing SSO session (Keycloak's cookie), which anyone holding
+     *  the browser could start. Such a sign-in is let through without the step; the request stays for the next one. */
+    private boolean deferredForSso(RequiredActionContext context, Request req) {
+        if (!req.link() || req.expected() != null || context.getAuthenticationSession() == null) return false;
+        if (context.getAuthenticationSession().getAuthNote(org.keycloak.services.managers.AuthenticationManager.SSO_AUTH) == null) return false;
+        LOG.infof("STIG-CARD-PRESENT-NEEDS-SIGNIN realm=%s user=%s request=link card=any: this sign-in reused an SSO session - "
+                + "the card is asked for at the next sign-in with credentials", context.getRealm().getName(), context.getUser().getUsername());
+        context.getAuthenticationSession().setAuthNote(SKIPPED, "1");
+        context.success();
+        return true;
+    }
+
     static String shown(Request r) {
         return r.expected() == null ? "any" : AccountsPolicy.maskEdipi(r.expected());
     }
@@ -193,6 +206,7 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
             return;
         }
         if (refusedForAdministrator(context, req)) return;
+        if (deferredForSso(context, req)) return;
         context.challenge(page(context, null));
     }
 
@@ -239,6 +253,7 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
         Request req = request(session, realm, u, Time.currentTimeMillis());
         if (req == null || (!req.link() && req.attr() == null)) { context.success(); return; }
         if (refusedForAdministrator(context, req)) return;              // checked again at bind time
+        if (deferredForSso(context, req)) return;                       // ... and so is the SSO rule
         String pending = req.expected(), ca = req.attr(), kind = req.link() ? "link" : "invite";
         if (context.getHttpRequest().getDecodedFormParameters().containsKey("cancel")) {
             LOG.infof("STIG-CARD-PRESENT-SKIPPED realm=%s user=%s request=%s card=%s: asked again at the next sign-in, until the %s expires",
@@ -276,6 +291,23 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
             return;
         }
         String id = identity == null ? null : identity.trim();
+        // claim the card first (the key stig-accounts and stig-bindings use): two accounts cannot bind it at once
+        String claim = id == null || id.isEmpty() ? null : "stig-accounts-card:" + realm.getId() + ":" + id;
+        if (claim != null && !session.singleUseObjects().putIfAbsent(claim, 60)) {
+            LOG.warnf("STIG-CARD-PRESENT-BUSY realm=%s user=%s request=%s presented=%s: that card is being bound elsewhere right now - asked again",
+                    realm.getName(), u.getUsername(), kind, AccountsPolicy.maskEdipi(id));
+            context.challenge(page(context, "That card is being bound elsewhere right now: try again in a minute."));
+            return;
+        }
+        try {
+            bindOrRefuse(context, req, id, pending, ca, kind);
+        } finally {
+            if (claim != null) session.singleUseObjects().remove(claim);
+        }
+    }
+
+    private void bindOrRefuse(RequiredActionContext context, Request req, String id, String pending, String ca, String kind) {
+        RealmModel realm = context.getRealm(); UserModel u = context.getUser(); KeycloakSession session = context.getSession();
         boolean elsewhere = id != null && !id.isEmpty()
                 && session.users().searchForUserByUserAttributeStream(realm, ca, id).anyMatch(x -> !x.getId().equals(u.getId()));
         boolean reserved = id != null && !id.isEmpty()
