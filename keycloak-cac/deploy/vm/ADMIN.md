@@ -40,6 +40,7 @@ refuse to run without it, and unknown keys are refused like a typo. Start from
 | `handoffIntake.clientId` | the confidential client whose client-credentials token the intake accepts (`azp`); `handoff-worker-setup` creates it |
 | `handoffIntake.audience` | what the intake requires in `aud` (an audience mapper inside the scope below) |
 | `handoffIntake.scope` | what the intake requires in `scope`: an optional client scope of that name, the worker's only scope |
+| `handoffIntake.app` | the filing application (one of `applications`): `handoffs` suggests a command only for a member of its tree |
 | `handoffIntake.name` | display name of the worker client (optional) |
 | `operatorSshHost` | only used in the hints the tool prints (`ssh <host> 'sudo ...'`) |
 | `repoClientsDir` | with `add-client/check-clients --repo R`, the client files are `R/<repoClientsDir>/` (default `clients`) |
@@ -68,6 +69,12 @@ intake, or failed) is one `STIG-HANDOFF-OUTCOME` line in the system log (facilit
   too. A save of the client in the admin console makes Keycloak add the `service_account` default scope back, which
   is drift: re-run `handoff-worker-setup` after touching the client by hand. The secret is written to
   `/srv/idp/secrets/handoff_client_secret` (root, 0600); `--rotate-secret` replaces it and the old one stops working.
+- **A wrong or compromised intake cannot steer the operator.** `handoffs` looks each username up in Keycloak and
+  prints the account's state next to the hand-off (enabled, card bound, Entra bound, application trees - never the card
+  number or the object id). It suggests NO command, with a WARNING, when the account does not exist, is an IdP
+  administrator (a `/roles/*` group or any effective realm-management role), or is not a member of the filing
+  application's tree (`handoffIntake.app`); for `consider_disable`, filed after the last role was removed, when the
+  account still holds any application tree's group. If Keycloak cannot be asked, no command is suggested at all.
 - **Each request** (`handoffs`): the token comes from the realm's public token endpoint and is checked before use
   (issuer, `azp`, `aud` and `scope` exactly, at most 600 s, no `iat` in the future); the intake is reached over https
   only, its host resolved once and every address public, no redirect followed, 20 s and 1 MiB at most; anything the

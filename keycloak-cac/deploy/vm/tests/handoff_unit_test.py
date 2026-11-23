@@ -40,6 +40,13 @@ class Mock:
                            "filedBy": "mgr@example.mil", "filedAt": "2026-11-20T11:00:00Z"},
                       U3: {"id": U3, "kind": "consider_disable", "username": "john.roe", "status": "cancelled",
                            "filedBy": "mgr@example.mil", "filedAt": "2026-11-20T12:00:00Z"}}
+        for i, (kind, user) in enumerate([("delete_account", "ghost.user"), ("reset_credentials", "boss.admin"),
+                                          ("disable_enable_unlock", "rm.holder"), ("delete_account", "other.app"),
+                                          ("consider_disable", "gone.user"), ("consider_disable", "still.member"),
+                                          ("disable_enable_unlock", "off.user")]):
+            iid = "%08d-5555-4555-8555-555555555555" % (i + 1)
+            self.items[iid] = {"id": iid, "kind": kind, "username": user, "status": "open", "filedBy": "mgr@example.mil",
+                               "filedAt": "2026-11-21T1%d:00:00Z" % i}
 M_ = Mock(); M_.reset()
 
 def b64(o):
@@ -154,7 +161,7 @@ def cfg_with(h):
     if h is not None:
         c["handoffIntake"] = h
     return c
-GOOD = {"url": INTAKE, "clientId": CID, "audience": AUD, "scope": SCOPE}
+GOOD = {"url": INTAKE, "clientId": CID, "audience": AUD, "scope": SCOPE, "app": "app-a"}
 
 def load(cfg):
     p = os.path.join(TMP, "cfg-%d.json" % len(res))
@@ -176,7 +183,9 @@ for name, h, want in [
         ("a client id that is a delegate", dict(GOOD, clientId="app-a-admin"), "also an application or a delegate"),
         ("a scope that is one of Keycloak's own (profile)", dict(GOOD, scope="profile"), "Keycloak's own"),
         ("an audience with a space", dict(GOOD, audience="a b"), "one token"),
-        ("a scope as a list", dict(GOOD, scope=[SCOPE]), "non-empty string")]:
+        ("a scope as a list", dict(GOOD, scope=[SCOPE]), "non-empty string"),
+        ("a missing app (the filing application)", {k: v for k, v in GOOD.items() if k != "app"}, "handoffIntake.app is required"),
+        ("an app that is not an application", dict(GOOD, app="nonesuch"), "not an application")]:
     rc, out = load(cfg_with(h))
     check("config: refuses %s" % name, rc != 0 and want in out, out.strip().splitlines()[-1][:110] if out.strip() else "")
 
@@ -195,6 +204,44 @@ M.HANDOFF_RESOLVER = resolver
 M.HANDOFF_SECRET_FILE = os.path.join(TMP, "secret"); open(M.HANDOFF_SECRET_FILE, "w").write(SECRET + "\n")
 AUDIT = []
 M.HANDOFF_AUDIT = AUDIT.append
+
+class FakeKC:
+    """Just enough of the admin API for handoff_account: users, their groups, links and realm-management roles."""
+    def __init__(self):
+        self.users = {}
+    def add(self, name, groups=(), rm=(), enabled=True, attrs=None, links=()):
+        uid = "u-%s" % name
+        self.users[name] = {"rep": {"id": uid, "username": name, "enabled": enabled, "attributes": attrs or {}},
+                            "groups": [{"id": "g-" + g, "path": g} for g in groups], "rm": [{"name": r} for r in rm],
+                            "links": [{"identityProvider": l} for l in links]}
+    def by_id(self, uid):
+        return next(v for v in self.users.values() if v["rep"]["id"] == uid)
+    def api(self, method, path, obj=None, ok=(200, 201, 204), ok404=False):
+        p_ = urllib.parse.urlsplit(path); qs = dict(urllib.parse.parse_qsl(p_.query)); parts = p_.path.strip("/").split("/")
+        if p_.path == "/users":
+            u = self.users.get(qs.get("username"))
+            return [copy.deepcopy(u["rep"])] if u else []
+        if p_.path == "/clients":
+            return [{"id": "RM", "clientId": qs.get("clientId")}]
+        if parts[0] == "users" and len(parts) == 2:
+            return copy.deepcopy(self.by_id(parts[1])["rep"])
+        if parts[0] == "users" and parts[2] == "groups":
+            return copy.deepcopy(self.by_id(parts[1])["groups"]) if qs.get("first", "0") == "0" else []
+        if parts[0] == "users" and parts[2] == "federated-identity":
+            return copy.deepcopy(self.by_id(parts[1])["links"])
+        if parts[0] == "users" and parts[2] == "role-mappings":
+            return copy.deepcopy(self.by_id(parts[1])["rm"])
+        raise AssertionError("unexpected admin call %s %s" % (method, path))
+FK = FakeKC()
+FK.add("jane.doe", groups=["/app-a", "/app-a/viewer"], attrs={"cac_edipi": ["1234567890"], "entra_oid": ["0b1c2d3e-0000-4000-8000-000000000001"]},
+       links=["entra"])
+FK.add("boss.admin", groups=["/roles/idp-admin"])
+FK.add("rm.holder", groups=["/app-a/viewer"], rm=["manage-users"])
+FK.add("other.app", groups=["/app-b/owner"])
+FK.add("gone.user", enabled=True)
+FK.add("still.member", groups=["/app-c/lead"])
+FK.add("off.user", groups=["/app-a/editor"], enabled=False)
+M.KC = lambda: FK
 check("module: UNMANAGED_CLIENTS (so add-client refuses it, check-clients does not call it unmanaged) names the worker",
       CID in M.UNMANAGED_CLIENTS and CID in M.RESERVED_CLIENTS)
 
@@ -286,6 +333,42 @@ for kind, want in [("link_cac", None), ("link_entra", "link-entra a.b <Entra obj
 check("suggestion: every command is an existing idp-admin.py command",
       all(c.split()[0] in M.build_parser()._subparsers._group_actions[0].choices
           for cmds, _ in M.HANDOFF_SUGGESTIONS.values() for c in cmds))
+
+# ---- each account as Keycloak sees it: a wrong or compromised intake cannot steer the operator
+M_.reset(); code, out = run()
+def block(user):
+    """The lines printed for the hand-off of `user` (its header line up to the next hand-off)."""
+    ls = out.splitlines(); i = next((n for n, l in enumerate(ls) if "  %s " % user in l and "filed" in l), None)
+    if i is None:
+        return ""
+    j = next((n for n in range(i + 1, len(ls)) if not ls[n].startswith("    ")), len(ls))
+    return "\n".join(ls[i:j])
+b = block("jane.doe")
+check("account: a member of the filing tree gets its state (enabled, card bound, Entra bound + linked, trees) and the command",
+      "account: enabled; card bound; Entra bound (linked); application trees /app-a" in b and "run:  sudo idp-admin.py user-unlock jane.doe" in b
+      and "WARNING" not in b, b.replace("\n", " | ")[:160])
+check("account: the card number and the Entra object id are never printed", "1234567890" not in out and "0b1c2d3e" not in out)
+for user, want, name in [("ghost.user", "NO account ghost.user", "an account that does not exist"),
+                         ("boss.admin", "IdP ADMINISTRATOR (/roles/idp-admin)", "an IdP administrator by /roles/* group"),
+                         ("rm.holder", "IdP ADMINISTRATOR (manage-users)", "an administrator by an effective realm-management role (even inside the tree)"),
+                         ("other.app", "not a member of /app-a", "an account outside the filing application's tree"),
+                         ("still.member", "still holds groups of /app-c", "consider_disable for an account still in another application's tree")]:
+    b = block(user)
+    check("account: %s -> a WARNING and NO command line" % name, want in b and "WARNING" in b and "run:" not in b, b.replace("\n", " | ")[-150:])
+b = block("gone.user")
+check("account: consider_disable for an account in no application tree gets its command (user-enable ... false)",
+      "application trees none" in b and "run:  sudo idp-admin.py user-enable gone.user false" in b and "WARNING" not in b, b.replace("\n", " | ")[-120:])
+b = block("off.user")
+check("account: a disabled account is shown DISABLED", "account: DISABLED; card not bound; Entra not bound; application trees /app-a" in b, b.replace("\n", " | ")[-120:])
+b = block("x; rm -rf /")
+check("account: an unsafe username is never looked up and gets no command", "WARNING" in b and "run:" not in b, b.replace("\n", " | ")[-100:])
+def kc_down():
+    sys.exit("admin login failed")
+M.KC = kc_down
+M_.reset(); code, out = run()
+check("account: when Keycloak cannot be asked, NO command is suggested for any hand-off (warned)",
+      code == 0 and "accounts could not be checked" in out and "run:" not in out, out.strip().splitlines()[0][:120] if out.strip() else "")
+M.KC = lambda: FK
 
 # ---- outcomes: recorded, idempotent, refused when closed otherwise, unknown id, audit
 M_.reset(); AUDIT.clear()

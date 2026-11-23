@@ -61,7 +61,9 @@ idp-admin.example.json beside this script for every key). Commands that talk to 
         check-clients: drift), secret to /srv/idp/secrets/handoff_client_secret (root 0600), and proved: a token asked
         for the scope carries exactly that aud, scope and azp. Idempotent; re-enables.
   idp-admin.py handoffs [list] | handoffs done|refused <id> [--note N]
-        the application's open hand-offs (oldest first), each with the idp-admin.py command(s) suggested for its kind -
+        the application's open hand-offs (oldest first), each with its account as Keycloak sees it (enabled, card,
+        Entra, application trees) and the idp-admin.py command(s) suggested for its kind - none, with a WARNING, when the
+        account does not exist, is an IdP administrator, or is outside the filing application's tree (handoffIntake.app) -
         NEVER run automatically: the operator runs the command, then records the outcome (audited to syslog, auth
         facility). https only, the intake host resolved once to public addresses, no redirect, 20 s, 1 MiB. A note is at
         most 200 characters, printable, with no run of ten digits.
@@ -100,7 +102,7 @@ CONFIG_KEYS = {"applications", "entra", "smtp", "operatorSshHost", "repoClientsD
 APP_KEYS = {"userManagerRole", "adoptable", "delegations", "preSplitDelegates"}
 DELEGATION_KEYS = {"groups", "name", "membershipOnly"}
 ENTRA_KEYS, SMTP_KEYS, ONBOARDING_KEYS = {"memberDomain", "displayName"}, {"host", "port", "from", "displayName"}, {"defaultApps"}
-HANDOFF_KEYS = {"url", "clientId", "audience", "scope", "name"}
+HANDOFF_KEYS = {"url", "clientId", "audience", "scope", "app", "name"}
 # client scopes Keycloak ships (or this tooling relies on): never the name of the hand-off scope
 BUILTIN_SCOPES = {"openid", "profile", "email", "address", "phone", "offline_access", "roles", "web-origins", "acr",
                   "basic", "microprofile-jwt", "organization", "service_account", "role_list", "saml_organization",
@@ -204,6 +206,8 @@ def load_admin_config(path):
                 no("handoffIntake.%s must be one token (letters, digits, . _ : -; no space)" % k)
         if h["scope"] in BUILTIN_SCOPES:
             no("handoffIntake.scope %r is one of Keycloak's own client scopes" % h["scope"])
+        if h["app"] not in apps:
+            no("handoffIntake.app %r is not an application (the filing application's tree decides whose hand-offs get a command)" % h["app"])
     for k in ("operatorSshHost", "repoClientsDir"):
         if k in c:
             text(k, c[k])
@@ -1903,8 +1907,8 @@ def handoff_rep(cid, name=None):
             "protocol": "openid-connect", "enabled": True, "publicClient": False, "bearerOnly": False,
             "clientAuthenticatorType": "client-secret", "serviceAccountsEnabled": True, "standardFlowEnabled": False,
             "implicitFlowEnabled": False, "directAccessGrantsEnabled": False, "fullScopeAllowed": False,
-            "consentRequired": False, "frontchannelLogout": False, "redirectUris": [], "webOrigins": [],
-            "authenticationFlowBindingOverrides": {}, "attributes": handoff_attrs()}
+            "consentRequired": False, "frontchannelLogout": False, "authorizationServicesEnabled": False,
+            "redirectUris": [], "webOrigins": [], "authenticationFlowBindingOverrides": {}, "attributes": handoff_attrs()}
 
 HANDOFF_MAPPER_NAME = "intake audience"
 def handoff_mapper(aud):
@@ -1958,6 +1962,8 @@ def handoff_problems(kc, cid, want, allow_disabled=False):
             have = {k_: v_ for k_, v_ in (have or {}).items() if v_}
         if k in ("redirectUris", "webOrigins"):
             have = sorted(have or [])
+        if k == "authorizationServicesEnabled":
+            have = bool(have)                 # Keycloak leaves the key out of a client without authorization services
         if have != v:
             probs.append("%s is %r, recorded %r" % (k, have, v))
     la = c.get("attributes") or {}
@@ -2257,6 +2263,38 @@ HANDOFF_SUGGESTIONS = {
                          "Their last role in the filing application was removed. Disable only if they hold no other application's role (guard lists accounts with none: info STIG-ACCOUNT-NO-APP-ROLE)."),
 }
 
+def handoff_account(kc, username, kind):
+    """What the IdP itself says about a hand-off's account, so a wrong or compromised intake cannot steer the operator:
+    (state line, warning or None). A warning means NO command is suggested: no such account; an IdP administrator
+    (a /roles/* group or any effective realm-management role); not a member of the filing application's tree
+    (handoffIntake.app) - except consider_disable, filed after the last role was removed, which is warned instead when
+    the account still holds ANY application tree's group. Never prints a card number or an Entra object id."""
+    app = HANDOFF.get("app")
+    if not isinstance(username, str) or not HANDOFF_SAFE_USERNAME.fullmatch(username):
+        return "", "the username has characters a command cannot carry"
+    us = [u for u in kc.api("GET", "/users?exact=true&username=%s" % q(username)) or []
+          if (u.get("username") or "").lower() == username.lower()]
+    if len(us) != 1:
+        return "no such account", "there is NO account %s in the realm" % username
+    u = kc.api("GET", "/users/%s" % us[0]["id"])
+    at = u.get("attributes") or {}
+    links = sorted(l.get("identityProvider") for l in kc.api("GET", "/users/%s/federated-identity" % u["id"]) or [])
+    groups = [g["path"] for g in paged(kc, "/users/%s/groups" % u["id"])]
+    trees = sorted({p_.strip("/").split("/")[0] for p_ in groups if p_.strip("/").split("/")[0] in APP_CLIENTS})
+    state = "%s; card %s; Entra %s%s; application trees %s" % (
+        "enabled" if u.get("enabled") else "DISABLED", "bound" if any(at.get("cac_edipi") or []) else "not bound",
+        "bound" if any(at.get("entra_oid") or []) else "not bound", " (linked)" if "entra" in links else "",
+        ", ".join("/" + t for t in trees) or "none")
+    admin = [p_ for p_ in groups if p_.startswith("/roles/")] or sorted(rm_roles(kc, u["id"]))
+    if admin:
+        return state, "%s is an IdP ADMINISTRATOR (%s): an application never files for an administrator" % (username, ", ".join(admin))
+    if kind == "consider_disable":
+        if trees:
+            return state, "%s still holds groups of %s: do not disable for this hand-off" % (username, ", ".join("/" + t for t in trees))
+    elif app not in trees:
+        return state, "%s is not a member of /%s, the filing application's tree" % (username, app)
+    return state, None
+
 def handoff_suggestion(kind, username):
     """(command lines, note) for one hand-off. An unsafe username gives no command line, never a quoted one."""
     cmds, note = HANDOFF_SUGGESTIONS.get(kind, ([], "An unknown kind: handle it by hand."))
@@ -2296,9 +2334,28 @@ def cmd_handoffs(a):
             sys.exit("FAILED: the intake's answer is not a hand-off list: %s" % e)
         if not items:
             print("no open hand-offs"); return
+        # each account as the IdP sees it (Keycloak's network namespace from here on: the intake call is done)
+        try:
+            kc = KC()
+        except SystemExit as e:
+            kc = None
+            print("WARNING: the accounts could not be checked in Keycloak (%s): no command is suggested for any hand-off" % e)
         for it in items:
             print("%s  %-22s %-28s filed %s by %s" % (clean(it["id"], 64), clean(it.get("kind"), 22), clean(it.get("username"), 60),
                                                       clean(it.get("filedAt"), 30), clean(it.get("filedBy"), 120)))
+            if kc is None:
+                state, warn = "", "the account was not checked"
+            else:
+                try:
+                    state, warn = handoff_account(kc, it.get("username"), it.get("kind"))
+                except SystemExit as e:
+                    state, warn = "", "the account could not be read (%s)" % e
+            if state:
+                print("    account: %s" % state)
+            if warn:
+                print("    WARNING: %s. No command suggested: check this hand-off by hand with the filer (the intake may be "
+                      "wrong or compromised)." % warn)
+                continue
             cmds, note = handoff_suggestion(it.get("kind"), it.get("username"))
             for c in cmds:
                 print("    run:  %s" % c)
@@ -2384,6 +2441,7 @@ def cmd_handoff_worker_setup(a):
         kc.api("POST", "/clients", rep); print("client %s created (service account only, no roles)" % cid)
     c = kc.api("GET", "/clients/%s" % find_client(kc, cid)["id"])
     if ex:
+        c.setdefault("authorizationServicesEnabled", False)    # left out by Keycloak when off: compare it as off
         cur = dict(c); cur.update({k: v for k, v in rep.items() if k not in ("attributes", "name")})
         if h.get("name"):
             cur["name"] = h["name"]
