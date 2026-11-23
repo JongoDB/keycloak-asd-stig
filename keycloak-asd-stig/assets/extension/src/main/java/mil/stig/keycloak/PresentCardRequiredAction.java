@@ -286,7 +286,8 @@ public class PresentCardRequiredAction implements RequiredActionProvider, Requir
         if (why != null) {
             LOG.warnf("STIG-CARD-PRESENT-REFUSED realm=%s user=%s request=%s pending=%s presented=%s: %s - the account's card is unchanged",
                     realm.getName(), u.getUsername(), kind, shown(req), AccountsPolicy.maskEdipi(id), why);
-            audit(context, "{\"stig\":\"card refused: " + why + "\",\"request\":\"" + kind + "\",\"card\":\"" + AccountsPolicy.maskEdipi(id) + "\"}");
+            audit(context, "{\"stig\":\"card refused: " + why + "\",\"request\":\"" + kind + "\",\"card\":\""
+                    + AccountsPolicy.maskEdipi(pending != null ? pending : id) + "\",\"presented\":\"" + AccountsPolicy.maskEdipi(id) + "\"}");
             context.success();
             return;
         }
