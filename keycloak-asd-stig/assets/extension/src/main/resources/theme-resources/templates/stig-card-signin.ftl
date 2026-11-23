@@ -75,10 +75,9 @@
                 var btn = document.getElementById("kc-card-signin"), label = btn.value, sent = false, ac = null, t = null;
                 var other = document.getElementById("stig-card-other");
                 function reset() { if (t) { clearTimeout(t); t = null; } w.hidden = true; btn.disabled = false; btn.value = label; }
-                if (other) other.addEventListener("submit", function () {
-                    sent = true;
-                    if (ac) ac.abort();
-                });
+                function leave() { sent = true; if (ac) ac.abort(); }          // another way chosen: the probe may not submit
+                if (other) other.addEventListener("submit", leave);
+                Array.prototype.forEach.call(document.querySelectorAll("#stig-card-idps a"), function (l) { l.addEventListener("click", leave); });
                 // back to this page from the browser's history: nothing pending, no message
                 window.addEventListener("pageshow", function (ev) { if (ev.persisted) { sent = false; ac = null; reset(); b.hidden = true; } });
                 f.addEventListener("submit", function (ev) {

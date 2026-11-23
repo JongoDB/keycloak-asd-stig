@@ -24,7 +24,7 @@
             <span class="${properties.kcAlertTitleClass!}">${msg("stigPresentCardBlocked")}</span>
         </div>
         <div id="stig-card-wait" class="${properties.kcAlertClass!} pf-m-info" role="status" hidden>
-            <span class="${properties.kcAlertTitleClass!}">${msg("stigCardSignInStillWaiting")}</span>
+            <span class="${properties.kcAlertTitleClass!}">${msg("stigPresentCardStillWaiting")}</span>
         </div>
         <form id="stig-card-form" action="${cardAction}" method="post" data-probe="${cardProbe}" data-waiting="${msg("stigPresentCardWaiting")}">
             <input class="${properties.kcButtonClass!} ${properties.kcButtonPrimaryClass!} ${properties.kcButtonBlockClass!} ${properties.kcButtonLargeClass!}"

@@ -53,6 +53,11 @@ Use the card's UPN exactly as it appears. Many cards use 16 digits (the EDIPI pl
   client issues to the account-administration calls and requires a recent authentication for writes (401 with an
   RFC 9470 step-up challenge otherwise). Clients without the attribute are unaffected. `operations.md` section 9.
 
+## Contributing
+This repository is public. Before your first push, enable the pre-push hook, which runs the public-content guard
+(`.github/scripts/public-content-guard.py`) over the pushed commits and refuses on any finding:
+`git config core.hooksPath .githooks`
+
 ## Status
 - All lab topologies pass the e2e suite: env-only, edge proxy, 2-node HA, Helm through Podman, strict FIPS, and the 26.7 to 26.8 upgrade.
 - The gateway passes its tests.

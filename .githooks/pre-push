@@ -1,0 +1,29 @@
+#!/bin/sh
+# pre-push: run the public-content guard over what is being pushed and refuse on any finding.
+#   setup, once per clone or worktree:  git config core.hooksPath .githooks
+# Checked for each pushed ref: the pushed tip's own tree (not the working tree), every line added in the pushed commits
+# (a name added and removed again within the range is still published), and every commit message in the range.
+# The range starts at the merge base with origin/main (a new branch) or at the remote's old tip (an update).
+set -eu
+z=0000000000000000000000000000000000000000
+root=$(git rev-parse --show-toplevel); guard="$root/.github/scripts/public-content-guard.py"
+[ -f "$guard" ] || { echo "pre-push: $guard not found" >&2; exit 1; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+rc=0
+while read -r lref lsha rref rsha; do
+  [ "$lsha" = "$z" ] && continue                                   # a deletion publishes nothing
+  if [ "$rsha" = "$z" ] || ! git cat-file -e "$rsha^{commit}" 2>/dev/null; then
+    base=$(git merge-base "$lsha" origin/main 2>/dev/null || git rev-list --max-parents=0 "$lsha" | tail -1)
+  else
+    base=$rsha
+  fi
+  range="$base..$lsha"
+  rm -rf "$tmp/tree"; mkdir -p "$tmp/tree"
+  git archive "$lsha" | tar -x -C "$tmp/tree"
+  git log -p --format= "$range" | grep '^+' > "$tmp/added.txt" || true
+  echo "pre-push: public-content guard on $rref ($range)" >&2
+  (cd "$root" && python3 "$guard" --no-tree --commits "$range" --files "$tmp/added.txt") >&2 || rc=1
+  (cd "$tmp/tree" && find . -type f ! -path './.git/*' -print0 | xargs -0 python3 "$guard" --no-tree --files) >&2 || rc=1
+done
+[ "$rc" = 0 ] || echo "pre-push: REFUSED - the public-content guard found something above; nothing was pushed" >&2
+exit "$rc"

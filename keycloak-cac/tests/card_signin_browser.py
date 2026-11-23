@@ -122,13 +122,15 @@ def signed_in(page, timeout=40000):
             pass
     return page.url.startswith(ACCT)
 
+NOTE = {"text": ""}
 def watch_blocked(page, seconds):
     """Poll the page for `seconds`: (was the blocked message ever visible, was the still-waiting note ever visible)."""
     blocked = waiting = False; end = time.time() + seconds
     while time.time() < end:
         try:
             blocked = blocked or page.is_visible("#stig-card-blocked")
-            waiting = waiting or (page.query_selector("#stig-card-wait") is not None and page.is_visible("#stig-card-wait"))
+            if page.query_selector("#stig-card-wait") is not None and page.is_visible("#stig-card-wait"):
+                waiting = True; NOTE["text"] = page.inner_text("#stig-card-wait").strip()
         except Exception:
             break                                                # navigated away
         page.wait_for_timeout(200)
@@ -207,8 +209,41 @@ with sync_playwright() as pw:
         b2, _ = watch_blocked(page, 1.0); blocked = blocked or b2
     ok = signed_in(page)
     check("[slowpick] a 14 s certificate pick: the blocked message is never shown", not blocked and held, "held=%d" % len(held))
-    check("[slowpick] ... a \"still waiting\" note is, after 10 s", waiting)
+    check("[slowpick] ... a \"still waiting\" note is, after 10 s, pointing at the other methods below", waiting
+          and NOTE["text"].endswith("or use another sign-in method below."), repr(NOTE["text"]))
     check("[slowpick] ... and the sign-in completes", ok, page.url[:80])
+    ctx.close()
+
+    # [idp-race] the provider button pressed while the probe is in flight: the probe, released afterwards, never submits
+    # the card form (the page stays alive: the provider's navigation is held)
+    ctx, page = open_card_page(br, 1440, True)
+    held, card_gets, idp_nav = [], [], []
+    def on_card(route):
+        if "/.well-known/" in route.request.url:
+            held.append(route)
+        else:
+            card_gets.append(route.request.url); route.abort()
+    def on_broker(route):
+        idp_nav.append(route)                                  # held: the page does not unload
+    page.route("https://%s:%d/**" % (HOST, CARD_PORT), on_card)
+    page.route("**/broker/entra/login**", on_broker)
+    page.click("#kc-card-signin", no_wait_after=True)
+    page.wait_for_timeout(1000)
+    page.click("#social-entra", no_wait_after=True)
+    page.wait_for_timeout(1000)
+    for r in held:
+        try:
+            r.continue_()
+        except Exception:
+            pass
+    page.wait_for_timeout(2500)
+    check("[idp-race] provider chosen during the probe: the late probe never submits the card form",
+          held and idp_nav and not card_gets, "held=%d idp=%d card-gets=%s" % (len(held), len(idp_nav), card_gets[:1]))
+    for r in idp_nav:
+        try:
+            r.abort()
+        except Exception:
+            pass
     ctx.close()
 
     # [refused] a real connection error on the card port
