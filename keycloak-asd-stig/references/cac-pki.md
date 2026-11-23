@@ -109,7 +109,7 @@ Xeon (measured: 5.1 s signature checks + 0.4 s `isRevoked` scans), although only
   `CAC_CRL_READY_GRACE`, then ready `DEGRADED`, naming them), never installs a CRL older than the one it has
   (`STIG-CRL-OLDER`), and
   `CAC_CRL_CACHE_DIR` installs the last good CRLs before Keycloak starts, so on a host with a cache the window does not
-  open at all. If NIO cannot stat a file that java.io can read, file identity falls back to size and mtime
+  open at all, and a complete, unexpired cache makes the container ready without waiting for the first download. If NIO cannot stat a file that java.io can read, file identity falls back to size and mtime
   (`STIG-CRL-VERSION-DEGRADED`, logged once).
 - **Refresh without blocking:** a background job (every 30 s, `-Dstig.crl.prewarm.seconds`, and whenever a login sees
   a changed file) re-reads and verifies changed files and evicts files no realm lists any more. Locks are per file.

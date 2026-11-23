@@ -90,4 +90,24 @@ bash "$PKI" crl-sync mono/src anchors mono/live 2>/dev/null
 printf 'not a CRL' > mono/live/DODIDCA_70.crl; cp mono/new.crl mono/cache/DODIDCA_70.crl
 bash "$PKI" crl-save mono/live mono/cache mono/names 2>mono/log
 grep -q "WARN STIG-CRL-DATE-UNREADABLE DODIDCA_70.crl" mono/log && pass "an unparsable thisUpdate is logged (STIG-CRL-DATE-UNREADABLE), never silently treated as older" || no "date warning: $(cat mono/log)"
+
+# 5. one parse per CRL: the format from the first byte, the signature and nextUpdate together; the cache's expired list
+mkdir fx fx/src fx/live
+mk DODIDCA_70 1 fx/src/DODIDCA_70.crl                                     # DER, valid for 30 days
+cp DODROOTCA6.crl.pem fx/src/DODROOTCA6.crl                               # PEM
+cp crl/RETIRED.crl fx/live/RETIRED.crl                                    # already installed, issuer no longer trusted
+: > fx/expired; bash "$PKI" crl-sync fx/src anchors fx/live fx/expired 2>fx/log
+[ -s fx/live/DODIDCA_70.crl ] && [ -s fx/live/DODROOTCA6.crl ] && pass "crl-sync: DER and PEM CRLs both verify and install" || no "crl-sync formats: $(ls fx/live) $(cat fx/log)"
+[ ! -e fx/live/RETIRED.crl ] && pass "crl-sync: a CRL it did not install itself is still pruned (issuer not an anchor)" || no "crl-sync kept RETIRED.crl"
+[ ! -s fx/expired ] && pass "crl-sync: no CRL in force is listed as expired" || no "expired list: $(cat fx/expired)"
+: > index.txt; echo 01 > crlnum
+printf '[ca]\ndefault_ca=c\n[c]\ndatabase=index.txt\ncrlnumber=crlnum\ndefault_md=sha256\n' > ca.cnf
+openssl ca -config ca.cnf -gencrl -keyfile DODIDCA_70.key -cert DODIDCA_70.pem -out x.pem \
+  -crl_lastupdate "$(date -u -d "-3 days" +%Y%m%d%H%M%SZ)" -crl_nextupdate "$(date -u -d "-1 days" +%Y%m%d%H%M%SZ)" 2>/dev/null
+rm -rf fx/live/*; openssl crl -in x.pem -outform DER -out fx/src/DODIDCA_70.crl
+: > fx/expired; bash "$PKI" crl-sync fx/src anchors fx/live fx/expired 2>/dev/null
+[ -s fx/live/DODIDCA_70.crl ] && [ "$(cat fx/expired)" = DODIDCA_70.crl ] \
+  && pass "crl-sync: a CRL past its nextUpdate is installed (its CA fails closed either way) and listed as expired" || no "expired: $(cat fx/expired)"
+: > fx/expired; bash "$PKI" crl-sync fx/src anchors fx/live fx/expired 2>/dev/null
+[ "$(cat fx/expired)" = DODIDCA_70.crl ] && pass "crl-sync: an expired CRL already installed (unchanged bytes) is listed too" || no "expired unchanged: $(cat fx/expired)"
 exit $fail

@@ -203,11 +203,19 @@ if [ "$MODE" = online ]; then cp "$D/crl-names.txt" "$D/.crl-required"; fi
 # installed (a retired CA's CRL never comes back) - and every refresh writes the expected ones back. CRLs are public;
 # a stale one (past nextUpdate) still fails closed for its CA until the refresh replaces it.
 CACHE="${CAC_CRL_CACHE_DIR:-}"
+rm -f "$D/.crl-cache-expired" "$D/.crl-cache-complete"
 if [ -n "$CACHE" ]; then
   [ "$MODE" = online ] || die "CAC_CRL_CACHE_DIR is for CRL_MODE=online only (file mode reads CAC_CRL_DIR)"
   [ -d "$CACHE" ] && [ -w "$CACHE" ] || die "CAC_CRL_CACHE_DIR=$CACHE is not a writable directory (owner 1000, see README)"
-  "$TOOLS/cac-pki.sh" crl-sync "$CACHE" "$D/anchors" "$D/crl"
+  : > "$D/.crl-cache-expired"
+  "$TOOLS/cac-pki.sh" crl-sync "$CACHE" "$D/anchors" "$D/crl" "$D/.crl-cache-expired"
   log "CRLs: $(crl_missing | wc -l) of $(wc -l < "$D/.crl-required") expected still missing after installing the cache"
+  # Every expected CRL installed and none past its nextUpdate: the container may report ready as soon as the realm is
+  # applied, without waiting for the first download (crl_loop) - which only refreshes CRLs that are already in force.
+  if [ -z "$(crl_missing)" ] && [ ! -s "$D/.crl-cache-expired" ]; then touch "$D/.crl-cache-complete"
+  elif [ -s "$D/.crl-cache-expired" ]; then
+    log "CRLs: from the cache but past nextUpdate (cards of those CAs are refused until the refresh replaces them; readiness waits for it): $(tr '\n' ' ' < "$D/.crl-cache-expired")"
+  fi
 fi
 crl_refresh() {
   case "$MODE" in
@@ -222,7 +230,7 @@ crl_refresh() {
 if $LAB && [ -d "$D/lab/conf/crl" ] && [ "$MODE" != file ]; then "$TOOLS/cac-pki.sh" crl-sync "$D/lab/conf/crl" "$D/anchors" "$D/crl"; fi
 case "$MODE" in
   file)   crl_refresh ;;                       # local: fast, needed before the profile is rendered
-  online) log "CRLs: downloading $(wc -l < "$D/crl-names.txt") DoD CRLs in the background (cards of a CA fail closed until its CRL is installed; the container is not ready until all are, or CAC_CRL_READY_GRACE has passed)";;
+  online) log "CRLs: downloading $(wc -l < "$D/crl-names.txt") DoD CRLs in the background (cards of a CA fail closed until its CRL is installed; the container is not ready until all are - from the cache or downloaded - or CAC_CRL_READY_GRACE has passed)";;
   ocsp)   log "WARN CRL_MODE=ocsp: no local CRL cache (V-222553 asks for one); every login depends on the OCSP responder";;
   none)   log "!!! CRL_MODE=none: certificate revocation is NOT checked (lab only) !!!";;
 esac
@@ -270,6 +278,9 @@ crl_next_wait() { # online: while any expected CRL is missing, retry every CAC_C
   else echo "${CAC_CRL_REFRESH_SECONDS:-21600}"; fi
 }
 crl_loop() {
+  # the cache already supplied every expected, unexpired CRL: ready now; the first refresh below runs after ready
+  [ "$MODE" = online ] && [ -f "$D/.crl-cache-complete" ] && [ -z "$(crl_missing)" ] && {
+    touch "$D/.crl-loaded"; log "CRLs: every expected CRL installed from the cache - ready without waiting for the first refresh"; }
   [ "$MODE" = online ] && { crl_refresh; python3 "$TOOLS/cac-config.py" sync-crl-list || log "WARN could not update the CRL list"
                            python3 "$TOOLS/cac-config.py" clear-crl-cache || true; touch "$D/.crl-loaded"; }
   [ "$MODE" != online ] && touch "$D/.crl-loaded"

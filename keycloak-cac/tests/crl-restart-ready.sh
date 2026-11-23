@@ -5,6 +5,8 @@
 #   1. first start, empty cache: health is never "ready" while an expected CRL is missing; the cache fills;
 #   2. restart with the CRL source DOWN: the CRLs come from the cache before Keycloak starts - every expected CRL is
 #      installed at the first health check that passes, no STIG-CRL-MISSING is logged, and a card still signs in;
+#   2b. restart with a SLOW source (every refresh takes minutes): ready as soon as the cache installed every expected
+#      CRL and the realm is applied - not after the first refresh, which still runs (and completes) afterwards;
 #   3. restart with an EMPTY cache and the source down: never healthy, health names the missing CRLs; once the source is
 #      back the retry (CAC_CRL_RETRY_SECONDS) installs them and it becomes healthy;
 #   4. one CRL PERMANENTLY unavailable: not ready during CAC_CRL_READY_GRACE (naming it), then ready DEGRADED (still
@@ -29,14 +31,15 @@ docker network create "$NET" >/dev/null
 docker volume create "$VOL" >/dev/null
 docker run --rm --user 0 -v "$VOL:/c" --entrypoint bash "$IMG" -c 'chown 1000:1000 /c && chmod 0750 /c'
 docker run -d --name "$N-db" --network "$NET" -e POSTGRES_DB=keycloak -e POSTGRES_USER=keycloak -e POSTGRES_PASSWORD=crl-restart-db-password docker.io/library/postgres:17 >/dev/null
-mirror() { # start the slow mirror (2 s per file)
+mirror() { # start the slow mirror (${1:-2} s per file)
   docker rm -f "$N-mirror" >/dev/null 2>&1 || true
   docker run -d --name "$N-mirror" --network "$NET" -v "$T/mirror:/srv:ro" --entrypoint python3 docker.io/library/python:3.12-slim -c '
-import http.server, time
+import http.server, sys, time
+DELAY = float(sys.argv[1])
 class H(http.server.SimpleHTTPRequestHandler):
     def __init__(s, *a, **k): super().__init__(*a, directory="/srv", **k)
-    def do_GET(s): time.sleep(2); super().do_GET()
-http.server.ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()' >/dev/null
+    def do_GET(s): time.sleep(DELAY); super().do_GET()
+http.server.ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()' "${1:-2}" >/dev/null
 }
 mirror
 for i in $(seq 1 30); do docker exec "$N-db" pg_isready -U keycloak >/dev/null 2>&1 && break; sleep 2; done
@@ -107,6 +110,20 @@ check "restart: no STIG-CRL-MISSING (the start-up window does not open)" "$([ "$
 cards=$(try_cards)
 check "restart: a valid card signs in" "${cards%% *}"
 check "restart: a revoked card is refused" "${cards##* }"
+
+# 2b. a slow source (8 s per file, ~19 x 8 s per refresh): ready from the cache, before the first refresh completes
+mirror 8
+R0=$(docker logs "$N" 2>&1 | grep -c "CRLs refreshed:" || true); docker restart "$N" >/dev/null; S0=$(date +%s)
+watch 300; S1=$(date +%s); R1=$(docker logs "$N" 2>&1 | grep -c "CRLs refreshed:" || true)
+check "slow source: healthy, every expected CRL installed when first ready" "$([ -n "$READY_AT" ] && [ $BAD = 0 ] && echo 1 || echo 0)" "after $((S1 - S0))s: ${LAST:0:100}"
+check "slow source: ready BEFORE the first refresh completed (it does not gate readiness)" \
+  "$([ -n "$READY_AT" ] && [ "$R1" -eq "$R0" ] && grep -qF "ready without waiting for the first refresh" <<<"$(docker logs "$N" 2>&1)" && echo 1 || echo 0)" "refreshes logged before/at ready: $R0/$R1"
+for i in $(seq 1 150); do R2=$(docker logs "$N" 2>&1 | grep -c "CRLs refreshed:" || true); [ "$R2" -gt "$R1" ] && break; sleep 2; done
+check "slow source: ... and that refresh still completes after ready (0 failed)" \
+  "$([ "$R2" -gt "$R1" ] && grep "CRLs refreshed:" <<<"$(docker logs "$N" 2>&1)" | tail -1 | grep -q " 0 failed" && echo 1 || echo 0)" "$(docker logs "$N" 2>&1 | grep "CRLs refreshed:" | tail -1 | cut -c1-90)"
+s=$(sample)
+check "slow source: still ready, every CRL installed, after the refresh" "$([ "${s%% *}" = 0 ] && echo 1 || echo 0)" "${s:0:100}"
+docker rm -f "$N-mirror" >/dev/null
 
 # 3. restart with an EMPTY cache and the source down: never healthy; source back -> healthy, all CRLs
 docker run --rm --user 0 -v "$VOL:/c" --entrypoint bash "$IMG" -c 'rm -f /c/*.crl'
