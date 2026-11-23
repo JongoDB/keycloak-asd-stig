@@ -2961,22 +2961,32 @@ def write_bindings(kc, uid, set_=None, remove=(), present=None, reason=None):
 
 PROFILE_FIELDS = ("username", "email", "firstName", "lastName", "emailVerified", "enabled", "requiredActions")
 
-def put_user(kc, uid, changes):
+def put_user(kc, uid, changes, containment=False):
     """Change ONLY these profile fields of a user (username, e-mail, names, the two flags, required actions), server-side
     through stig-bindings: Keycloak's admin event for a user PUT holds every attribute, the card included, even when the
-    request sends none; the endpoint's event holds only the fields. Never fails closed: on any answer but 200 (an image
-    without the endpoint, a validator refusing, an error) it falls back to a PUT of just these fields, so a containment
-    step (the guard's disable) always lands. (A test double without raw requests goes straight to the PUT.)"""
+    request sends none; the endpoint's event holds only the fields.
+      - 404/405 (an image without the endpoint): the former PUT of just these fields (the event then stores the
+        account's attributes, as before this change).
+      - any other refusal or error: FAILS CLOSED (exit) - except the guard's containment disable (containment=True,
+        changes exactly {"enabled": False}), which must always land: then a PUT of exactly {"enabled": false}.
+    (A test double without raw requests goes straight to the PUT.)"""
     changes = {k: v for k, v in changes.items() if k in PROFILE_FIELDS and v is not None}
+    if containment and changes != {"enabled": False}:
+        raise ValueError("a containment update is exactly {enabled: false}")
     if getattr(kc, "req", None) is not None:
         st, data = kc.req("POST", "/admin/realms/%s/stig-bindings/users/%s" % (REALM, uid),
-                          json.dumps({"profile": changes, "reason": "profile"}).encode(), {"Content-Type": "application/json"})
+                          json.dumps({"profile": changes, "reason": "containment" if containment else "profile"}).encode(),
+                          {"Content-Type": "application/json"})
         if st == 200:
             return
         if st not in (404, 405):
-            print("WARNING: stig-bindings refused a profile update (HTTP %s %s): falling back to a PUT of %s only (its admin "
-                  "event stores the account's attributes)" % (st, mask_digits(clean(data, 160)), ", ".join(sorted(changes))),
-                  file=sys.stderr)
+            if not containment:
+                sys.exit("FAILED: stig-bindings refused the profile update (HTTP %s %s); nothing was changed"
+                         % (st, mask_digits(clean(data, 160))))
+            print("WARNING: stig-bindings refused the containment disable (HTTP %s %s): disabling with a PUT of "
+                  "{enabled: false} only" % (st, mask_digits(clean(data, 160))), file=sys.stderr)
+            kc.api("PUT", "/users/%s" % uid, {"enabled": False})
+            return
     kc.api("PUT", "/users/%s" % uid, dict(changes, id=uid))
 
 def bindings_or_put(kc, uid, set_=None, remove=(), reason=None):
@@ -3029,7 +3039,7 @@ def contain_user(kc, st, uid, why, pre=()):
     lines, failures, reset_ok = [], [], False
     steps = list(pre) + [
         ("reset", lambda: reset_factors(kc, kc.api("GET", "/users/%s" % uid), [why])),
-        ("disable", lambda: put_user(kc, uid, {"enabled": False})),      # the one field: nothing else can stop it
+        ("disable", lambda: put_user(kc, uid, {"enabled": False}, containment=True)),   # the one field; always lands
         ("logout", lambda: kc.api("POST", "/users/%s/logout" % uid))]
     for label, step in steps:
         try:

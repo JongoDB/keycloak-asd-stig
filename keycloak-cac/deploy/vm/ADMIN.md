@@ -128,8 +128,9 @@ sudo idp-admin.py link-cac jane.doe --bind-edipi --confirm-direct-bind   # only 
     through the same endpoint's `profile` write: username, e-mail, names, the two flags and the required actions,
     with the attributes untouched. A `PUT` that sends no attributes is not enough: the lab showed that Keycloak's admin
     event for it still holds every attribute.
-  - On an image without the endpoint, the pre-existing commands fall back to the former `PUT`, with a warning.
-    `link-cac` refuses instead.
+  - On an image without the endpoint (404), the pre-existing commands fall back to the former `PUT`, with a warning.
+    `link-cac` refuses instead. Any other refusal fails closed, with one exception: the guard's containment disable.
+    If the endpoint refuses that, a `PUT` of exactly `{"enabled": false}` still lands.
   - Two cases remain: `user-create-cac` still takes the EDIPI as an argument (so `sudo` logs it), and admin events
     written before this change keep what they stored.
   - `binding_provenance` reads the masked `stig-bindings` events: a card the operator bound counts as the

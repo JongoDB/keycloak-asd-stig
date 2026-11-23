@@ -357,19 +357,40 @@ class ProfileKC:
         self.posts.append(json.loads(body)); return self.status, '{"error":"username is malformed"}'
     def api(self, method, path, obj=None, ok=(200, 201, 204), ok404=False):
         self.puts.append((method, path, obj)); return None
-pk = ProfileKC(200); M.put_user(pk, "u1", {"enabled": False})
-check("profile: a disable sends exactly {enabled: false} to stig-bindings (no other field, no attribute), no PUT",
-      pk.posts == [{"profile": {"enabled": False}, "reason": "profile"}] and not pk.puts, (pk.posts, pk.puts))
-for st_ in (400, 500, 404):
+pk = ProfileKC(200); M.put_user(pk, "u1", {"enabled": False}, containment=True)
+check("profile: the containment disable sends exactly {enabled: false} to stig-bindings, no PUT",
+      pk.posts == [{"profile": {"enabled": False}, "reason": "containment"}] and not pk.puts, (pk.posts, pk.puts))
+for st_ in (400, 500):
     pk = ProfileKC(st_); err_ = io.StringIO()
     with contextlib.redirect_stderr(err_):
-        M.put_user(pk, "u1", {"enabled": False})
-    check("profile: the endpoint answering %d (e.g. a validator refusing another field) -> the disable still lands: a PUT "
-          "of just that field" % st_, pk.puts == [("PUT", "/users/u1", {"enabled": False, "id": "u1"})], pk.puts)
-pk = ProfileKC(200)
+        M.put_user(pk, "u1", {"enabled": False}, containment=True)
+    check("profile: the endpoint answering %d to the containment disable -> it still lands: a PUT of exactly {enabled: false}" % st_,
+          pk.puts == [("PUT", "/users/u1", {"enabled": False})], pk.puts)
+for st_ in (400, 500):
+    pk = ProfileKC(st_); code_ = None
+    try:
+        M.put_user(pk, "u1", {"username": "jane.doe", "email": "j@example.mil", "firstName": "J", "lastName": "D", "emailVerified": True})
+    except SystemExit as e:
+        code_ = e.code
+    check("profile: the endpoint answering %d to a rename -> fails closed, NEVER a plain PUT (its event would hold the card)" % st_,
+          isinstance(code_, str) and "FAILED" in code_ and not pk.puts, (code_, pk.puts))
+pk = ProfileKC(400); code_ = None
+try:
+    M.put_user(pk, "u1", {"enabled": True})
+except SystemExit as e:
+    code_ = e.code
+check("profile: a 400 on a non-containment enable fails closed too (only the guard's disable falls back)", code_ and not pk.puts, pk.puts)
+pk = ProfileKC(404); M.put_user(pk, "u1", {"username": "jane.doe", "email": "j@example.mil"})
+check("profile: 404 (an image without the endpoint) -> the former PUT of just those fields",
+      pk.puts == [("PUT", "/users/u1", {"username": "jane.doe", "email": "j@example.mil", "id": "u1"})], pk.puts)
+try:
+    M.put_user(ProfileKC(200), "u1", {"enabled": False, "email": "x@y.mil"}, containment=True); bad_ = False
+except ValueError:
+    bad_ = True
+check("profile: a containment update is exactly {enabled: false} (anything more is refused before any call)", bad_)
 src = open(args.admin).read()
-check("profile: the guard's containment disable passes only {enabled: False} (not the account's representation)",
-      'put_user(kc, uid, {"enabled": False})' in src and 'dict(kc.api("GET", "/users/%s" % uid), enabled=False)' not in src)
+check("profile: the guard's containment disable passes only {enabled: False}, marked containment",
+      'put_user(kc, uid, {"enabled": False}, containment=True)' in src and 'dict(kc.api("GET", "/users/%s" % uid), enabled=False)' not in src)
 
 # ---- guard: requests never completed
 kc = FakeKC(); now = int(time.time() * 1000)
