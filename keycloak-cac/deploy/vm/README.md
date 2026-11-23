@@ -191,7 +191,14 @@ with an emptied cache, has that window, and the container stays unhealthy for it
 `--image <tag>` writes `/srv/idp/compose/.env` and the keycloak line of `images.lock` from
 `docker image inspect <tag>` (the tag with **its own** image ID, the commit from its revision label), the way
 `setup-host.sh` does, and after the restart checks that the container runs exactly that image ID. Never edit
-`images.lock` by hand: a new tag paired with the previous image's ID records an image that is not running.
+`images.lock` by hand: a new tag paired with the previous image's ID records an image that is not running. Before
+rewriting, it keeps the previous pair as `.env.prev-<UTC time>` and `images.lock.prev-<UTC time>`; if anything fails
+after that, it prints one `ROLLBACK` line (copy both back and `up -d --no-deps keycloak`, or
+`idp-restart --image <old tag>`).
+
+A timeout that lists CRLs not installed is usually a CRL-source outage, not a bad image: Keycloak may already be serving
+sign-in, and only the cards of those CAs are refused until their CRLs arrive. Rolling back would not help (the previous
+image needs the same CRLs); check `docker logs idp-keycloak-1 | grep STIG-CRL` first.
 
 `idp-egress` is a systemd unit (`idp-egress.service`), not a compose service, and is never part of a restart: see
 "Egress firewall". If the rules are missing, `sudo idp-egress` re-applies them without restarting anything.

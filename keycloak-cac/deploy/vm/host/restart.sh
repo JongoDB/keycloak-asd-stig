@@ -36,10 +36,14 @@ if [ -n "$TAG" ]; then
   REV=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$TAG" 2>/dev/null || true)
   [ "$REV" = "<no value>" ] && REV=""
   OLD=$(sed -n 's/^KEYCLOAK_IMAGE=//p' "$ENVF")
+  # keep the previous pair; from here on ANY failure prints how to put it back
+  [ -f "$LOCK" ] || : > "$LOCK"
+  TS=$(date -u +%Y%m%dT%H%M%SZ)
+  cp -p "$ENVF" "$ENVF.prev-$TS"; cp -p "$LOCK" "$LOCK.prev-$TS"
+  trap 'rc=$?; [ "$rc" -eq 0 ] || log "ROLLBACK (previous image ${OLD:-none}): cp -p $ENVF.prev-$TS $ENVF && cp -p $LOCK.prev-$TS $LOCK && $C up -d --no-deps keycloak   - or: idp-restart --image ${OLD:-<old tag>}"; exit "$rc"' EXIT
   awk -v t="$TAG" 'BEGIN{d=0} /^KEYCLOAK_IMAGE=/{print "KEYCLOAK_IMAGE=" t; d=1; next} {print} END{if(!d) print "KEYCLOAK_IMAGE=" t}' \
     "$ENVF" > "$ENVF.new" && mv -f "$ENVF.new" "$ENVF"
   # images.lock: the keycloak line is "<tag> <image ID>", both from the same inspect; the commit line from its label
-  [ -f "$LOCK" ] || : > "$LOCK"
   awk -v t="$TAG" -v id="$ID" -v old="$OLD" -v rev="$REV" -v now="$(date -u +%FT%TZ)" '
     /^# image IDs/ {print "# image IDs (content digests) in use, written " now; next}
     /^keycloak-asd-stig commit:/ {if (rev != "") print "keycloak-asd-stig commit: " rev; else print; next}
@@ -65,6 +69,9 @@ done
 if [ "$st" != healthy ]; then
   log "$CT is not healthy after ${TIMEOUT}s (state: $st). Last health output:"
   docker inspect -f '{{range .State.Health.Log}}{{.Output}}{{end}}' "$CT" 2>/dev/null | tail -3 >&2 || true
+  log "NOTE: Keycloak may already be serving sign-in; if the output above lists CRLs not installed, only the cards of"
+  log "  those CAs are refused until they arrive (a CRL source outage, e.g. crl.disa.mil). Do not roll back a good image"
+  log "  for that: it would come up without those CRLs too. Check 'docker logs $CT | grep STIG-CRL' first."
   exit 1
 fi
 RUN=$(docker inspect -f '{{.Image}}' "$CT")

@@ -35,7 +35,7 @@ printf '#!/bin/sh\necho "adm $*" >> %s/calls; [ -z "${STUB_DRIFT:-}" ] || { echo
 printf '#!/bin/sh\necho "egress $*" >> %s/calls; [ -z "${STUB_NOEGRESS:-}" ] || exit 1\n' "$W" > "$W/bin/egress"
 chmod +x "$W/bin/docker" "$W/bin/adm" "$W/bin/egress"
 reset() {
-  rm -f "$W/calls"; echo idp/keycloak-cac:26.8.2-fips-aaaaaaa > "$W/running"
+  rm -f "$W/calls" "$W"/srv/compose/*.prev-* "$W"/srv/compose/.env.prev-*; echo idp/keycloak-cac:26.8.2-fips-aaaaaaa > "$W/running"
   printf 'KEYCLOAK_IMAGE=idp/keycloak-cac:26.8.2-fips-aaaaaaa\nPOSTGRES_IMAGE=%s\n' "$PGD" > "$W/srv/compose/.env"
   printf '# image IDs (content digests) in use, written 2026-01-01T00:00:00Z\nkeycloak-asd-stig commit: aaaaaaa0000\nidp/keycloak-cac:26.8.2-fips-aaaaaaa %s\n%s\n' "$OLDID" "$PGD" > "$W/srv/compose/images.lock"
 }
@@ -53,6 +53,7 @@ L="$W/srv/compose/images.lock"
 grep -qx "KEYCLOAK_IMAGE=idp/keycloak-cac:26.8.2-fips-bbbbbbb" "$W/srv/compose/.env" && grep -qx "POSTGRES_IMAGE=$PGD" "$W/srv/compose/.env" && ok "--image: .env names the new tag, PostgreSQL untouched" || no ".env: $(cat "$W/srv/compose/.env")"
 grep -qx "idp/keycloak-cac:26.8.2-fips-bbbbbbb $NEWID" "$L" && ok "--image: lock pairs the NEW tag with the NEW tag's own image ID" || no "lock: $(cat "$L")"
 ! grep -q "$OLDID" "$L" && ! grep -q "fips-aaaaaaa" "$L" && [ "$(grep -c keycloak-cac "$L")" = 1 ] && ok "--image: no old keycloak line or ID left" || no "lock stale: $(cat "$L")"
+! grep -q ROLLBACK "$W/err" && ok "--image, healthy: no rollback line" || no "--image healthy printed ROLLBACK"
 grep -qx "$PGD" "$L" && grep -qx "keycloak-asd-stig commit: bbbbbbbcafe" "$L" && ok "--image: PostgreSQL digest kept, commit line from the image's revision label" || no "lock rest: $(cat "$L")"
 
 reset; run --image idp/keycloak-cac:nope; rc=$?
@@ -69,5 +70,22 @@ reset; STUB_NOEGRESS=1 run; rc=$?
 
 reset; STUB_HEALTH=unhealthy run; rc=$?
 [ $rc -ne 0 ] && grep -q "not healthy after" "$W/err" && grep -q "CRLs not installed" "$W/err" && ok "never healthy (CRLs missing): exit 1 with the health output" || no "unhealthy (rc=$rc) $(cat "$W/err")"
+grep -q "only the cards of" "$W/err" && grep -q "Do not roll back a good image" "$W/err" && ok "timeout: says sign-in may be serving and only the missing CAs' cards are refused" || no "timeout note"
+! grep -q ROLLBACK "$W/err" && [ -z "$(ls "$W"/srv/compose/*.prev-* "$W"/srv/compose/.env.prev-* 2>/dev/null)" ] && ok "plain restart failing: no .prev copies, no rollback line (nothing was swapped)" || no "plain restart rollback"
+
+# an unhealthy NEW image: the previous .env / images.lock are kept as .prev-<ts> and the rollback is printed
+reset; STUB_HEALTH=unhealthy run --image idp/keycloak-cac:26.8.2-fips-bbbbbbb; rc=$?
+PE=$(ls "$W"/srv/compose/.env.prev-* 2>/dev/null); PL=$(ls "$W"/srv/compose/images.lock.prev-* 2>/dev/null)
+[ $rc -ne 0 ] && [ -n "$PE" ] && [ -n "$PL" ] && grep -qx "KEYCLOAK_IMAGE=idp/keycloak-cac:26.8.2-fips-aaaaaaa" "$PE" && grep -q "fips-aaaaaaa $OLDID" "$PL" \
+  && ok "--image, unhealthy: .env.prev-<ts> and images.lock.prev-<ts> hold the previous pair" || no "--image unhealthy prev (rc=$rc): $PE $PL"
+grep "ROLLBACK" "$W/err" | grep -qF "cp -p $PE $W/srv/compose/.env && cp -p $PL $W/srv/compose/images.lock && docker compose" \
+  && grep "ROLLBACK" "$W/err" | grep -q "up -d --no-deps keycloak" && grep "ROLLBACK" "$W/err" | grep -q "idp-restart --image idp/keycloak-cac:26.8.2-fips-aaaaaaa" \
+  && [ "$(grep -c ROLLBACK "$W/err")" = 1 ] && ok "--image, unhealthy: one rollback line (cp -p both .prev files + up -d, or idp-restart --image <old tag>)" || no "rollback line: $(grep ROLLBACK "$W/err")"
+# ...and it works: applying the printed copies restores the previous pair exactly
+(cd / && cp -p "$PE" "$W/srv/compose/.env" && cp -p "$PL" "$W/srv/compose/images.lock")
+grep -qx "KEYCLOAK_IMAGE=idp/keycloak-cac:26.8.2-fips-aaaaaaa" "$W/srv/compose/.env" && grep -qx "idp/keycloak-cac:26.8.2-fips-aaaaaaa $OLDID" "$W/srv/compose/images.lock" \
+  && ok "the rollback copies restore the previous tag with its own ID" || no "rollback restore"
+reset; STUB_RUN_ID=$OLDID run --image idp/keycloak-cac:26.8.2-fips-bbbbbbb; rc=$?
+[ $rc -ne 0 ] && grep -q ROLLBACK "$W/err" && ok "--image, container runs another image: rollback printed too" || no "mismatch rollback"
 
 echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]
