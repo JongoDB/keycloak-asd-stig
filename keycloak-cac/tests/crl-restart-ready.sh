@@ -46,6 +46,7 @@ docker run -d --name "$N" --network "$NET" --user 1000:1000 --read-only --tmpfs 
   -e CAC_PUBLIC_URL="https://localhost:$PORT" -e KC_BOOTSTRAP_ADMIN_USERNAME=bootstrap \
   -e KC_BOOTSTRAP_ADMIN_PASSWORD=crl-restart-bootstrap-pw "$IMG" >/dev/null
 
+# (no `producer | grep -q` on big output: with pipefail, grep -q exiting first makes the producer's SIGPIPE a failure)
 res=(); check() { res+=("$2"); printf '%s %-96s %s\n' "$([ "$2" = 1 ] && echo PASS || echo FAIL)" "$1" "${3:-}"; }
 # One exec per sample: health first, then the CRLs present. CRLs are only ever added during these phases, so "ready"
 # followed by a count below EXPECTED means the container reported ready while a CRL was missing.
@@ -74,14 +75,15 @@ check "first start: the cache holds every expected CRL" "$([ "${held:-0}" -eq "$
 
 # 2. restart with the CRL source down: CRLs from the cache, before Keycloak starts
 docker rm -f "$N-mirror" >/dev/null
-T0=$(date -u +%FT%TZ); docker restart "$N" >/dev/null
+# counted over the whole log, not with --since: Docker Desktop's VM clock can lag the host's
+M0=$(docker logs "$N" 2>&1 | grep -c STIG-CRL-MISSING || true); docker restart "$N" >/dev/null
 watch 300
 check "restart, source down: healthy" "$([ -n "$READY_AT" ] && echo 1 || echo 0)" "${LAST:0:120}"
 check "restart, source down: every expected CRL installed when first ready" "$([ -n "$READY_AT" ] && [ $BAD = 0 ] && echo 1 || echo 0)" "ready with ${READY_AT:-?}"
-L=$(docker logs --since "$T0" "$N" 2>&1)
-check "restart: the cache was installed before Keycloak started (0 missing)" "$(echo "$L" | grep -q "0 of $EXPECTED expected still missing after installing the cache" && echo 1 || echo 0)"
-sleep 40; L=$(docker logs --since "$T0" "$N" 2>&1)
-check "restart: no STIG-CRL-MISSING (the start-up window does not open)" "$(echo "$L" | grep -q STIG-CRL-MISSING && echo 0 || echo 1)" "$(echo "$L" | grep -c STIG-CRL-MISSING || true) lines"
+L=$(docker logs "$N" 2>&1)
+check "restart: the cache was installed before Keycloak started (0 missing)" "$(grep -qF ": 0 of $EXPECTED expected still missing after installing the cache" <<<"$L" && echo 1 || echo 0)"
+sleep 40; M1=$(docker logs "$N" 2>&1 | grep -c STIG-CRL-MISSING || true)
+check "restart: no STIG-CRL-MISSING (the start-up window does not open)" "$([ "$M1" -eq "$M0" ] && echo 1 || echo 0)" "$((M1 - M0)) new lines"
 D=/opt/keycloak/data/cac/lab
 for f in ca/root.crt users/doe.john.crt users/doe.john.key users/revoked.crt users/revoked.key; do docker exec "$N" cat "$D/$f" > "$T/cards/$(basename "$f")"; done
 cards=$(python3 - "$ROOT/keycloak-asd-stig/scripts" "$T/cards" "$PORT" <<'PY'
@@ -103,12 +105,12 @@ docker run --rm --user 0 -v "$VOL:/c" --entrypoint bash "$IMG" -c 'rm -f /c/*.cr
 docker restart "$N" >/dev/null
 watch 45
 check "empty cache, source down: NOT healthy" "$([ -z "$READY_AT" ] && echo 1 || echo 0)" "${LAST:0:120}"
-check "empty cache, source down: health names the missing CRLs" "$(echo "$LAST" | grep -q "CRLs not installed" && echo 1 || echo 0)"
+check "empty cache, source down: health names the missing CRLs" "$(grep -q "CRLs not installed" <<<"$LAST" && echo 1 || echo 0)"
 mirror
 watch 300
 check "source back: healthy after the retry" "$([ -n "$READY_AT" ] && echo 1 || echo 0)" "${LAST:0:120}"
 check "source back: every expected CRL installed when first ready" "$([ -n "$READY_AT" ] && [ $BAD = 0 ] && echo 1 || echo 0)" "ready with ${READY_AT:-?}"
-check "STIG-CRL-INCOMPLETE logged while CRLs were missing" "$(docker logs "$N" 2>&1 | grep -q STIG-CRL-INCOMPLETE && echo 1 || echo 0)"
+check "STIG-CRL-INCOMPLETE logged while CRLs were missing" "$(docker logs "$N" 2>&1 | grep -c STIG-CRL-INCOMPLETE | grep -qv '^0$' && echo 1 || echo 0)"
 
 for r in "${res[@]}"; do [ "$r" = 1 ] || { docker logs "$N" 2>&1 | grep -E "^keycloak-cac|^cac-pki|ERROR" | tail -15; exit 1; }; done
 echo "all ${#res[@]} checks passed"
