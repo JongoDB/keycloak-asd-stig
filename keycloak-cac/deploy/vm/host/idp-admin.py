@@ -2792,10 +2792,12 @@ def guard(kc, fix):
             take_out_of_app_groups(kc, uid)          # raises unless verified gone
             print("STIG-ADMIN-IN-DELEGATED-GROUP user=%s fixed (verified: no application-tree membership)" % name, file=sys.stderr)
     onboarding = onboarding_guard(kc, fix_requested, marker)
-    onboarding += handoff_guard(kc, fix_requested)      # the hand-off worker: drift -> disabled, like an onboarding client
+    handoff = handoff_guard(kc, fix_requested)          # the hand-off worker: drift -> disabled, like an onboarding client
     print("guard: %d administrators protected (idp-admin-only permission); %d were in an application group; "
-          "%d allowlist violations; %d onboarding-client / hand-off-worker violations%s" % (
-              len(admins), len(bad), len(untrusted), len(onboarding), " - fixed" if (bad or untrusted or onboarding) and fix else ""))
+          "%d allowlist violations; %d onboarding-client violations; %d hand-off-worker violations%s" % (
+              len(admins), len(bad), len(untrusted), len(onboarding), len(handoff),
+              " - fixed" if (bad or untrusted or onboarding or handoff) and fix else ""))
+    onboarding = onboarding + handoff
     if failures:
         raise RuntimeError("remediation steps failed: %s" % failures)
     if (bad or untrusted or mapped) and not fix:
