@@ -15,6 +15,10 @@ x-keycloak: &keycloak
   # /opt/keycloak/data (anchors, client trust store, CRLs) is tmpfs, rebuilt from the image on EVERY start: a volume
   # would carry a retired CA's CRL across an image upgrade, and one CRL from an issuer that is no longer an anchor
   # makes Keycloak refuse every card (crlSignatureCertificates is null). All state lives in PostgreSQL.
+  # The one exception is /srv/idp/crl-cache (CAC_CRL_CACHE_DIR): the last good DoD CRLs, public data. It is NOT the
+  # CRL directory Keycloak reads: before Keycloak starts, the entrypoint installs from it only the CRLs whose signature
+  # verifies against the image's CURRENT anchors, so a restarted container serves card sign-in with CRLs from its first
+  # second instead of refusing every card until the download finishes; the refresh writes the cache back.
   tmpfs: [/tmp, "/opt/keycloak/data:size=768m,uid=1000,gid=1000,mode=0750"]
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
@@ -23,6 +27,7 @@ x-keycloak: &keycloak
     # the pure-Java variant from the image, but the entrypoint's keytool (BCFKS conversion) does not: give it to every
     # JVM. (Fixed upstream in the PR; harmless after.)
     JAVA_TOOL_OPTIONS: -Dorg.bouncycastle.native.cpu_variant=java
+    CAC_CRL_CACHE_DIR: /crl-cache     # see the tmpfs note above; "unhealthy" while an expected CRL is missing (240 s grace)
     # Network clients get a strict allowlist of raw paths (STIG_PUBLIC_PATHS in keycloak-cac.env: the one realm,
     # its admin console and API, /admin/serverinfo, /resources/); everything else - the master realm, any other
     # realm, any path with %, ;, \, //, dot segments, whitespace or non-ASCII - is 404. Only 127.0.0.1 INSIDE this
@@ -39,6 +44,7 @@ x-keycloak: &keycloak
   depends_on: {db: {condition: service_healthy}}
   volumes:
     - /srv/idp/clients:/clients:ro    # one <client>.json per relying service
+    - /srv/idp/crl-cache:/crl-cache   # last good CRLs (public), 0750 1000:1000; see the tmpfs note above
     # Optional login theme of your own (setup-host.sh THEME_DIR; parent dod-stig), selected in keycloak-cac.env:
     # - /srv/idp/theme/<THEME>:/opt/keycloak/themes/<THEME>:ro
   networks: [backend, egress]

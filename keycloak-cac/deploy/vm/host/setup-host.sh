@@ -48,6 +48,8 @@ if ! mountpoint -q $S; then
 fi
 mkdir -p $S/{config,secrets,pki,tls,clients,pgdata,compose,src,backup}
 chmod 0750 $S/secrets $S/pki $S/tls; chmod 0700 $S/backup
+# the last good CRLs (public data), written by Keycloak (1000) and installed by a new container before it starts
+install -d -o 1000 -g 1000 -m 0750 $S/crl-cache
 
 # ---- secrets: generated once, never printed. 0440 root:1000 (Keycloak runs as 1000:1000); db_password is also
 #      read by PostgreSQL (uid 999). Lengths: >= 14 for strict FIPS, >= 24 for the automation secret.
@@ -197,6 +199,7 @@ install -m 0755 "$HERE/idp-admin.py" /usr/local/sbin/idp-admin.py
 install -d -m 0755 /usr/local/lib/idp
 install -m 0644 "$VALIDATOR" /usr/local/lib/idp/validate-client-request.py
 install -m 0755 "$HERE/idp-events.sh" /usr/local/sbin/idp-events
+install -m 0755 "$HERE/restart.sh" /usr/local/sbin/idp-restart
 install -m 0755 "$HERE/idp-alert.py" /usr/local/sbin/idp-alert
 printf 'STORAGE_ACCOUNT=%s\nKEY_VAULT=%s\n' "$STORAGE_ACCOUNT" "$KEY_VAULT" > /etc/default/idp-backup
 cat > /etc/systemd/system/idp-backup.service <<U

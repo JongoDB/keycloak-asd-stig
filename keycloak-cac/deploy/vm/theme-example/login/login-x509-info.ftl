@@ -1,5 +1,5 @@
 <#-- dod-stig-x509: copy of Keycloak 26.8.2 theme/base/login/login-x509-info.ftl. ONE change: it imports template-x509.ftl
-     instead of template.ftl, so the attempted-identity row on this page only is labelled x509AttemptedIdentity (the
+     instead of template.ftl, so the attempted-identity row on this page only is labeled x509AttemptedIdentity (the
      EDIPI from the card), not "Username". Recheck against upstream on every Keycloak upgrade (README.md beside this theme). -->
 <#import "template-x509.ftl" as layout>
 <@layout.registrationLayout; section>
