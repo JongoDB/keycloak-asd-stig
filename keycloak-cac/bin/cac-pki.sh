@@ -236,9 +236,9 @@ cmd_crl_sync() { # src-dir anchors-dir crl-dir [expired-list]
     elif crl_older "$f" "$d/$n"; then log "STIG-CRL-OLDER $n: older than the installed one - NOT installed"; ok=$((ok+1))
     else
       # the copy is what gets verified and installed - never the source after the check (it could change in between)
-      cp "$f" "$d/.$n.new"
-      if crl_ok "$d/.$n.new" "$w/anchors.pem" "$x" "$n"; then mv -f "$d/.$n.new" "$d/$n"; ok=$((ok+1)); echo "$n" >> "$w/.verified"
-      else rm -f "$d/.$n.new"; log "STIG-CRL-UNTRUSTED $n: issuer not trusted or bad signature - NOT installed"; fi
+      # (an unreadable source or a full disk is a refusal of that one file, never an abort: set -e, and the entrypoint)
+      if cp "$f" "$d/.$n.new" 2>/dev/null && crl_ok "$d/.$n.new" "$w/anchors.pem" "$x" "$n"; then mv -f "$d/.$n.new" "$d/$n"; ok=$((ok+1)); echo "$n" >> "$w/.verified"
+      else rm -f "$d/.$n.new"; log "STIG-CRL-UNTRUSTED $n: unreadable, issuer not trusted or bad signature - NOT installed"; fi
     fi
   done
   log "CRLs synced from $src: $ok installed"

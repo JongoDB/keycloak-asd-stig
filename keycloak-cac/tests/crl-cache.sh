@@ -120,6 +120,12 @@ openssl crl -in x.pem -outform DER -out fx/src/DODIDCA_70.crl            # a fre
 grep -q "STIG-CRL-UNTRUSTED DODIDCA_70.crl" fx/log && [ "$(sha256sum < fx/live/DODIDCA_70.crl)" = "$(sha256sum < fx/expired.der)" ] \
   && [ "$(cat fx/expired)" = DODIDCA_70.crl ] && [ -z "$(ls -A fx/live | grep '\.new$')" ] \
   && pass "crl-sync: an untrusted cache copy is refused, the expired installed one stays and is listed, no temp file left" || no "untrusted over expired: $(cat fx/log) [$(cat fx/expired)] $(ls -A fx/live)"
+rm -f fx/src/* fx/live/*; mk DODIDCA_70 1 fx/src/DODIDCA_70.crl; cp DODROOTCA6.crl.pem fx/src/DODROOTCA6.crl; chmod 000 fx/src/DODIDCA_70.crl
+if bash "$PKI" crl-sync fx/src anchors fx/live 2>fx/log; then rc=0; else rc=$?; fi; chmod 644 fx/src/DODIDCA_70.crl
+[ $rc = 0 ] && [ ! -e fx/live/DODIDCA_70.crl ] && [ -s fx/live/DODROOTCA6.crl ] && grep -q "STIG-CRL-UNTRUSTED DODIDCA_70.crl" fx/log \
+  && [ -z "$(ls -A fx/live | grep '\.new$')" ] \
+  && pass "crl-sync: an unreadable cache file is refused alone (exit 0, the others installed, no temp file) - never an aborted start" \
+  || no "unreadable cache file: rc=$rc $(ls -A fx/live) $(cat fx/log)"
 rm -f fx/src/* fx/live/*; mk DODIDCA_70 1 a.der
 { echo "0 text before the PEM block"; openssl crl -inform DER -in a.der; } > fx/src/DODIDCA_70.crl
 bash "$PKI" crl-sync fx/src anchors fx/live 2>/dev/null
