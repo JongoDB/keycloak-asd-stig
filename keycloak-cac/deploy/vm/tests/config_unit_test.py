@@ -62,6 +62,8 @@ refused = [
      lambda c: (c.update({"handoffIntake": {"url": "https://app-a.example.mil/intake", "clientId": "x-worker", "audience": "a",
                                             "scope": "app-a.intake", "app": "app-a"}}), c["onboarding"].update({"clientIds": ["x-worker"]})),
      "hand-off worker"),
+    ("onboarding.clientIds naming an application's user-manager role group",
+     lambda c: c["onboarding"].update({"clientIds": ["app-b-user-manager"]}), "user-manager role group"),
     ("onboarding.clientIds not a client id", lambda c: c["onboarding"].update({"clientIds": ["App B"]}), "not a client id"),
     ("onboarding.clientIds naming a client twice",
      lambda c: c["onboarding"].update({"clientIds": ["app-b-onboarding", "app-b-onboarding"]}), "twice"),
