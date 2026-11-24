@@ -152,6 +152,8 @@ final class AccountsPolicy {
     /** At most this many of EACH portal write (reset-otp, reset-password, unlock, logout, link-cac) per caller in any
      *  60 minutes: a stolen page session cannot sweep a tree at once. */
     static final int PORTAL_OPS_PER_HOUR = 20;
+    /** At most this many status calls per caller in any 60 seconds (a page of up to STATUS_MAX counts once). */
+    static final int STATUS_PER_MINUTE = 60;
     /** At most this many accounts in one status request (GET stig-accounts/users/status?id=...). */
     static final int STATUS_MAX = 50;
     /** The top-level group whose tree holds the IdP's own role groups (/roles/idp-admin, /roles/<app>-user-manager, ...):

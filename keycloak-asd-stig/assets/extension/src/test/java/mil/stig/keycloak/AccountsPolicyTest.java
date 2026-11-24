@@ -94,6 +94,7 @@ public final class AccountsPolicyTest {
         t("reference with ten digits in a row refused (an EDIPI used as an id)", "".equals(AccountsPolicy.reference("REQ-1234567890")), true);
         t("reference with nine digits in a row kept", "REQ-123456789".equals(AccountsPolicy.reference("REQ-123456789")), true);
         t("portal writes: 20 per caller and operation per hour", AccountsPolicy.PORTAL_OPS_PER_HOUR == 20, true);
+        t("status: 60 calls per caller per minute", AccountsPolicy.STATUS_PER_MINUTE == 60, true);
         System.out.printf("%n%d/%d passed%n", run - failed, run);
         System.exit(failed == 0 ? 0 : 1);
     }

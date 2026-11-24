@@ -77,7 +77,8 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
  *                                    ?lifespan= as setup-email). Nobody sets a password here. Only for an account that has
  *                                    one (409: setup-email is for accounts still being set up); once per 15 min (429).
  *                                    200 {"email": "sent"}; 502 when the mail could not be sent.
- *   POST /users/{id}/unlock          clear the account's brute-force lockout (its login failures). 200 {"wasLocked": b}.
+ *   POST /users/{id}/unlock          clear the account's brute-force lockout (its login failures). 200 {"wasLocked": b};
+ *                                    an account NOT locked: a no-op (its failure count is never reset, no admin event).
  *                                    A DISABLED account (an administrator's disable, or a permanent lockout): 409 -
  *                                    re-enabling is for realm administrators only.
  *   POST /users/{id}/logout          end every session of the account (back-channel). 200 {"sessionsEnded": n}
@@ -90,6 +91,7 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
  *   GET  /users/{id}/status          {id, username, enabled, locked, passwordSet, otpEnrolled, cardBound, cardPending,
  *                                     entraLinked, activeSessions}: booleans and a count only (no step-up: a read)
  *   GET  /users/status?id=..&id=..   up to 50 at once: {"accounts": [status...], "refused": [ids not in scope]}
+ *                                    Status: at most 60 calls per caller in any minute (a page counts once): 429.
  *   Every portal write records one admin event (ACTION users/{id}/<op>, {"stig": "portal <op>", ...}; a card masked to
  *   its last four digits) and a STIG-ACCOUNTS <op> audit line.
  *   anything else                    403
@@ -217,12 +219,24 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
          *  claims one of `limit` numbered slots with putIfAbsent (atomic in the cluster cache), and a slot frees itself
          *  exactly one hour after it was claimed; with every slot taken it is refused. */
         private boolean underRate(String kind, int limit) {
+            return underRate(kind, limit, AccountsPolicy.RATE_WINDOW);
+        }
+
+        /** The same, over a window of `window` seconds. */
+        private boolean underRate(String kind, int limit, int window) {
             UserModel cu = auth.adminAuth().getUser();
             String base = "stig-accounts-" + kind + ":" + (cu == null ? "?" : cu.getId()) + ":";
             org.keycloak.models.SingleUseObjectProvider so = session.singleUseObjects();
             for (int i = 0; i < limit; i++) {
-                if (so.putIfAbsent(base + i, AccountsPolicy.RATE_WINDOW)) return true;
+                if (so.putIfAbsent(base + i, window)) return true;
             }
+            return false;
+        }
+
+        /** One status call's rate slot (STATUS_PER_MINUTE per caller in any 60 s; a page of up to 50 counts once). */
+        private boolean statusRate() {
+            if (underRate("portal-status", AccountsPolicy.STATUS_PER_MINUTE, 60)) return true;
+            refused("status", "more than " + AccountsPolicy.STATUS_PER_MINUTE + " status calls in a minute");
             return false;
         }
 
@@ -580,11 +594,16 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (!portalRate("unlock")) return err(Response.Status.TOO_MANY_REQUESTS, "too many unlocks this hour");
             BruteForceProtector bp = session.getProvider(BruteForceProtector.class);
             boolean locked = bp != null && bp.isTemporarilyDisabled(session, realm, u);
-            if (session.loginFailures().getUserLoginFailure(realm, u.getId()) != null) {
-                session.loginFailures().removeUserLoginFailure(realm, u.getId());
+            if (!locked) {
+                // not locked: a no-op. The failure count is NOT cleared - clearing it would hand a password guesser a
+                // fresh set of attempts before the lockout - and no admin event is written for a change that did not happen
+                LOG.infof("STIG-ACCOUNTS unlock realm=%s caller=%s user=%s wasLocked=false (nothing changed)%s", realm.getName(),
+                        caller(), u.getUsername(), refSuffix(p.ref()));
+                return ok(Map.of("wasLocked", false));
             }
-            audited("unlock", u, new LinkedHashMap<>(Map.of("wasLocked", locked)), p.ref());
-            return ok(Map.of("wasLocked", locked));
+            session.loginFailures().removeUserLoginFailure(realm, u.getId());
+            audited("unlock", u, new LinkedHashMap<>(Map.of("wasLocked", true)), p.ref());
+            return ok(Map.of("wasLocked", true));
         }
 
         @POST @Path("users/{id}/logout")
@@ -704,6 +723,7 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
         public Response statusOne(@PathParam("id") String id) {
             Pre p = pre("status", id, null, false);
             if (p.refused() != null) return p.refused();
+            if (!statusRate()) return err(Response.Status.TOO_MANY_REQUESTS, "too many status calls this minute");
             LOG.infof("STIG-ACCOUNTS status realm=%s caller=%s user=%s", realm.getName(), caller(), p.user().getUsername());
             return ok(status(p.user()));
         }
@@ -716,6 +736,7 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             if (why != null) { refused("status", why); return err(Response.Status.FORBIDDEN, "not allowed"); }
             List<String> want = AccountsPolicy.statusIds(ids);
             if (want == null) return err(Response.Status.BAD_REQUEST, "id: 1.." + AccountsPolicy.STATUS_MAX + " account ids");
+            if (!statusRate()) return err(Response.Status.TOO_MANY_REQUESTS, "too many status calls this minute");
             List<Map<String, Object>> out = new ArrayList<>(); List<String> no = new ArrayList<>();
             for (String i : want) {
                 UserModel u = target(i, "status");
