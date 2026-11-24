@@ -1730,6 +1730,10 @@ def onboarding_problems(kc, cid, want, allow_disabled=False):
     for k, v in rep["attributes"].items():
         if la.get(k) != v:
             probs.append("attribute %s is %r, recorded %r" % (k, la.get(k), v))
+    # a record without an operations list means the four legacy operations: an operations attribute on the live client
+    # (added by hand, e.g. to switch the portal operations on) is drift too, never silently accepted
+    if ONBOARDING_OPS_ATTR not in rep["attributes"] and la.get(ONBOARDING_OPS_ATTR) is not None:
+        probs.append("attribute %s is %r, recorded none (the four legacy operations)" % (ONBOARDING_OPS_ATTR, la.get(ONBOARDING_OPS_ATTR)))
     if c.get("protocolMappers"):
         probs.append("has its own protocol mappers %s (none allowed: one could rewrite auth_time or audience)"
                      % sorted(m.get("name") for m in c["protocolMappers"]))

@@ -232,10 +232,11 @@ same answer as for no such account).
 | `reset-password` | `POST .../reset-password[?lifespan=]` | e-mails the address on record a link to set a new password (`UPDATE_PASSWORD`). Nobody sets a password through the page | 200 `{"email": "sent"}`; 409 disabled, no address, no password (use `setup-email`); 429 within 15 min; 502 mail failed |
 | `unlock` | `POST .../unlock` | clears the brute-force lockout (login failures) | 200 `{"wasLocked": b}`; 409 disabled (an administrator's disable or a permanent lockout: re-enabling stays with realm administrators) |
 | `logout` | `POST .../logout` | not-before now, every session ended (back-channel) | 200 `{"sessionsEnded": n}` |
-| `link-cac` | `POST .../link-cac`, body `{}` or `{"edipi": "<10 digits>"}` | a link request (`stig_card_link`, `stig-present-card`), as `idp-admin.py link-cac` / `--edipi`: the holder presents the card at the next sign-in, under the present-card step's rules. Never a direct bind, never over an existing card | 200 `{"requested": true, "card": "any"\|"named", "days": 7}`; 409 disabled, has a card, an invitation's pending card, cannot sign in, card held elsewhere; 403 realm not set up for link requests |
+| `link-cac` | `POST .../link-cac`, body `{}` or `{"edipi": "<10 digits>"}` | a link request (`stig_card_link`, `stig-present-card`), as `idp-admin.py link-cac` / `--edipi`: the holder presents the card at the next sign-in, under the present-card step's rules. Never a direct bind, never over an existing card | 200 `{"requested": true, "card": "any"\|"named", "days": 7}`; 409 disabled, has a card, a live link request already pending (an expired one is replaced), an invitation's live pending card, cannot sign in, card held elsewhere; 403 realm not set up for link requests |
 | `status` | `GET .../{id}/status`, `GET stig-accounts/users/status?id=..` | read only | `{id, username, enabled, locked, passwordSet, otpEnrolled, cardBound, cardPending, entraLinked, activeSessions}`; the list form `{"accounts": [...], "refused": [ids]}` |
 
-Every portal write: at most 20 per caller and operation in any 60 minutes (429), an optional `?reference=`, one admin
+Every portal write: at most 20 per caller and operation in any 60 minutes (429), an optional `?reference=` (never
+ten digits in a row, for every `stig-accounts` call: 400), one admin
 event (`ACTION users/{id}/<op>`, representation `{"stig": "portal <op>", ...}`, a card masked to its last four digits)
 and a `STIG-ACCOUNTS <op>` audit line. No answer carries an identifier beyond the account's id and username.
 ## 10. First sign-in through an identity provider binds a pending invite (optional)

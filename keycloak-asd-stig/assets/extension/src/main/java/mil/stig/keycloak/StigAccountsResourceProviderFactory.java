@@ -85,8 +85,8 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
  *                                    and --edipi modes: the holder presents a card at their next sign-in (the present-card
  *                                    step's own rules: never a card bound to or reserved for another account, an any-card
  *                                    request never satisfied by an SSO-reused sign-in); with edipi only that card binds.
- *                                    Never a direct bind, never over a card the account holds (409; replacing a card stays
- *                                    with the IdP's operators). 200 {"requested": true, "card": "any" | "named", "days": 7}
+ *                                    Never a direct bind, never over a card the account holds nor over a live request
+ *                                    (409; replacing or cancelling stays with the IdP's operators); an expired one is replaced. 200 {"requested": true, "card": "any" | "named", "days": 7}
  *   GET  /users/{id}/status          {id, username, enabled, locked, passwordSet, otpEnrolled, cardBound, cardPending,
  *                                     entraLinked, activeSessions}: booleans and a count only (no step-up: a read)
  *   GET  /users/status?id=..&id=..   up to 50 at once: {"accounts": [status...], "refused": [ids not in scope]}
@@ -556,10 +556,14 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                 return err(Response.Status.TOO_MANY_REQUESTS, "a password reset e-mail went to this account less than 15 minutes ago");
             }
             if (!portalRate("reset-password")) return err(Response.Status.TOO_MANY_REQUESTS, "too many password resets this hour");
+            // claimed atomically before the mail: two concurrent requests cannot both send one
+            if (!session.singleUseObjects().putIfAbsent(once, AccountsPolicy.RESEND_INTERVAL)) {
+                return err(Response.Status.TOO_MANY_REQUESTS, "a password reset e-mail went to this account less than 15 minutes ago");
+            }
             if (!sendActions(u, List.of(UserModel.RequiredAction.UPDATE_PASSWORD.name()), lifespan)) {
+                session.singleUseObjects().remove(once);             // nothing was sent: the person may be sent one again
                 return err(Response.Status.BAD_GATEWAY, "the e-mail could not be sent");
             }
-            session.singleUseObjects().put(once, AccountsPolicy.RESEND_INTERVAL, Map.of("t", "1"));
             audited("reset-password", u, new LinkedHashMap<>(Map.of("actions", List.of("UPDATE_PASSWORD"), "email", "sent")), p.ref());
             return ok(Map.of("email", "sent"));
         }
@@ -643,8 +647,13 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             String link = u.getFirstAttribute(AccountsPolicy.LINK_ATTRIBUTE);
             boolean canSignIn = hasCredential(u, PasswordCredentialModel.TYPE) || u.getFirstAttribute(StigBindingsResourceProviderFactory.ENTRA) != null
                     || session.users().getFederatedIdentitiesStream(realm, u).findAny().isPresent();
-            String why = AccountsPolicy.portalLinkRefusal(u.isEnabled(), u.getFirstAttribute(ca), u.getFirstAttribute(pendingAttr),
-                    link != null && !link.isBlank(), canSignIn);
+            long nowMs = Time.currentTimeMillis();
+            boolean hasLink = link != null && !link.isBlank();
+            boolean liveLink = hasLink && AccountsPolicy.linkLive(AccountsPolicy.linkTime(link), nowMs);
+            String pending = u.getFirstAttribute(pendingAttr);
+            boolean liveInvite = !hasLink && pending != null && !pending.isBlank() && !AccountsPolicy.pendingExpired(u.getCreatedTimestamp(),
+                    PendingInviteLink.markerTime(u.getFirstAttribute(CREATED_BY)), nowMs);
+            String why = AccountsPolicy.portalLinkRefusal(u.isEnabled(), u.getFirstAttribute(ca), liveLink, liveInvite, canSignIn);
             if (why != null) {
                 refused("link-cac", "account " + u.getUsername() + ": " + why);
                 return err(Response.Status.CONFLICT, why);
@@ -672,7 +681,7 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
             u.addRequiredAction(PresentCardRequiredAction.ID);
             Map<String, Object> d = new LinkedHashMap<>();
             d.put("card", edipi == null ? "any" : AccountsPolicy.maskEdipi(edipi));
-            d.put("replacesRequest", link != null && !link.isBlank());
+            d.put("replacesExpired", hasLink || (pending != null && !pending.isBlank()));
             audited("link-cac", u, d, p.ref());
             return ok(Map.of("requested", true, "card", edipi == null ? "any" : "named", "days", AccountsPolicy.LINK_DAYS));
         }

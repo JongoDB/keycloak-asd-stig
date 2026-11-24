@@ -126,6 +126,13 @@ lv = M.onboarding_rep(CID, want["redirect"], want["origin"], 300, False, PORTAL)
 check("[shape] a record without portal operations, a live client with them: drift (someone added them by hand)",
       any(M.ONBOARDING_OPS_ATTR in x for x in M.onboarding_problems(ShapeKC(lv), CID, rec_legacy)))
 
+rec_none = {"redirect": want["redirect"], "origin": want["origin"], "max_age": 300}
+lv = M.onboarding_rep(CID, want["redirect"], want["origin"], 300, False, None)
+check("[shape] a record without a list and a live client without one: no problem", M.onboarding_problems(ShapeKC(lv), CID, rec_none) == [])
+lv["attributes"][M.ONBOARDING_OPS_ATTR] = "create,setup-email,disable,membership,reset-otp,status"
+check("[shape] a record without a list, an operations attribute added by hand on the live client: drift",
+      any(M.ONBOARDING_OPS_ATTR in x for x in M.onboarding_problems(ShapeKC(lv), CID, rec_none)))
+
 # guard: a record with portal operations on an image that states capability 2 is a violation (and --fix disables it)
 M.load_onboarding = lambda: {CID: want}
 for capv, viol in ((2, True), (3, False)):

@@ -198,12 +198,14 @@ final class AccountsPolicy {
     }
     /** Why a link request from the portal must not be written (null: it may). The portal never binds a card directly
      *  and never replaces one: those stay with the IdP's operators (idp-admin.py link-cac --replace / --bind-edipi). */
-    static String portalLinkRefusal(boolean enabled, String currentCard, String pendingCard, boolean hasLinkRequest,
+    static String portalLinkRefusal(boolean enabled, String currentCard, boolean liveLinkRequest, boolean liveInviteCard,
                                     boolean canSignIn) {
         if (!enabled) return "the account is disabled";
         if (currentCard != null && !currentCard.isBlank()) return "the account already has a card: replacing one is for the IdP's operators";
-        if (pendingCard != null && !pendingCard.isBlank() && !hasLinkRequest)
-            return "the account's invitation names a card not presented yet";
+        // never over a live request (the operators' or an earlier one from the page): it may name a card, and replacing
+        // it would drop that card and restart its 7 days; cancelling one is for the IdP's operators
+        if (liveLinkRequest) return "a card link request is already pending for the account";
+        if (liveInviteCard) return "the account's invitation names a card not presented yet";
         if (!canSignIn) return "the account has no password and no identity-provider link, so it cannot sign in to present a card";
         return null;
     }
@@ -213,7 +215,9 @@ final class AccountsPolicy {
     static String reference(String r) {
         if (r == null) return null;
         String x = r.trim();
-        return REFERENCE.matcher(x).matches() ? x : "";
+        // never ten digits in a row: a reference is recorded verbatim (admin event, audit line), and an EDIPI used as a
+        // request id would otherwise be written in full
+        return REFERENCE.matcher(x).matches() && !x.matches(".*[0-9]{10}.*") ? x : "";
     }
     /** `domains`: comma list; ".mil" matches any domain ending in .mil, "example.org" exactly that domain.
      *  null (nothing configured) means DEFAULT_EMAIL_DOMAINS. A configured value fails closed: one with no entries
