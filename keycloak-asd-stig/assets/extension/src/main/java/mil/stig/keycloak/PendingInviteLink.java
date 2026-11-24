@@ -100,23 +100,25 @@ final class PendingInviteLink {
 
     /**
      * The vouched attributes this mode reads must come from exactly the expected claims of the provider: EXACTLY ONE
-     * mapper in the realm writes the UPN attribute, and it is the provider's attribute importer from preferred_username;
+     * mapper in the realm writes the UPN attribute, and it is the provider's attribute importer from its UPN claim -
+     * preferred_username (an Entra v2.0 ID token) or upn (a v1.0 ID token, which has no preferred_username);
      * the same for the idp attribute from `idp` (without it a guest would pass unseen) and the acct attribute from `acct`
      * (an optional claim the provider sends only when configured; required as a mapper so it is never silently ignored). Null = pinned; else why not.
      */
     static String mappersPinned(Cfg c, String alias, Collection<Mapper> ms) {
-        String w = pin(c.upnAttr(), "preferred_username", alias, ms, true);
-        if (w == null) w = pin(c.idpAttr(), "idp", alias, ms, true);
-        if (w == null) w = pin(c.acctAttr(), "acct", alias, ms, true);       // required too: guests are not told by idp alone
+        String w = pin(c.upnAttr(), List.of("preferred_username", "upn"), alias, ms, true);
+        if (w == null) w = pin(c.idpAttr(), List.of("idp"), alias, ms, true);
+        if (w == null) w = pin(c.acctAttr(), List.of("acct"), alias, ms, true);       // required too: guests are not told by idp alone
         return w;
     }
 
-    private static String pin(String attr, String claim, String alias, Collection<Mapper> ms, boolean required) {
+    private static String pin(String attr, List<String> claims, String alias, Collection<Mapper> ms, boolean required) {
+        String claim = String.join(" or ", claims);
         List<Mapper> w = ms.stream().filter(m -> m.target() != null && m.target().trim().equalsIgnoreCase(attr)).toList();
         if (w.isEmpty()) return required ? "no identity-provider mapper writes " + attr + " (from the " + claim + " claim)" : null;
         if (w.size() > 1) return "more than one identity-provider mapper writes " + attr;
         Mapper m = w.get(0);
-        if (!alias.equals(m.alias()) || !ATTRIBUTE_MAPPER.equals(m.type()) || m.claim() == null || !claim.equals(m.claim().trim()))
+        if (!alias.equals(m.alias()) || !ATTRIBUTE_MAPPER.equals(m.type()) || m.claim() == null || !claims.contains(m.claim().trim()))
             return "the mapper writing " + attr + " is not " + alias + "'s importer of the " + claim + " claim";
         return null;
     }

@@ -49,6 +49,12 @@ refused = [
      lambda c: c["applications"]["app-a"]["delegations"]["app-a-reader-delegate"].update({"membershipOnly": "yes"}), "true or false"),
     ("userManagerRole not a string", lambda c: c["applications"]["app-b"].update({"userManagerRole": ["owner"]}), "string"),
     ("an unknown key in entra", lambda c: c["entra"].update({"memberDomian": "x"}), "unknown key"),
+    ("entra.mfaTrustedTenants as a string (would be iterated letter by letter)",
+     lambda c: c["entra"].update({"mfaTrustedTenants": "00000000-0000-4000-8000-000000000001"}), "list of distinct tenant ids"),
+    ("entra.mfaTrustedTenants naming something that is not a GUID", lambda c: c["entra"].update({"mfaTrustedTenants": ["common"]}),
+     "list of distinct tenant ids"),
+    ("entra.mfaTrustedTenants naming a tenant twice", lambda c: c["entra"].update({"mfaTrustedTenants": [
+        "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000001"]}), "list of distinct tenant ids"),
     ("an unknown key in smtp", lambda c: c["smtp"].update({"hots": "x"}), "unknown key"),
     ("smtp.port as a string", lambda c: c["smtp"].update({"port": "587"}), "port number"),
     ("an unknown key in onboarding", lambda c: c["onboarding"].update({"apps": ["app-a"]}), "unknown key"),
@@ -75,6 +81,10 @@ refused = [
 for name, fn, want in refused:
     rc, out = load(variant(fn))
     check("REFUSED: " + name, rc != 0 and "REFUSED" in out and want in out, out.strip().splitlines()[-1][:110] if out.strip() else rc)
+
+for name, v in (("one trusted tenant", ["00000000-0000-4000-8000-000000000001"]), ("none (off)", [])):
+    rc, out = load(variant(lambda c: c["entra"].update({"mfaTrustedTenants": v})))
+    check("entra.mfaTrustedTenants loads: " + name, rc == 0, out[-200:] if rc else "")
 
 # onboarding.clientIds: more onboarding clients, each built and guarded like the default one
 def ids(cfg):

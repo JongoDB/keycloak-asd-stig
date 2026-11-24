@@ -102,6 +102,11 @@ public final class PendingInviteLinkTest {
         PendingInviteLink.Mapper acc = new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "acct", "entra_vouched_acct");
         t("pinned: one mapper each for preferred_username, idp and acct", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, idp, acc)), null);
         t("no acct mapper: refused (guest detection must not rest on idp alone)", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, idp)) != null, true);
+        PendingInviteLink.Mapper upnV1 = new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "upn", "entra_vouched_upn");
+        t("pinned: the UPN from a v1.0 token's upn claim", PendingInviteLink.mappersPinned(C, "entra", List.of(upnV1, idp, acc)), null);
+        PendingInviteLink.Mapper upnMail = new PendingInviteLink.Mapper("entra", PendingInviteLink.ATTRIBUTE_MAPPER, "email", "entra_vouched_upn");
+        t("not pinned: the UPN attribute fed from the e-mail claim", PendingInviteLink.mappersPinned(C, "entra", List.of(upnMail, idp, acc)) != null, true);
+        t("not pinned: preferred_username AND upn both feeding it", PendingInviteLink.mappersPinned(C, "entra", List.of(upn, upnV1, idp, acc)) != null, true);
         t("x509 steps: one configuration -> pinned", PresentCardRequiredAction.pinned(List.of(Map.of("a", "1"))), Map.of("a", "1"));
         t("x509 steps: two identical -> pinned", PresentCardRequiredAction.pinned(List.of(Map.of("a", "1"), Map.of("a", "1"))), Map.of("a", "1"));
         t("x509 steps: two that differ -> none (refuse)", PresentCardRequiredAction.pinned(List.of(Map.of("a", "1"), Map.of("a", "2"))), null);

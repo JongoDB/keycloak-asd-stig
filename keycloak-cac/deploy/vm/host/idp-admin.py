@@ -11,10 +11,17 @@ idp-admin.example.json beside this script for every key). Commands that talk to 
   idp-admin.py entra --tenant <id> --client-id <appId> [--secret-file /srv/idp/secrets/entra_client_secret] [--enable]
         Microsoft Entra ID as a brokered OIDC provider (alias `entra`), members of the config's entra.memberDomain only. First broker login
         never creates an account and never matches by name or e-mail: it links only to the account whose admin-set
-        entra_oid equals the token's oid. Post broker login: administrators (any realm-management role) whose
-        Entra `amr` lacks "mfa" must also pass Keycloak TOTP, and are REFUSED if they hold none (no enrolment after
-        Entra's single factor); everyone gets the concurrent-session limit. The amr is
-        recorded in the guarded attribute entra_amr. Created DISABLED unless --enable. Idempotent.
+        entra_oid equals the token's oid. Post broker login: administrators (any realm-management role) must also
+        pass Keycloak TOTP, and are REFUSED if they hold none (no enrolment after Entra's single factor) - unless
+        that sign-in's ID token, from a tenant `entra-mfa` trusts, reports Entra's MFA (amr contains "mfa");
+        everyone gets the concurrent-session limit. A re-run keeps the trusted tenants as they are.
+        Created DISABLED unless --enable. Idempotent.
+  idp-admin.py entra-mfa [--show | --trust-tenant <tid>... | --off | --remove-condition]
+        whose MFA counts as an administrator's second factor after an Entra sign-in: the config's
+        entra.mfaTrustedTenants (default), the given tenants (a lab) or none. Fails closed: another tenant, no or a
+        malformed amr, a guest, no config - the second factor is still required. Per sign-in, never stored on the
+        user; audit line STIG-ADMIN-SECOND-FACTOR-IDP-MFA accepted|refused, event details stig_idp_mfa*. Removes the
+        retired `amr evidence` mapper. guard reports drift from the config (STIG-IDP-MFA-DRIFT, exit 2).
   idp-admin.py add-client <file.json|-> [--dry-run] [--secret-to F | --secret-to-keyvault V/N] [--repo R]
         [--inheritance-statement OUT] [--host idp-host]
         register or update ONE client live through the admin API - no restart - rendered by the running image's own
@@ -96,7 +103,7 @@ idp-admin.example.json beside this script for every key). Commands that talk to 
         bound to or reserved for another account; an IdP administrator (--allow-admin, with --edipi only; never a direct
         bind). The EDIPI is never taken from the command line, printed or logged in full. One audit line per attempt
         (STIG-LINK-CAC, syslog auth facility).
-  idp-admin.py entra-amr <username>             the amr Entra sent at the user's last Entra sign-in (MFA evidence)
+  idp-admin.py entra-amr <username> [--max N]   the user's recent sign-in events with the tenant-MFA decision (accepted/refused, reason, amr)
   idp-admin.py user-logout <username>           end the user's IdP sessions (triggers back-channel logout)
   idp-admin.py user-unlock <username>           clear a password lockout
   idp-admin.py user-enable <username> true|false
@@ -111,7 +118,7 @@ ADMIN_CONFIG_FILE = os.environ.get("IDP_ADMIN_CONFIG") or "/srv/idp/config/idp-a
 CONFIG_KEYS = {"applications", "entra", "smtp", "operatorSshHost", "repoClientsDir", "onboarding", "handoffIntake"}
 APP_KEYS = {"userManagerRole", "adoptable", "delegations", "preSplitDelegates"}
 DELEGATION_KEYS = {"groups", "name", "membershipOnly"}
-ENTRA_KEYS, SMTP_KEYS, ONBOARDING_KEYS = {"memberDomain", "displayName"}, {"host", "port", "from", "displayName"}, {"defaultApps", "clientIds"}
+ENTRA_KEYS, SMTP_KEYS, ONBOARDING_KEYS = {"memberDomain", "displayName", "mfaTrustedTenants"}, {"host", "port", "from", "displayName"}, {"defaultApps", "clientIds"}
 # The onboarding client every deployment has; onboarding.clientIds names more, one per application page (each its own
 # redirect and origin - a client has exactly one), all built, recorded and guarded the same way.
 DEFAULT_ONBOARDING_CLIENT = "idp-onboarding"
@@ -124,6 +131,8 @@ BUILTIN_SCOPES = {"openid", "profile", "email", "address", "phone", "offline_acc
 CONFIG_RESERVED_IDS = {"realm-management", "account", "account-console", "security-admin-console", "admin-cli", "broker",
                        "admin-permissions", "stig-automation", "break-glass-recovery", "idp-onboarding", "idp-admin",
                        "idp-user-manager", "idp-auditor", "idp"}
+
+GUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 def load_admin_config(path):
     """The deployment's config (None when the file does not exist). Unknown keys and wrong types are refused, like a
@@ -183,8 +192,13 @@ def load_admin_config(path):
     if "entra" in c:
         e = obj("entra", c["entra"], ENTRA_KEYS)
         for k in e:
-            if k != "$comment":
+            if k not in ("$comment", "mfaTrustedTenants"):
                 text("entra.%s" % k, e[k])
+        # the tenants whose own MFA (the ID token's amr) counts as an administrator's second factor after an Entra
+        # sign-in (entra-mfa): GUIDs only; an empty list (or no key) = never
+        mt = e.get("mfaTrustedTenants", [])
+        if not isinstance(mt, list) or not all(isinstance(x, str) and GUID_RE.fullmatch(x) for x in mt) or len(set(mt)) != len(mt):
+            no("entra.mfaTrustedTenants must be a list of distinct tenant ids (GUIDs)")
     if "smtp" in c:
         sm = obj("smtp", c["smtp"], SMTP_KEYS)
         for k in ("host", "from", "displayName"):
@@ -448,17 +462,44 @@ def first_broker_flow(kc, alias, tenant, autolink_domain=None):
     set_exec_config(kc, first, "idp-link-by-admin-attribute", dict(binding_cfg(alias, tenant), **pending_invite_cfg(autolink_domain)))
     return first
 
-def post_broker_flow(kc, alias="entra", tenant=None):
+IDP_MFA_COND = "conditional-stig-idp-mfa-unproven"
+POST_BROKER_SUB = POST_BROKER + " - administrators prove MFA"
+POST_BROKER_SUB_SHAPE = ["conditional-stig-administrator", IDP_MFA_COND, "stig-admin-second-factor-required", "auth-otp-form"]
+AMR_MAPPER = "amr evidence"     # the earlier per-user record of Entra's amr (entra_amr); retired, removed by entra / entra-mfa
+
+def idp_mfa_cfg(alias, tenants):
+    """stig-extensions IdpMfaEvidence: only `alias`, only these tenants, only amr containing "mfa". No tenants: never."""
+    return {"stig.idp-mfa.idp-alias": alias, "stig.idp-mfa.trusted-tenants": "##".join(t.lower() for t in tenants),
+            "stig.idp-mfa.accept-amr": "mfa", "stig.idp-mfa.accept-acr": ""}
+
+def live_idp_mfa(kc):
+    """(alias, [tenants]) the live post-broker condition trusts, or None when the condition is absent."""
+    for e in kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER_SUB), ok404=True) or []:
+        if e.get("providerId") == IDP_MFA_COND:
+            c = (kc.api("GET", "/authentication/config/%s" % e["authenticationConfig"]).get("config") or {}) if e.get("authenticationConfig") else {}
+            ts = [t for t in re.split(r"##|[,\s]+", c.get("stig.idp-mfa.trusted-tenants") or "") if t]
+            return c.get("stig.idp-mfa.idp-alias") or "entra", ts
+    return None
+
+def post_broker_flow(kc, alias="entra", tenant=None, mfa_tenants=()):
     """Post broker login. An administrator (any realm-management role: stig-extensions' conditional-stig-administrator)
-    whose identity provider did not report MFA in `amr` must pass Keycloak TOTP - and one with NO enrolled second factor
-    is refused (stig-admin-second-factor-required), never offered enrolment after the provider's single factor. Then
-    the concurrent-session limit, for everyone."""
-    sub = POST_BROKER + " - administrators prove MFA"
-    want = ["conditional-stig-administrator", "conditional-user-attribute", "stig-admin-second-factor-required", "auth-otp-form"]
+    must pass Keycloak TOTP after an identity-provider sign-in - and one with NO enrolled second factor is refused
+    (stig-admin-second-factor-required), never offered enrolment after the provider's single factor - UNLESS this
+    sign-in's validated ID token, from `alias` and one of `mfa_tenants`, reports the tenant's MFA (amr contains "mfa";
+    conditional-stig-idp-mfa-unproven, which fails closed: no tenants = never). Then the concurrent-session limit,
+    for everyone."""
+    sub, want = POST_BROKER_SUB, POST_BROKER_SUB_SHAPE
     if any(f["alias"] == POST_BROKER for f in kc.api("GET", "/authentication/flows")):
         execs = kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER))
         have = [e.get("providerId") for e in execs if e.get("level") == 1]
-        if have and have != want:     # an earlier shape (conditional-user-role, no refusal): rebuild the sub-flow
+        if "conditional-user-attribute" in have and set(have) - {"conditional-user-attribute"} <= set(want):
+            # the earlier shape, whose condition read a STORED entra_amr: remove just that condition. Conditions are
+            # ANDed, so with one fewer the sub-flow runs for EVERY administrator until the new condition is in place
+            # (stricter, never weaker - the sub-flow is never absent, as a delete-and-rebuild would leave it)
+            for e in execs:
+                if e.get("level") == 1 and e.get("providerId") == "conditional-user-attribute":
+                    kc.api("DELETE", "/authentication/executions/%s" % e["id"])
+        elif have and not set(have) <= set(want):     # an older shape (conditional-user-role, no refusal): rebuild the sub-flow
             for e in execs:
                 if e.get("level") == 0 and e.get("displayName") == sub:
                     kc.api("DELETE", "/authentication/executions/%s" % e["id"])
@@ -471,12 +512,13 @@ def post_broker_flow(kc, alias="entra", tenant=None):
                            ("user-session-limits", "REQUIRED",
           {"userRealmLimit": "3", "userClientLimit": "0", "behavior": "Deny new session",
            "errorMessage": "Maximum concurrent sessions reached. Log out of another session first."})])
+    # the condition is added WITH its configuration (flow() posts it on creation) and only then raised into place
     subflow(kc, POST_BROKER, sub, "CONDITIONAL",
             [("conditional-stig-administrator", "REQUIRED", None),
-             ("conditional-user-attribute", "REQUIRED", {"attribute_name": "entra_amr", "attribute_expected_value": "mfa",
-                                                         "not": "true", "regex": "false", "include_group_attributes": "false"}),
+             (IDP_MFA_COND, "REQUIRED", idp_mfa_cfg(alias, mfa_tenants)),
              ("stig-admin-second-factor-required", "REQUIRED", None),
              ("auth-otp-form", "REQUIRED", None)], first_position=True)
+    set_exec_config(kc, sub, IDP_MFA_COND, idp_mfa_cfg(alias, mfa_tenants))
     set_exec_config(kc, POST_BROKER, "idp-require-admin-attribute-match", binding_cfg(alias, tenant))
     ex = kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER))
     got = [e.get("providerId") for e in ex if e.get("level") == 1]
@@ -485,7 +527,20 @@ def post_broker_flow(kc, alias="entra", tenant=None):
         raise RuntimeError("post broker flow lacks a REQUIRED idp-require-admin-attribute-match: %s" % top)
     if got != want:
         raise RuntimeError("post broker sub-flow is %s, expected %s" % (got, want))
+    live = live_idp_mfa(kc)
+    if live is None or live[0] != alias or sorted(x.lower() for x in live[1]) != sorted(x.lower() for x in mfa_tenants):
+        raise RuntimeError("the tenant-MFA condition reads %s, expected %s %s" % (live, alias, sorted(mfa_tenants)))
     return POST_BROKER
+
+def remove_amr_mapper(kc, alias="entra"):
+    """The retired `amr evidence` mapper (amr -> the user attribute entra_amr, FORCE): Keycloak never acted on what it
+    stored, and a value stored on the user by an earlier sign-in is not this sign-in's evidence. Returns True if removed."""
+    for m in kc.api("GET", "/identity-provider/instances/%s/mappers" % q(alias), ok404=True) or []:
+        if m.get("name") == AMR_MAPPER or (m.get("config") or {}).get("user.attribute") == "entra_amr":
+            kc.api("DELETE", "/identity-provider/instances/%s/mappers/%s" % (q(alias), m["id"]))
+            print("entra: removed mapper %s (amr -> entra_amr): tenant MFA is now read from each sign-in's own ID token" % m["name"])
+            return True
+    return False
 
 def flow(kc, alias, execs, create=True):
     """Top-level flow with exactly these (provider, requirement, config) executions, in order. Idempotent: creates the
@@ -580,18 +635,34 @@ def cmd_entra(a):
         kc.api("PUT", "", {"attributes": at_})
     print("entra: first sign-in binding of pending invites %s" % (("ON for @%s (invites at most %d days old)" % (domain, ENTRA_INVITE_DAYS))
                                                                    if domain else "OFF"))
-    post = post_broker_flow(kc, "entra", a.tenant)
+    # the tenants whose MFA counts for an administrator: as it is now (a re-run, e.g. for a secret rotation, never
+    # switches it); `entra-mfa` is the one place it changes
+    live_mfa = live_idp_mfa(kc)
+    post = post_broker_flow(kc, "entra", a.tenant, live_mfa[1] if live_mfa and live_mfa[0] == "entra" else ())
     print("entra: first broker %s; post broker %s" % (flow_shape(kc, first), flow_shape(kc, post)))
     base = "https://login.microsoftonline.com/%s" % a.tenant
+    # Which Entra endpoint: v2.0 (the default for a new provider) or v1.0, whose ID tokens carry `amr` without an
+    # optional-claim change to the app registration (Microsoft: amr is "always included in v1.0 tokens, but not included
+    # in v2.0 tokens unless requested"). A re-run keeps the live one unless --endpoint names it.
+    cur0 = kc.api("GET", "/identity-provider/instances/entra", ok404=True)
+    endpoint = getattr(a, "endpoint", None) or ("v1" if cur0 and "//sts.windows.net/" in ((cur0.get("config") or {}).get("issuer") or "") else "v2")
+    upn_claim = "upn" if endpoint == "v1" else "preferred_username"   # a v1.0 ID token has no preferred_username
+    if endpoint == "v1":
+        urls = {"issuer": "https://sts.windows.net/%s/" % a.tenant, "authorizationUrl": base + "/oauth2/authorize",
+                "tokenUrl": base + "/oauth2/token", "logoutUrl": base + "/oauth2/logout", "jwksUrl": base + "/discovery/keys"}
+    else:
+        urls = {"issuer": base + "/v2.0", "authorizationUrl": base + "/oauth2/v2.0/authorize",
+                "tokenUrl": base + "/oauth2/v2.0/token", "logoutUrl": base + "/oauth2/v2.0/logout", "jwksUrl": base + "/discovery/v2.0/keys"}
+    print("entra: the %s endpoints (issuer %s); the UPN is read from the %s claim" % (endpoint, urls["issuer"], upn_claim))
     # DISABLED (not merely hidden: a hidden provider still accepts kc_idp_hint / the broker URL) until --enable, the
     # step after tenant admin consent and a Conditional Access policy requiring MFA for this app registration.
     rep = {"alias": "entra", "displayName": (_AC.get("entra") or {}).get("displayName") or "Microsoft Entra ID", "providerId": "oidc", "enabled": bool(a.enable),
            "trustEmail": False, "storeToken": False, "addReadTokenRoleOnCreate": False, "linkOnly": False,
            "hideOnLogin": not a.enable,
            "firstBrokerLoginFlowAlias": "STIG First Broker Link by Admin", "postBrokerLoginFlowAlias": "STIG Post Broker Login",
-           "config": {"issuer": base + "/v2.0", "authorizationUrl": base + "/oauth2/v2.0/authorize",
-                      "tokenUrl": base + "/oauth2/v2.0/token", "logoutUrl": base + "/oauth2/v2.0/logout",
-                      "jwksUrl": base + "/discovery/v2.0/keys", "useJwksUrl": "true", "validateSignature": "true",
+           "config": {"issuer": urls["issuer"], "authorizationUrl": urls["authorizationUrl"],
+                      "tokenUrl": urls["tokenUrl"], "logoutUrl": urls["logoutUrl"],
+                      "jwksUrl": urls["jwksUrl"], "useJwksUrl": "true", "validateSignature": "true",
                       "clientId": a.client_id, "clientSecret": secret, "clientAuthMethod": "client_secret_post",
                       "defaultScope": "openid profile email", "pkceEnabled": "true", "pkceMethod": "S256",
                       "syncMode": "IMPORT", "backchannelSupported": "false", "disableUserInfo": "true",
@@ -599,7 +670,7 @@ def cmd_entra(a):
                       "passMaxAge": "true", "prompt": "", "loginHint": "false", "uiLocales": "false",
                       "guiOrder": "10", "isAccessTokenJWT": "false", "hideOnLoginPage": str(not a.enable).lower(),
                       # members of the tenant with a UPN in the member domain only: guests (#EXT#, other domains) refused
-                      "filteredByClaim": "true", "claimFilterName": "preferred_username",
+                      "filteredByClaim": "true", "claimFilterName": upn_claim,
                       "claimFilterValue": "^[A-Za-z0-9._%%+-]+@%s$" % re.escape(member_domain)}}
     cur = kc.api("GET", "/identity-provider/instances/entra", ok404=True)
     if cur is None:
@@ -608,10 +679,9 @@ def cmd_entra(a):
         rep["internalId"] = cur["internalId"]; kc.api("PUT", "/identity-provider/instances/entra", rep); print("entra: updated")
     for f in old_flow:   # the earlier link-by-name-or-e-mail flow, now that the provider no longer points at it
         kc.api("DELETE", "/authentication/flows/%s" % f["id"]); print("entra: removed the link-by-name flow")
-    # Evidence of Entra's MFA: the ID token's amr claim (e.g. ["pwd","mfa"]) copied to an admin-only attribute on every
-    # Entra sign-in. Keycloak does not act on it (MFA is Entra's job, by decision); it is for the operator to check.
-    # Guarded like the card mapping: through the admin API only realm administrators may write it (a fine-grained
-    # delegate is "admin" to the user profile too); the IdP mapper writes it outside the admin API.
+    # entra_amr: the earlier per-user record of Entra's amr (the retired `amr evidence` mapper, removed below). Still
+    # declared, admin-only and guarded like the card mapping, so nobody - a fine-grained delegate included - can write a
+    # value into it; nothing reads it. Tenant MFA is decided from each sign-in's own validated ID token (entra-mfa).
     want = {"name": "entra_amr", "displayName": "Entra sign-in methods (amr, last Entra sign-in)",
             "permissions": {"view": ["admin"], "edit": ["admin"]}, "multivalued": True,
             "validations": {"length": {"max": "64"}, "cac-identity-guard": {"unique": "false"}}, "annotations": {}}
@@ -628,7 +698,7 @@ def cmd_entra(a):
 
     mappers = kc.api("GET", "/identity-provider/instances/entra/mappers")
     want = [{"name": "username from UPN", "identityProviderAlias": "entra", "identityProviderMapper": "oidc-username-idp-mapper",
-             "config": {"template": "${CLAIM.preferred_username | localpart | lowercase}", "target": "LOCAL", "syncMode": "IMPORT"}},
+             "config": {"template": "${CLAIM.%s | localpart | lowercase}" % upn_claim, "target": "LOCAL", "syncMode": "IMPORT"}},
             # what Entra vouches for, on every sign-in, into DEDICATED attributes - never into the admin-set entra_oid
             {"name": "entra vouched oid", "identityProviderAlias": "entra", "identityProviderMapper": "oidc-user-attribute-idp-mapper",
              "config": {"claim": "oid", "user.attribute": "entra_vouched_oid", "syncMode": "IMPORT"}},
@@ -637,7 +707,7 @@ def cmd_entra(a):
             # the UPN Entra vouches for (preferred_username: Entra's UPN for a member), for the pending-invite binding;
             # never the e-mail claim, which a user or an admin can change
             {"name": "entra vouched upn", "identityProviderAlias": "entra", "identityProviderMapper": "oidc-user-attribute-idp-mapper",
-             "config": {"claim": "preferred_username", "user.attribute": "entra_vouched_upn", "syncMode": "IMPORT"}},
+             "config": {"claim": upn_claim, "user.attribute": "entra_vouched_upn", "syncMode": "IMPORT"}},
             # guests of the tenant (B2B, one-time passcode, Microsoft accounts) carry its tid but their HOME sign-in
             # name as preferred_username: Entra names their provider in idp (absent for a member), and the optional
             # acct claim is 1 for a guest. A pending invite is never bound to either (stig-extensions refuses; it
@@ -645,12 +715,11 @@ def cmd_entra(a):
             {"name": "entra vouched idp", "identityProviderAlias": "entra", "identityProviderMapper": "oidc-user-attribute-idp-mapper",
              "config": {"claim": "idp", "user.attribute": "entra_vouched_idp", "syncMode": "IMPORT"}},
             {"name": "entra vouched acct", "identityProviderAlias": "entra", "identityProviderMapper": "oidc-user-attribute-idp-mapper",
-             "config": {"claim": "acct", "user.attribute": "entra_vouched_acct", "syncMode": "IMPORT"}},
-            {"name": "amr evidence", "identityProviderAlias": "entra", "identityProviderMapper": "oidc-user-attribute-idp-mapper",
-             "config": {"claim": "amr", "user.attribute": "entra_amr", "syncMode": "FORCE"}}]
+             "config": {"claim": "acct", "user.attribute": "entra_vouched_acct", "syncMode": "IMPORT"}}]
     for al, m in binding_mappers(kc):      # e.g. the earlier "entra object id" (oid -> entra_oid)
         kc.api("DELETE", "/identity-provider/instances/%s/mappers/%s" % (q(al), m["id"]))
         print("entra: removed mapper %s/%s, which wrote the identity binding %s" % (al, m["name"], m["config"]))
+    remove_amr_mapper(kc)
     mappers = kc.api("GET", "/identity-provider/instances/entra/mappers")
     for m in want:
         cur = [x for x in mappers if x["name"] == m["name"]]
@@ -3362,6 +3431,7 @@ def cmd_guard(a):
         misaligned += edipi_usernames(kc)               # REPORT ONLY: an EDIPI as a username
         ra_report, ra_info = referer_audit_report(kc)
         misaligned += ra_report                         # REPORT ONLY: the Referer audit switched off (V-222447)
+        misaligned += entra_mfa_report(kc)              # REPORT ONLY: whose MFA counts for an administrator differs from the config
         expired_cards, pending_cards_ = pending_cards(kc)
         misaligned += expired_cards                     # REPORT ONLY: an invite's card never presented in time
         pending_invites += pending_cards_
@@ -3648,7 +3718,8 @@ def cmd_smtp(a):
 def cmd_invite(a):
     """Create first.last with an email, give it role groups, optionally map a card (realm admin only), and e-mail an
     execute-actions link: set a password, configure TOTP, accept the terms. The link expires after --lifespan
-    seconds (at most 86400)."""
+    seconds (at most 86400). An Entra-bound invite (--entra-oid) of a non-administrator is stig-accounts' Entra shape
+    instead: no password, no TOTP, the terms only, and no set-up e-mail - the person signs in with Microsoft Entra."""
     import re as _re
     if not _re.fullmatch(r"[a-z][a-z0-9-]*\.[a-z][a-z0-9.-]*", a.username):
         sys.exit("username must be first.last in lower case")
@@ -3658,14 +3729,19 @@ def cmd_invite(a):
     if kc.api("GET", "/users?exact=true&username=%s" % q(a.username)):
         sys.exit("REFUSED: %s already exists" % a.username)
     first, last = (a.first or a.username.split(".")[0].title()), (a.last or a.username.split(".", 1)[1].title())
+    roles = [r for r in a.groups.split(",") if r]
+    # Entra-bound and not an administrator: Entra is the sign-in (its MFA is the tenant's); a password and a TOTP
+    # would be a second, unused way in. An administrator invite keeps the set-up link (it is promoted only after
+    # enrolling a second factor through it).
+    entra_only = bool(a.entra_oid) and not admin_role_args(roles)
     rep = {"username": a.username, "email": a.email, "firstName": first, "lastName": last, "enabled": True,
-           "emailVerified": False, "requiredActions": ["UPDATE_PASSWORD", "CONFIGURE_TOTP", "TERMS_AND_CONDITIONS"]}
+           "emailVerified": False, "requiredActions": ["TERMS_AND_CONDITIONS"] if entra_only
+           else ["UPDATE_PASSWORD", "CONFIGURE_TOTP", "TERMS_AND_CONDITIONS"]}
     binds = {}
     if a.edipi:
         binds["cac_edipi"] = a.edipi
     if a.entra_oid:
         binds["entra_oid"] = a.entra_oid
-    roles = [r for r in a.groups.split(",") if r]
     kc.api("POST", "/users", rep)
     u = user(kc, a.username)
     if binds:                # server-side (stig-bindings): the admin event never holds the full EDIPI
@@ -3683,6 +3759,10 @@ def cmd_invite(a):
         return
     if roles:
         cmd_grant(argparse.Namespace(username=a.username, roles=roles, reset_credentials=False))
+    if entra_only:
+        print("invited %s <%s>: signs in with Microsoft Entra (no password, no TOTP; accepts the terms at the first "
+              "sign-in); no set-up e-mail sent" % (a.username, a.email))
+        return
     send_setup(kc, u, a.lifespan)
     print("invited %s <%s>: link valid %d h" % (a.username, a.email, a.lifespan // 3600))
 
@@ -3978,12 +4058,100 @@ def cmd_client_secret(a):
     kc = KC(); sys.stdout.write(kc.api("GET", "/clients/%s/client-secret" % client_uuid(kc, a.client))["value"])
 
 def cmd_entra_amr(a):
-    """Show the amr claim Entra sent at a user's last Entra sign-in ("mfa" among them means Entra performed MFA)."""
+    """A user's recent sign-in events with the tenant-MFA decision (event details stig_idp_mfa*: accepted or refused,
+    the reason, the amr method names of THAT sign-in). Nothing is stored on the user; the realm's stored events are the
+    record (and the audit log line STIG-ADMIN-SECOND-FACTOR-IDP-MFA). Only administrators' Entra sign-ins are decided."""
     kc = KC(); u = kc.api("GET", "/users/%s" % user(kc, a.username)["id"])
     links = [l["identityProvider"] for l in kc.api("GET", "/users/%s/federated-identity" % u["id"]) or []]
-    amr = (u.get("attributes") or {}).get("entra_amr")
-    print("%s: linked=%s entra_amr=%s -> %s" % (a.username, links, amr,
-          "MFA performed" if amr and "mfa" in amr else ("no MFA in amr" if amr else "no amr recorded (no Entra sign-in since the mapper, or Entra sent none)")))
+    ev = kc.api("GET", "/events?user=%s&type=LOGIN&type=LOGIN_ERROR&max=%d" % (q(u["id"]), a.max)) or []
+    print("%s: linked=%s; last %d sign-in event(s):" % (a.username, links, len(ev)))
+    for e in ev:
+        d = e.get("details") or {}
+        print("  %s %-11s idp=%s client=%s%s" % (
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((e.get("time") or 0) / 1000)), e.get("type"),
+            d.get("identity_provider", "-"), e.get("clientId"),
+            (" tenant-MFA %s (%s) amr=[%s]" % (d["stig_idp_mfa"], d.get("stig_idp_mfa_reason"), d.get("stig_idp_mfa_amr", "")))
+            if "stig_idp_mfa" in d else " tenant-MFA not decided (not an administrator's Entra sign-in)"))
+    if (u.get("attributes") or {}).get("entra_amr"):
+        print("  note: a stale entra_amr %s is stored from the retired mapper; nothing reads it" % u["attributes"]["entra_amr"])
+
+def entra_mfa_wanted():
+    """The tenants the config trusts for MFA (entra.mfaTrustedTenants), lower-cased; [] = never."""
+    return sorted(t.lower() for t in ((_AC.get("entra") or {}).get("mfaTrustedTenants") or []))
+
+def entra_mfa_report(kc):
+    """REPORT ONLY (guard): the live tenant-MFA condition must equal the config's entra.mfaTrustedTenants, sit in the
+    post-broker sub-flow's expected shape, and the retired amr mapper must be gone. -> drift lines (STIG-IDP-MFA-DRIFT)."""
+    if not kc.api("GET", "/identity-provider/instances/entra", ok404=True):
+        return []
+    out, want = [], entra_mfa_wanted()
+    shape = [e.get("providerId") for e in kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER), ok404=True) or []
+             if e.get("level") == 1]
+    live = live_idp_mfa(kc)
+    if shape != POST_BROKER_SUB_SHAPE:
+        out.append("STIG-IDP-MFA-DRIFT the post-broker sub-flow is %s, expected %s (run idp-admin.py entra-mfa)" % (shape, POST_BROKER_SUB_SHAPE))
+    have = sorted(t.lower() for t in live[1]) if live else []
+    if live and live[0] != "entra":
+        out.append("STIG-IDP-MFA-DRIFT the tenant-MFA condition names provider %s, not entra" % live[0])
+    if have != want:
+        out.append("STIG-IDP-MFA-DRIFT live trusted tenants %s, config entra.mfaTrustedTenants %s (run idp-admin.py entra-mfa)" % (have, want))
+    if any(m.get("name") == AMR_MAPPER for m in kc.api("GET", "/identity-provider/instances/entra/mappers", ok404=True) or []):
+        out.append("STIG-IDP-MFA-DRIFT the retired mapper %r (amr -> entra_amr) is still present (run idp-admin.py entra-mfa)" % AMR_MAPPER)
+    return out
+
+def cmd_entra_mfa(a):
+    """Whose MFA counts as an administrator's second factor after an Entra sign-in: the tenants in the config's
+    entra.mfaTrustedTenants (or --trust-tenant, for a lab; --off for none). Rebuilds the post-broker sub-flow into
+    its current shape if it is an earlier one (never leaving it absent), removes the retired amr mapper, verifies by
+    re-reading. --show changes nothing."""
+    kc = KC()
+    if not kc.api("GET", "/identity-provider/instances/entra", ok404=True):
+        sys.exit("REFUSED: no entra identity provider (run idp-admin.py entra first)")
+    before = live_idp_mfa(kc)
+    print("entra-mfa: now %s" % (("trusting %s via %s" % (before[1] or "no tenant (never)", before[0])) if before
+                                 else "no tenant-MFA condition (an earlier post-broker shape: every administrator needs a second factor)"))
+    if a.show:
+        for line in entra_mfa_report(kc):
+            print(line)
+        return
+    if sum(map(bool, (a.off, a.trust_tenant, getattr(a, "remove_condition", False)))) > 1:
+        sys.exit("REFUSED: --off, --trust-tenant and --remove-condition are exclusive")
+    if getattr(a, "remove_condition", False):
+        # before rolling the image back to one WITHOUT the condition's provider (a flow naming an unknown authenticator
+        # fails every brokered sign-in): delete just the condition. The sub-flow stays, so every administrator needs the
+        # enrolled second factor - stricter, never weaker. guard reports the shape as drift until entra-mfa runs again.
+        gone = 0
+        for e in kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER_SUB), ok404=True) or []:
+            if e.get("providerId") == IDP_MFA_COND:
+                kc.api("DELETE", "/authentication/executions/%s" % e["id"]); gone += 1
+        left = [e.get("providerId") for e in kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER_SUB), ok404=True) or []]
+        if IDP_MFA_COND in left:
+            sys.exit("FAILED: the condition is still in the sub-flow: %s" % left)
+        print("entra-mfa: removed %d tenant-MFA condition(s); sub-flow now %s - every administrator needs an enrolled second "
+              "factor. Safe to roll the image back." % (gone, left))
+        return
+    tenants = [] if a.off else sorted({t.lower() for t in a.trust_tenant}) if a.trust_tenant else entra_mfa_wanted()
+    for t in tenants:
+        if not GUID_RE.fullmatch(t):
+            sys.exit("REFUSED: %r is not a tenant id (GUID)" % t)
+    tenant = None
+    for e in kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER), ok404=True) or []:
+        if e.get("providerId") == "idp-require-admin-attribute-match" and e.get("authenticationConfig"):
+            tenant = (kc.api("GET", "/authentication/config/%s" % e["authenticationConfig"]).get("config") or {}).get("stig.tenant-id")
+    if not tenant:
+        sys.exit("REFUSED: the post-broker flow has no configured idp-require-admin-attribute-match (run idp-admin.py entra first)")
+    post_broker_flow(kc, "entra", tenant, tenants)
+    remove_amr_mapper(kc)
+    after = live_idp_mfa(kc)
+    print("entra-mfa: post broker %s" % flow_shape(kc, POST_BROKER))
+    print("entra-mfa: %s" % ("an administrator's Entra sign-in from tenant(s) %s whose ID token's amr contains \"mfa\" needs no "
+                             "further second factor; anything else (another tenant, no or malformed amr, a guest) still does" % after[1]
+                             if after[1] else "OFF: every administrator's Entra sign-in needs an enrolled second factor (or is refused)"))
+    drift = entra_mfa_report(kc) if not a.trust_tenant and not a.off else []
+    for line in drift:
+        print(line, file=sys.stderr)
+    if drift:
+        sys.exit(1)
 
 def cmd_user_logout(a):
     """End every session of the user at the IdP; Keycloak sends back-channel logout to each client that has it."""
@@ -5371,6 +5539,9 @@ def build_parser():
     e.add_argument("--secret-file", default=os.path.join(SECRETS, "entra_client_secret"))
     e.add_argument("--member-domain", help="the UPN domain whose tenant members may sign in (default: the config's entra.memberDomain)")
     e.add_argument("--enable", action="store_true", help="enable and show the provider: only after tenant admin consent AND a Conditional Access policy requiring MFA for the app")
+    e.add_argument("--endpoint", choices=("v1", "v2"),
+                   help="Entra's v1.0 or v2.0 endpoints (default: as the live provider is; v2 for a new one). v1's ID tokens carry amr "
+                        "(Entra's MFA evidence) with no app-registration change, and the UPN as upn instead of preferred_username")
     e.add_argument("--auto-link-domain", help="bind a pending stig-accounts invite (signIn entra) at its FIRST Entra sign-in, by the UPN in this domain")
     e.add_argument("--no-auto-link", action="store_true", help="switch the first-sign-in binding of pending invites off (default: as it is)")
     e.add_argument("--domain-verified-by-operator", action="store_true",
@@ -5471,7 +5642,14 @@ def build_parser():
     lc.add_argument("--cancel", action="store_true", help="withdraw a pending link request")
     lc.add_argument("--cancel-all", action="store_true", help="withdraw EVERY pending link request in the realm (the realm-wide stop)")
     lc.set_defaults(fn=cmd_link_cac)
-    am = sp.add_parser("entra-amr"); am.add_argument("username"); am.set_defaults(fn=cmd_entra_amr)
+    am = sp.add_parser("entra-amr"); am.add_argument("username"); am.add_argument("--max", type=int, default=10); am.set_defaults(fn=cmd_entra_amr)
+    em = sp.add_parser("entra-mfa", help="which tenants' MFA counts as an administrator's second factor after an Entra sign-in")
+    em.add_argument("--show", action="store_true", help="show the live setting and any drift from the config; change nothing")
+    em.add_argument("--trust-tenant", action="append", default=[], help="a tenant id (repeatable) instead of the config's entra.mfaTrustedTenants (a lab)")
+    em.add_argument("--off", action="store_true", help="trust no tenant's MFA (every administrator needs an enrolled second factor)")
+    em.add_argument("--remove-condition", action="store_true",
+                    help="rollback: delete the condition itself (before running an image without stig-extensions' provider for it)")
+    em.set_defaults(fn=cmd_entra_mfa)
     ul = sp.add_parser("user-unlock"); ul.add_argument("username"); ul.set_defaults(fn=cmd_user_unlock)
     lo = sp.add_parser("user-logout"); lo.add_argument("username"); lo.set_defaults(fn=cmd_user_logout)
     d = sp.add_parser("user-delete"); d.add_argument("username"); d.set_defaults(fn=cmd_user_delete)

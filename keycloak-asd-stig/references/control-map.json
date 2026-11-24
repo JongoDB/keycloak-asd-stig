@@ -1314,9 +1314,10 @@
   },
   "V-222523": {
    "disposition": "SHARED",
-   "implementation": "Admin realm (master) requires the Alt Token: X.509 mapped through admin-only attribute alt_token_upn (separate from CAC cac_upn), or password + WebAuthn hardware token if profile.admin.mfa=webauthn.",
+   "implementation": "Admin realm (master) requires the Alt Token: X.509 mapped through admin-only attribute alt_token_upn (separate from CAC cac_upn), or password + WebAuthn hardware token if profile.admin.mfa=webauthn. Where a brokered provider's own MFA is accepted for an application realm's administrators (conditional-stig-idp-mfa-unproven), it counts only from pinned tenant ids with amr containing mfa in that sign-in's validated ID token, and fails closed to the enrolled second factor; that reliance is the ISSO's risk decision.",
    "checks": [
-    "master.flow_alt_token"
+    "master.flow_alt_token",
+    "idp.admin_mfa_trust"
    ],
    "app_action": "Issue Alt Tokens to administrators; do not map their everyday CAC.",
    "na_condition": null,

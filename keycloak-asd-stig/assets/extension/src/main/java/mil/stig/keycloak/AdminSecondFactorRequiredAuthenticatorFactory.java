@@ -45,9 +45,10 @@ public class AdminSecondFactorRequiredAuthenticatorFactory implements Authentica
             return;
         }
         boolean brokered = context.getAuthenticationSession().getAuthNote(BROKERED) != null;
-        LOG.warnf("STIG-ADMIN-SECOND-FACTOR-REQUIRED realm=%s user=%s path=%s: an administrator with no enrolled second "
+        String idpMfa = context.getAuthenticationSession().getAuthNote(ConditionalIdpMfaUnprovenAuthenticatorFactory.NOTE);
+        LOG.warnf("STIG-ADMIN-SECOND-FACTOR-REQUIRED realm=%s user=%s path=%s%s: an administrator with no enrolled second "
                 + "factor was refused (no enrolment after one factor; sign in with the card)", realm.getName(), user.getUsername(),
-                brokered ? "identity-provider" : "password");
+                brokered ? "identity-provider" : "password", brokered && idpMfa != null ? " idp-mfa=" + idpMfa : "");
         context.getEvent().user(user);
         if (brokered) {
             // a POLICY refusal after a successful identity-provider sign-in - not a wrong credential: a challenge, not a
