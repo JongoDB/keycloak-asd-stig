@@ -59,9 +59,14 @@ Entra performed MFA (`amr` contains `mfa`). Off until configured.
 
 - `idp-admin.py entra-mfa` applies `entra.mfaTrustedTenants` from the config; `--show` prints the live setting and any
   drift and changes nothing; `--off` trusts no tenant; `--trust-tenant <tid>` (repeatable) is for a lab.
-- It moves an earlier post-broker shape (a condition on a stored `entra_amr`) to the current one without ever leaving
-  the sub-flow absent, removes the retired `amr evidence` mapper, and verifies by re-reading. `entra` re-runs keep the
-  trusted tenants as they are.
+- It moves an earlier post-broker shape (a condition on a stored `entra_amr`, or older) to the current one in place,
+  in an order that is never weaker and never leaves the sub-flow absent; removes the retired `amr evidence` mapper and
+  clears any stored `entra_amr`; and verifies the WHOLE result by re-reading (shape, every requirement, the condition's
+  whole configuration). `entra` re-runs keep the trusted tenants as they are.
+- `guard` reports any difference as `STIG-IDP-MFA-DRIFT` (exit 2): a sub-flow or execution not CONDITIONAL / REQUIRED,
+  `accept-amr` other than `mfa`, any `accept-acr`, another alias, tenants other than the config's, the old mapper, a
+  stored `entra_amr`. `guard --fix` only narrows: requirements restored, the configuration reset to the live tenants
+  the config also trusts (never one added), the mapper removed, `entra_amr` cleared.
 - Fails closed: another tenant or provider, a guest, no `amr` or a malformed one, an `acr` alone, no config - the
   second factor is still required. Non-administrators, password users and card users are not affected.
 - Evidence per sign-in, never stored on the user: the audit line `STIG-ADMIN-SECOND-FACTOR-IDP-MFA accepted|refused
@@ -221,6 +226,7 @@ python3 tests/rename_unit_test.py
 python3 tests/app_admin_enroll_unit_test.py
 python3 tests/config_unit_test.py
 python3 tests/invite_entra_unit_test.py
+python3 tests/entra_mfa_unit_test.py        # tenant-MFA flow: migration never weaker, drift, guard --fix narrows
 python3 tests/handoff_unit_test.py          # hand-off intake against a mock intake (needs openssl)
 ```
 

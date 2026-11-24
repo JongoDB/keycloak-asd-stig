@@ -1425,8 +1425,9 @@ class Checker:
                 why = []
                 if not parent or parent.get("requirement") != "CONDITIONAL":
                     why.append("not inside a CONDITIONAL sub-flow")
-                if "conditional-stig-administrator" not in provs or provs.index("conditional-stig-administrator") > provs.index(IDP_MFA_COND):
-                    why.append("not after conditional-stig-administrator")
+                if "conditional-stig-administrator" not in provs or provs.index("conditional-stig-administrator") > provs.index(IDP_MFA_COND) \
+                        or ("conditional-stig-administrator", "REQUIRED") not in sib:
+                    why.append("not after a REQUIRED conditional-stig-administrator")
                 if (ADMIN_GATE, "REQUIRED") not in sib or ("auth-otp-form", "REQUIRED") not in sib:
                     why.append("the sub-flow no longer requires %s and auth-otp-form" % ADMIN_GATE)
                 if e.get("requirement") != "REQUIRED":

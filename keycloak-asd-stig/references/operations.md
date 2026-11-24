@@ -463,3 +463,10 @@ username, member-filter and vouched-UPN mappers read `upn`. Without `amr`, every
 claim`: it fails closed. Relying on the tenant's MFA is a risk decision for the ISSO: the tenant's Conditional Access
 policies, not this IdP, decide what "mfa" means there.
 
+**How fresh the MFA is.** `amr` says how the person authenticated to the provider's session, not that they did so just
+now: a sign-in that Entra satisfies from its own SSO session carries the `amr` of that earlier authentication. The
+broker sends no `prompt=login`, and Entra's v1.0 endpoint is not documented to honour `max_age` (treat the broker's "pass max_age" as having
+no effect there), so how recent the MFA is depends only on the tenant's Conditional Access **sign-in frequency** for
+this app. Record that setting with the risk decision; to bound it from this side, an administrator client can demand
+re-authentication itself (for example Keycloak's own step-up), which this condition does not do.
+

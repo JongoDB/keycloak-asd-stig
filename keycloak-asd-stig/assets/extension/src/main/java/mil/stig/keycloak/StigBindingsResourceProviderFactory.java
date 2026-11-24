@@ -44,7 +44,7 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
  * stored in the admin event with every attribute, the card included): username (unique, lower case), e-mail ("" clears
  * it; unique when the realm requires it), names, the two flags, and the exact list of required actions.
  * Names it may set: cac_edipi, cac_edipi_pending (exactly ten digits), stig_card_link ("<epoch-ms>" or "<epoch-ms>
- * admin"), entra_oid (an object id). It may also remove those and stig_created_by. Nothing else (400). A card value
+ * admin"), entra_oid (an object id). It may also remove those, stig_created_by and the retired entra_amr. Nothing else (400). A card value
  * held by another account as its card or its pending card, or an entra_oid held by another account: 409, nothing
  * changed. A card is claimed atomically first (the same claim stig-accounts' card creates and the present-card step
  * take), so two writers cannot bind one card to two accounts.
@@ -60,7 +60,9 @@ public class StigBindingsResourceProviderFactory implements AdminRealmResourcePr
     private static final Logger LOG = Logger.getLogger("mil.stig.audit");
     static final String CARD = "cac_edipi", PENDING = "cac_edipi_pending", ENTRA = "entra_oid", CREATED_BY = "stig_created_by";
     static final Set<String> SETTABLE = Set.of(CARD, PENDING, AccountsPolicy.LINK_ATTRIBUTE, ENTRA);
-    static final Set<String> REMOVABLE = Set.of(CARD, PENDING, AccountsPolicy.LINK_ATTRIBUTE, ENTRA, CREATED_BY);
+    /** The retired per-user record of Entra's amr (idp-admin.py clears it: a stored "mfa" must never outlive the mapper). */
+    static final String RETIRED_AMR = "entra_amr";
+    static final Set<String> REMOVABLE = Set.of(CARD, PENDING, AccountsPolicy.LINK_ATTRIBUTE, ENTRA, CREATED_BY, RETIRED_AMR);
     static final String PRESENT_CARD = "stig-present-card";
 
     @Override public AdminRealmResourceProvider create(KeycloakSession session) { return this; }

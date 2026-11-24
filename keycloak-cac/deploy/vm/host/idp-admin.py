@@ -472,14 +472,71 @@ def idp_mfa_cfg(alias, tenants):
     return {"stig.idp-mfa.idp-alias": alias, "stig.idp-mfa.trusted-tenants": "##".join(t.lower() for t in tenants),
             "stig.idp-mfa.accept-amr": "mfa", "stig.idp-mfa.accept-acr": ""}
 
-def live_idp_mfa(kc):
-    """(alias, [tenants]) the live post-broker condition trusts, or None when the condition is absent."""
+POST_BROKER_SUB_REQ = [(p_, "REQUIRED") for p_ in POST_BROKER_SUB_SHAPE]
+
+def _tenants(v):
+    return sorted({t.lower() for t in re.split(r"##|[,\s]+", v or "") if t})
+
+def live_idp_mfa_config(kc):
+    """The live condition's whole configuration ({} when it has none), or None when the condition is absent."""
     for e in kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER_SUB), ok404=True) or []:
         if e.get("providerId") == IDP_MFA_COND:
-            c = (kc.api("GET", "/authentication/config/%s" % e["authenticationConfig"]).get("config") or {}) if e.get("authenticationConfig") else {}
-            ts = [t for t in re.split(r"##|[,\s]+", c.get("stig.idp-mfa.trusted-tenants") or "") if t]
-            return c.get("stig.idp-mfa.idp-alias") or "entra", ts
+            return (kc.api("GET", "/authentication/config/%s" % e["authenticationConfig"]).get("config") or {}) if e.get("authenticationConfig") else {}
     return None
+
+def live_idp_mfa(kc):
+    """(alias, [tenants]) the live post-broker condition trusts, or None when the condition is absent."""
+    c = live_idp_mfa_config(kc)
+    return None if c is None else (c.get("stig.idp-mfa.idp-alias") or "entra", _tenants(c.get("stig.idp-mfa.trusted-tenants")))
+
+def idp_mfa_drift(kc, alias, tenants):
+    """Everything about the post-broker administrators' sub-flow that differs from the intended shape: the sub-flow
+    CONDITIONAL; exactly the four executions, in order, each REQUIRED; the condition's WHOLE configuration equal to
+    idp_mfa_cfg(alias, tenants) - accept-amr exactly "mfa", accept-acr empty (a console edit accepting "pwd", or any
+    acr, would let one factor through). [] = as intended."""
+    out = []
+    ex = kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER), ok404=True) or []
+    sub = [e for e in ex if e.get("level") == 0 and e.get("displayName") == POST_BROKER_SUB and e.get("authenticationFlow")]
+    if not sub:
+        return ["the post-broker sub-flow %r is absent" % POST_BROKER_SUB]
+    if sub[0].get("requirement") != "CONDITIONAL":
+        out.append("the sub-flow is %s, expected CONDITIONAL" % sub[0].get("requirement"))
+    kids = [(e.get("providerId"), e.get("requirement")) for e in ex if e.get("level") == 1]
+    if kids != POST_BROKER_SUB_REQ:
+        out.append("the sub-flow is %s, expected %s" % (kids, POST_BROKER_SUB_REQ))
+    c = live_idp_mfa_config(kc)
+    if c is not None:
+        want = idp_mfa_cfg(alias, tenants)
+        want["stig.idp-mfa.trusted-tenants"] = "##".join(_tenants(want["stig.idp-mfa.trusted-tenants"]))
+        got = {"stig.idp-mfa.idp-alias": c.get("stig.idp-mfa.idp-alias") or "entra",
+               "stig.idp-mfa.trusted-tenants": "##".join(_tenants(c.get("stig.idp-mfa.trusted-tenants"))),
+               # the extension's defaults for an absent key: accept-amr "mfa", accept-acr none
+               "stig.idp-mfa.accept-amr": (c["stig.idp-mfa.accept-amr"] if "stig.idp-mfa.accept-amr" in c else "mfa").strip().lower(),
+               "stig.idp-mfa.accept-acr": (c.get("stig.idp-mfa.accept-acr") or "").strip()}
+        for k in sorted(want):
+            if got[k] != want[k]:
+                out.append("the condition's %s is %r, expected %r" % (k, got[k], want[k]))
+    return out
+
+def fix_idp_mfa(kc, alias, tenants):
+    """guard --fix: only ever NARROWS. Restores each existing execution's requirement (the sub-flow CONDITIONAL, the
+    four REQUIRED) and resets the condition's configuration to idp_mfa_cfg(alias, the live tenants the config also
+    trusts). Never adds a tenant, an execution or a condition (an absent condition is the stricter shape already).
+    Returns what it changed."""
+    done = []
+    for e in kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER), ok404=True) or []:
+        want = ("CONDITIONAL" if e.get("level") == 0 and e.get("displayName") == POST_BROKER_SUB and e.get("authenticationFlow")
+                else "REQUIRED" if e.get("level") == 1 and e.get("providerId") in POST_BROKER_SUB_SHAPE else None)
+        if want and e.get("requirement") != want:
+            kc.api("PUT", "/authentication/flows/%s/executions" % q(POST_BROKER), dict(e, requirement=want))
+            done.append("%s %s -> %s" % (e.get("providerId") or e.get("displayName"), e.get("requirement"), want))
+    live = live_idp_mfa(kc)
+    if live is not None:
+        keep = sorted(set(live[1]) & {t.lower() for t in tenants}) if live[0] == alias else []
+        if any(x.startswith("the condition's") for x in idp_mfa_drift(kc, alias, keep)):
+            set_exec_config(kc, POST_BROKER_SUB, IDP_MFA_COND, idp_mfa_cfg(alias, keep))
+            done.append("condition reset to trust %s, amr mfa only, no acr" % (keep or "no tenant"))
+    return done
 
 def post_broker_flow(kc, alias="entra", tenant=None, mfa_tenants=()):
     """Post broker login. An administrator (any realm-management role: stig-extensions' conditional-stig-administrator)
@@ -492,17 +549,15 @@ def post_broker_flow(kc, alias="entra", tenant=None, mfa_tenants=()):
     if any(f["alias"] == POST_BROKER for f in kc.api("GET", "/authentication/flows")):
         execs = kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER))
         have = [e.get("providerId") for e in execs if e.get("level") == 1]
-        if "conditional-user-attribute" in have and set(have) - {"conditional-user-attribute"} <= set(want):
-            # the earlier shape, whose condition read a STORED entra_amr: remove just that condition. Conditions are
-            # ANDed, so with one fewer the sub-flow runs for EVERY administrator until the new condition is in place
-            # (stricter, never weaker - the sub-flow is never absent, as a delete-and-rebuild would leave it)
-            for e in execs:
-                if e.get("level") == 1 and e.get("providerId") == "conditional-user-attribute":
-                    kc.api("DELETE", "/authentication/executions/%s" % e["id"])
-        elif have and not set(have) <= set(want):     # an older shape (conditional-user-role, no refusal): rebuild the sub-flow
-            for e in execs:
-                if e.get("level") == 0 and e.get("displayName") == sub:
-                    kc.api("DELETE", "/authentication/executions/%s" % e["id"])
+        # An earlier shape becomes this one IN PLACE, in an order that is never weaker and never leaves the sub-flow
+        # absent: (1) extra CONDITIONS go first while another condition remains (conditions are ANDed, so one fewer
+        # makes the sub-flow run for more sign-ins - but a CONDITIONAL sub-flow with NO condition is skipped, so the
+        # last one waits); (2) the wanted executions are added, each condition WITH its configuration; (3) whatever
+        # extra is left goes.
+        conds = [e for e in execs if e.get("level") == 1 and (e.get("providerId") or "").startswith("conditional-")]
+        for e in list(conds):
+            if e.get("providerId") not in want and len(conds) > 1:
+                kc.api("DELETE", "/authentication/executions/%s" % e["id"]); conds = [c for c in conds if c["id"] != e["id"]]
     # every brokered sign-in, through a new or an EXISTING link, must come from `alias` in `tenant` and carry the
     # admin-set entra_oid: a link someone else made (a delegate via the admin API, the user via the account console)
     # signs nobody in
@@ -519,6 +574,12 @@ def post_broker_flow(kc, alias="entra", tenant=None, mfa_tenants=()):
              ("stig-admin-second-factor-required", "REQUIRED", None),
              ("auth-otp-form", "REQUIRED", None)], first_position=True)
     set_exec_config(kc, sub, IDP_MFA_COND, idp_mfa_cfg(alias, mfa_tenants))
+    seen = set()
+    for e in kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER)):    # (3) the leftovers of an earlier shape
+        if e.get("level") == 1:
+            if e.get("providerId") not in want or e.get("providerId") in seen:
+                kc.api("DELETE", "/authentication/executions/%s" % e["id"])
+            seen.add(e.get("providerId"))
     set_exec_config(kc, POST_BROKER, "idp-require-admin-attribute-match", binding_cfg(alias, tenant))
     ex = kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER))
     got = [e.get("providerId") for e in ex if e.get("level") == 1]
@@ -527,9 +588,9 @@ def post_broker_flow(kc, alias="entra", tenant=None, mfa_tenants=()):
         raise RuntimeError("post broker flow lacks a REQUIRED idp-require-admin-attribute-match: %s" % top)
     if got != want:
         raise RuntimeError("post broker sub-flow is %s, expected %s" % (got, want))
-    live = live_idp_mfa(kc)
-    if live is None or live[0] != alias or sorted(x.lower() for x in live[1]) != sorted(x.lower() for x in mfa_tenants):
-        raise RuntimeError("the tenant-MFA condition reads %s, expected %s %s" % (live, alias, sorted(mfa_tenants)))
+    drift = idp_mfa_drift(kc, alias, mfa_tenants)
+    if drift or live_idp_mfa(kc) is None:
+        raise RuntimeError("the administrators' sub-flow is not as intended: %s" % (drift or "no tenant-MFA condition"))
     return POST_BROKER
 
 def remove_amr_mapper(kc, alias="entra"):
@@ -539,6 +600,8 @@ def remove_amr_mapper(kc, alias="entra"):
         if m.get("name") == AMR_MAPPER or (m.get("config") or {}).get("user.attribute") == "entra_amr":
             kc.api("DELETE", "/identity-provider/instances/%s/mappers/%s" % (q(alias), m["id"]))
             print("entra: removed mapper %s (amr -> entra_amr): tenant MFA is now read from each sign-in's own ID token" % m["name"])
+            gone = clear_entra_amr(kc)
+            print("entra: cleared the retired entra_amr on %d account(s)" % len(gone))
             return True
     return False
 
@@ -3431,7 +3494,7 @@ def cmd_guard(a):
         misaligned += edipi_usernames(kc)               # REPORT ONLY: an EDIPI as a username
         ra_report, ra_info = referer_audit_report(kc)
         misaligned += ra_report                         # REPORT ONLY: the Referer audit switched off (V-222447)
-        misaligned += entra_mfa_report(kc)              # REPORT ONLY: whose MFA counts for an administrator differs from the config
+        misaligned += entra_mfa_report(kc, a.fix)       # whose MFA counts for an administrator differs from the config; --fix narrows only
         expired_cards, pending_cards_ = pending_cards(kc)
         misaligned += expired_cards                     # REPORT ONLY: an invite's card never presented in time
         pending_invites += pending_cards_
@@ -4079,24 +4142,50 @@ def entra_mfa_wanted():
     """The tenants the config trusts for MFA (entra.mfaTrustedTenants), lower-cased; [] = never."""
     return sorted(t.lower() for t in ((_AC.get("entra") or {}).get("mfaTrustedTenants") or []))
 
-def entra_mfa_report(kc):
-    """REPORT ONLY (guard): the live tenant-MFA condition must equal the config's entra.mfaTrustedTenants, sit in the
-    post-broker sub-flow's expected shape, and the retired amr mapper must be gone. -> drift lines (STIG-IDP-MFA-DRIFT)."""
+def stale_entra_amr(kc):
+    """Accounts still holding a value in the retired entra_amr (the old condition honoured a stored "mfa")."""
+    return [u for u in paged(kc, "/users?briefRepresentation=false") if (u.get("attributes") or {}).get("entra_amr")]
+
+def clear_entra_amr(kc):
+    """Remove the retired entra_amr from every account (server-side, stig-bindings: no attribute dump in the admin
+    event), so a rollback to the earlier condition on a stored value can never honour a stale "mfa". -> usernames."""
+    done = []
+    for u in stale_entra_amr(kc):
+        write_bindings(kc, u["id"], remove=["entra_amr"], reason="retired entra_amr")
+        done.append(u["username"])
+    left = [u["username"] for u in stale_entra_amr(kc)]
+    if left:
+        raise RuntimeError("entra_amr still stored on %s" % left)
+    return done
+
+def entra_mfa_report(kc, fix=False):
+    """guard: the administrators' post-broker sub-flow must be exactly as intended for the config's
+    entra.mfaTrustedTenants (idp_mfa_drift: shape, requirements, the condition's WHOLE configuration), the retired amr
+    mapper gone and no entra_amr stored. -> STIG-IDP-MFA-DRIFT lines. With fix=True it NARROWS only (fix_idp_mfa,
+    the mapper removed, entra_amr cleared) and reports what it changed; it never widens the trust."""
     if not kc.api("GET", "/identity-provider/instances/entra", ok404=True):
         return []
-    out, want = [], entra_mfa_wanted()
-    shape = [e.get("providerId") for e in kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER), ok404=True) or []
-             if e.get("level") == 1]
-    live = live_idp_mfa(kc)
-    if shape != POST_BROKER_SUB_SHAPE:
-        out.append("STIG-IDP-MFA-DRIFT the post-broker sub-flow is %s, expected %s (run idp-admin.py entra-mfa)" % (shape, POST_BROKER_SUB_SHAPE))
-    have = sorted(t.lower() for t in live[1]) if live else []
-    if live and live[0] != "entra":
-        out.append("STIG-IDP-MFA-DRIFT the tenant-MFA condition names provider %s, not entra" % live[0])
-    if have != want:
-        out.append("STIG-IDP-MFA-DRIFT live trusted tenants %s, config entra.mfaTrustedTenants %s (run idp-admin.py entra-mfa)" % (have, want))
-    if any(m.get("name") == AMR_MAPPER for m in kc.api("GET", "/identity-provider/instances/entra/mappers", ok404=True) or []):
-        out.append("STIG-IDP-MFA-DRIFT the retired mapper %r (amr -> entra_amr) is still present (run idp-admin.py entra-mfa)" % AMR_MAPPER)
+    want = entra_mfa_wanted()
+    def look():
+        out = ["STIG-IDP-MFA-DRIFT %s (run idp-admin.py entra-mfa)" % x for x in idp_mfa_drift(kc, "entra", want)]
+        live = live_idp_mfa(kc)
+        if live is None and want:
+            out.append("STIG-IDP-MFA-DRIFT no tenant-MFA condition while the config trusts %s (run idp-admin.py entra-mfa)" % want)
+        if any(m.get("name") == AMR_MAPPER or (m.get("config") or {}).get("user.attribute") == "entra_amr"
+               for m in kc.api("GET", "/identity-provider/instances/entra/mappers", ok404=True) or []):
+            out.append("STIG-IDP-MFA-DRIFT the retired mapper %r (amr -> entra_amr) is still present (run idp-admin.py entra-mfa)" % AMR_MAPPER)
+        n = len(stale_entra_amr(kc))
+        if n:
+            out.append("STIG-IDP-MFA-DRIFT %d account(s) still hold the retired entra_amr (guard --fix or entra-mfa clears it)" % n)
+        return out
+    out = look()
+    if fix and out:
+        done = fix_idp_mfa(kc, "entra", want)
+        if remove_amr_mapper(kc):
+            done.append("the retired amr mapper removed")
+        done += ["entra_amr cleared on %s" % x for x in clear_entra_amr(kc)]
+        out += ["STIG-IDP-MFA-DRIFT fixed (narrowed): %s" % x for x in done]
+        out += ["STIG-IDP-MFA-DRIFT still: %s" % x[len("STIG-IDP-MFA-DRIFT "):] for x in look()]
     return out
 
 def cmd_entra_mfa(a):
@@ -4141,7 +4230,10 @@ def cmd_entra_mfa(a):
     if not tenant:
         sys.exit("REFUSED: the post-broker flow has no configured idp-require-admin-attribute-match (run idp-admin.py entra first)")
     post_broker_flow(kc, "entra", tenant, tenants)
-    remove_amr_mapper(kc)
+    if not remove_amr_mapper(kc):
+        gone = clear_entra_amr(kc)          # the mapper went earlier; a value it stored must not outlive it
+        if gone:
+            print("entra-mfa: cleared the retired entra_amr on %d account(s)" % len(gone))
     after = live_idp_mfa(kc)
     print("entra-mfa: post broker %s" % flow_shape(kc, POST_BROKER))
     print("entra-mfa: %s" % ("an administrator's Entra sign-in from tenant(s) %s whose ID token's amr contains \"mfa\" needs no "
