@@ -15,12 +15,21 @@ import java.util.regex.Pattern;
  *       POST stig-accounts/users/{id}/setup-email      re-send the set-up mail
  *       POST stig-accounts/users/{id}/disable          disable
  *       PUT | DELETE users/{id}/groups/{groupId}       a membership change (Keycloak's own permissions apply)
+ *     and, ONLY when the operations list names them (never by default):
+ *       POST stig-accounts/users/{id}/reset-otp        reset-otp
+ *       POST stig-accounts/users/{id}/reset-password   reset-password (the set-up mail flow, UPDATE_PASSWORD)
+ *       POST stig-accounts/users/{id}/unlock           unlock (a brute-force lockout)
+ *       POST stig-accounts/users/{id}/logout           logout (every session)
+ *       POST stig-accounts/users/{id}/link-cac         link-cac (a request: the holder presents the card)
+ *   - read, only when the operations list names `status` (no step-up: a read, like the reads above):
+ *       GET stig-accounts/users/{id}/status | GET stig-accounts/users/status?id=...   status
  *   - nothing else (403), whatever the person's own roles: a token from such a client never reaches the rest of the
  *     admin API, so a page it was issued to cannot be turned against anything but those calls.
- * Optional `stig.admin-api.operations`: the writes the client may make, a comma list of create, setup-email, disable,
- * membership (PUT/DELETE of a group membership); unset = all four; set but blank, or naming anything else, refuses
- * every request (fail closed). Set on a client WITHOUT the profile attribute: every request refused too (it would
- * otherwise confine nothing while looking as if it did).
+ * Optional `stig.admin-api.operations`: the operations the client may use, a comma list of create, setup-email,
+ * disable, membership (PUT/DELETE of a group membership), reset-otp, reset-password, unlock, logout, link-cac, status;
+ * unset = the first four only (the portal operations are off unless listed); set but blank, or naming anything else,
+ * refuses every request (fail closed). Set on a client WITHOUT the profile attribute: every request refused too (it
+ * would otherwise confine nothing while looking as if it did).
  * A write with an older authentication (or none recorded in the token) is answered 401 with an RFC 9470 step-up
  * challenge, so the page re-authenticates with max_age and retries. Any other value of the profile attribute (a blank
  * one included), or a malformed or blank max age, refuses every request from that client (fail closed). No attribute:
@@ -32,10 +41,20 @@ final class AdminApiStepUp {
 
     static final String PROFILE_ATTR = "stig.admin-api.profile";
     static final String MAX_AGE_ATTR = "stig.admin-api.max-auth-age";
-    /** Optional: the write operations the client may make, a comma list of OPERATIONS. Unset: all of them. Set but
-     *  blank, or naming anything else: every request refused (fail closed). */
+    /** Optional: the operations the client may use, a comma list of OPERATIONS. Unset: LEGACY_OPERATIONS only. Set
+     *  but blank, or naming anything else: every request refused (fail closed). */
     static final String OPS_ATTR = "stig.admin-api.operations";
-    static final java.util.Set<String> OPERATIONS = java.util.Set.of("create", "setup-email", "disable", "membership");
+    /** What an unset operations list allows (all there was before the portal operations). */
+    static final java.util.Set<String> LEGACY_OPERATIONS = java.util.Set.of("create", "setup-email", "disable", "membership");
+    /** The account operations an application's admin page may offer (stig-accounts): never allowed unless listed. */
+    static final java.util.Set<String> PORTAL_OPERATIONS = java.util.Set.of("reset-otp", "reset-password", "unlock", "logout",
+            "link-cac", "status");
+    /** The portal operations that write (a POST on stig-accounts/users/{id}/{op}); `status` is the one read. */
+    static final java.util.Set<String> PORTAL_WRITES = java.util.Set.of("reset-otp", "reset-password", "unlock", "logout", "link-cac");
+    static final java.util.Set<String> OPERATIONS = union(LEGACY_OPERATIONS, PORTAL_OPERATIONS);
+    private static java.util.Set<String> union(java.util.Set<String> x, java.util.Set<String> y) {
+        java.util.Set<String> out = new java.util.HashSet<>(x); out.addAll(y); return java.util.Set.copyOf(out);
+    }
     static final String ACCOUNT_ONBOARDING = "account-onboarding";
     static final int DEFAULT_MAX_AGE = 300, MIN_MAX_AGE = 30, MAX_MAX_AGE = 900;
     /** Tolerated clock skew for an auth_time in the future (seconds). */
@@ -71,7 +90,7 @@ final class AdminApiStepUp {
 
     /** The operations a client may write, or null when the attribute is malformed (fail closed). */
     static java.util.Set<String> operations(String attr) {
-        if (attr == null) return OPERATIONS;
+        if (attr == null) return LEGACY_OPERATIONS;
         java.util.Set<String> out = new java.util.HashSet<>();
         for (String x : attr.split(",", -1)) {
             String t = x.trim();
@@ -91,11 +110,27 @@ final class AdminApiStepUp {
         java.util.Set<String> ops = operations(opsAttr);
         if (max < 0 || ops == null || method == null || segs == null) return Verdict.REFUSE;
         String m = method.toUpperCase(java.util.Locale.ROOT);
-        if (m.equals("GET") || m.equals("HEAD")) return readAllowed(segs) ? Verdict.ALLOW : Verdict.REFUSE;
+        if (m.equals("GET") || m.equals("HEAD")) {
+            if (statusRead(segs)) return ops.contains("status") ? Verdict.ALLOW : Verdict.REFUSE;
+            return readAllowed(segs) ? Verdict.ALLOW : Verdict.REFUSE;
+        }
         String op = writeOperation(m, segs);
         if (op == null || !ops.contains(op)) return Verdict.REFUSE;
-        if (authTime == null || authTime <= 0 || authTime > now + SKEW || now - authTime > max) return Verdict.STEP_UP;
+        if (!fresh(authTime, max, now)) return Verdict.STEP_UP;
         return Verdict.ALLOW;
+    }
+
+    /** The authentication behind a token (its auth_time, seconds) is recent enough for a write: present, not in the
+     *  future beyond the clock skew, and at most `max` seconds old. */
+    static boolean fresh(Long authTime, int max, long now) {
+        return max >= 0 && authTime != null && authTime > 0 && authTime <= now + SKEW && now - authTime <= max;
+    }
+
+    /** GET stig-accounts/users/{id}/status or GET stig-accounts/users/status (the portal's read-only status). */
+    static boolean statusRead(List<String> s) {
+        int n = s.size();
+        if (n < 3 || !s.get(0).equals("stig-accounts") || !s.get(1).equals("users")) return false;
+        return (n == 3 && s.get(2).equals("status")) || (n == 4 && id(s.get(2)) && s.get(3).equals("status"));
     }
 
     static boolean readAllowed(List<String> s) {
@@ -124,6 +159,7 @@ final class AdminApiStepUp {
             if (n == 2) return "create";
             if (n == 4 && id(s.get(2)) && s.get(3).equals("setup-email")) return "setup-email";
             if (n == 4 && id(s.get(2)) && s.get(3).equals("disable")) return "disable";
+            if (n == 4 && id(s.get(2)) && PORTAL_WRITES.contains(s.get(3))) return s.get(3);
             return null;
         }
         if ((m.equals("PUT") || m.equals("DELETE")) && n == 4 && s.get(0).equals("users") && id(s.get(1))

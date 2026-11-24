@@ -163,7 +163,7 @@ accounts, without the application holding any credential that can do so. The per
 | Tokens | refresh tokens off, short access tokens (300 s), client session idle 10 minutes (V-222390 for an administrative page) |
 | `stig.admin-api.profile` | `account-onboarding` |
 | `stig.admin-api.max-auth-age` | seconds (30..900, default 300) |
-| `stig.admin-api.operations` | optional: the writes it may make, a comma list of `create`, `setup-email`, `disable`, `membership` (group PUT/DELETE). Unset: all four. Set but blank, or naming anything else: every request refused. Capability `admin-api-profile=2` |
+| `stig.admin-api.operations` | optional: the operations it may use, a comma list of `create`, `setup-email`, `disable`, `membership` (group PUT/DELETE) and the portal operations `reset-otp`, `reset-password`, `unlock`, `logout`, `link-cac`, `status`. Unset: the first four only (a portal operation is never allowed unless listed). Set but blank, or naming anything else: every request refused. Capability `admin-api-profile=2` (`=3` for a portal operation) |
 | Optional | `dpop.bound.access.tokens=true`: tokens bound to a key the page holds (RFC 9449). Keycloak's admin API then refuses the token without a proof from that key, so a token copied out of the page is useless elsewhere |
 
 **What `AdminApiGuardFilter` enforces for such a client** (every caller, administrators included):
@@ -171,7 +171,10 @@ accounts, without the application holding any credential that can do so. The per
 - Reads: `users` (search and count), `users/{id}`, `users/{id}/groups`, `groups`, `groups/{id}`, `groups/{id}/children`,
   `groups/{id}/members`, `group-by-path/...`.
 - Writes: `POST stig-accounts/users`, `POST stig-accounts/users/{id}/setup-email`, `POST stig-accounts/users/{id}/disable`,
-  `PUT` and `DELETE users/{id}/groups/{groupId}`.
+  `PUT` and `DELETE users/{id}/groups/{groupId}`; and, only when the operations list names them, the portal writes
+  `POST stig-accounts/users/{id}/reset-otp`, `.../reset-password`, `.../unlock`, `.../logout`, `.../link-cac`.
+- The portal read `status` (only when listed): `GET stig-accounts/users/{id}/status` and
+  `GET stig-accounts/users/status?id=...` (up to 50). Not stepped up, like the other reads.
 - **Anything else: 403**, logged `STIG-ADMIN-API-PROFILE-REFUSED`. Edits, credentials, resets, execute-actions mail,
   impersonation, role mappings, events and clients are therefore unreachable through the page, whoever is signed in.
 - **A write whose authentication is older than `stig.admin-api.max-auth-age`** (the token's `auth_time`; a token
@@ -192,8 +195,8 @@ accounts, without the application holding any credential that can do so. The per
 
 The filter states its capability as `admin-api-profile=<version>` in the allowlist gate's `operationalInfo` (server
 info, `providers.authenticator.providers.stig-admin-allowlist-gate`). The version is a number, compared numerically:
-**`>= 1` before creating a client with `stig.admin-api.profile`**, and **`>= 2` before setting
-`stig.admin-api.operations`**. An older extension ignores the attribute it does not know, which silently widens the
+**`>= 1` before creating a client with `stig.admin-api.profile`**, **`>= 2` before setting
+`stig.admin-api.operations`**, and **`>= 3` before listing a portal operation in it**. An older extension ignores the attribute it does not know, which silently widens the
 client: at version 1 an operations list is not enforced, so the client may make all four writes. An operations list
 on a client WITHOUT `stig.admin-api.profile` (version 2 and later) refuses every request from that client (403,
 `STIG-ADMIN-API-PROFILE-REFUSED`), rather than confining nothing. Its audit lines (`STIG-ADMIN-API-PROFILE-REFUSED`,
@@ -212,6 +215,29 @@ sends `Access-Control-Expose-Headers: WWW-Authenticate`, without which a browser
 is checked, and carries no `insufficient_user_authentication` challenge - get a new token silently and retry. Record the application origin
 as an admin-API client in your V-222574 (separate admin interface) assessment.
 
+
+**The portal operations** (`stig-accounts`, capability `admin-api-profile=3`) let such a page do what otherwise needs an
+operator: reset a person's authenticator or password, unlock, end sessions, request a card link, and show a read-only
+status. Each is its own entry in `stig.admin-api.operations` and is off unless listed. On top of the profile's own
+rules, `stig-accounts` itself refuses every portal operation (403) unless the token was issued to a client carrying
+the profile whose list names that operation - an admin-console token is refused whatever its holder's roles - and
+re-checks a write's authentication age (401 with the same challenge). The target must be an account the caller may
+manage (every one of its groups one whose membership the caller manages) that is **no IdP administrator**: no
+effective realm-management role, no group carrying one, and no group in the `/roles` tree at any depth (403, the
+same answer as for no such account).
+
+| Operation | Call | Effect | Answers |
+|---|---|---|---|
+| `reset-otp` | `POST stig-accounts/users/{id}/reset-otp` | removes the account's OTP credentials, adds `CONFIGURE_TOTP` | 200 `{"removed": n}`; 409 disabled, or no password (the account does not use OTP) |
+| `reset-password` | `POST .../reset-password[?lifespan=]` | e-mails the address on record a link to set a new password (`UPDATE_PASSWORD`). Nobody sets a password through the page | 200 `{"email": "sent"}`; 409 disabled, no address, no password (use `setup-email`); 429 within 15 min; 502 mail failed |
+| `unlock` | `POST .../unlock` | clears the brute-force lockout (login failures) | 200 `{"wasLocked": b}`; 409 disabled (an administrator's disable or a permanent lockout: re-enabling stays with realm administrators) |
+| `logout` | `POST .../logout` | not-before now, every session ended (back-channel) | 200 `{"sessionsEnded": n}` |
+| `link-cac` | `POST .../link-cac`, body `{}` or `{"edipi": "<10 digits>"}` | a link request (`stig_card_link`, `stig-present-card`), as `idp-admin.py link-cac` / `--edipi`: the holder presents the card at the next sign-in, under the present-card step's rules. Never a direct bind, never over an existing card | 200 `{"requested": true, "card": "any"\|"named", "days": 7}`; 409 disabled, has a card, an invitation's pending card, cannot sign in, card held elsewhere; 403 realm not set up for link requests |
+| `status` | `GET .../{id}/status`, `GET stig-accounts/users/status?id=..` | read only | `{id, username, enabled, locked, passwordSet, otpEnrolled, cardBound, cardPending, entraLinked, activeSessions}`; the list form `{"accounts": [...], "refused": [ids]}` |
+
+Every portal write: at most 20 per caller and operation in any 60 minutes (429), an optional `?reference=`, one admin
+event (`ACTION users/{id}/<op>`, representation `{"stig": "portal <op>", ...}`, a card masked to its last four digits)
+and a `STIG-ACCOUNTS <op>` audit line. No answer carries an identifier beyond the account's id and username.
 ## 10. First sign-in through an identity provider binds a pending invite (optional)
 
 Off by default. With it on, a delegated user manager invites a person who signs in through the realm's external

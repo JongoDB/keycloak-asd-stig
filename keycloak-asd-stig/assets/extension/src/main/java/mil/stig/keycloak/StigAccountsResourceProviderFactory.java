@@ -35,8 +35,11 @@ import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.KeycloakSessionFactory;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.models.credential.OTPCredentialModel;
+import org.keycloak.models.credential.PasswordCredentialModel;
 import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.services.managers.AuthenticationManager;
+import org.keycloak.services.managers.BruteForceProtector;
 import org.keycloak.services.resources.LoginActionsService;
 import org.keycloak.services.resources.admin.AdminEventBuilder;
 import org.keycloak.services.resources.admin.ext.AdminRealmResourceProvider;
@@ -63,6 +66,32 @@ import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
  *                                    password/OTP set-up, no mail; 409 when that card is bound to any account.
  *   An optional `reference` (body field of POST /users, or ?reference= on the others; 1-64 of [A-Za-z0-9._:-], e.g.
  *   the request the call fulfils) is recorded in the admin event and the audit log line. Invalid: 400.
+ *
+ * The PORTAL operations - for an application page's onboarding client only (a token of a client carrying the admin-API
+ * profile account-onboarding whose stig.admin-api.operations lists the operation; any other token: 403), each a write
+ * needing an authentication no older than the client's max-auth-age (else 401 + the RFC 9470 challenge), each limited
+ * to 20 per caller in any 60 minutes (429), each answered without any identifier beyond the account's id and username:
+ *   POST /users/{id}/reset-otp       remove the account's OTP authenticators, require CONFIGURE_TOTP at the next sign-in.
+ *                                    200 {"removed": n}. Only for an account that signs in with a password (409).
+ *   POST /users/{id}/reset-password  e-mail the account's address ON RECORD a link to set a new password (UPDATE_PASSWORD;
+ *                                    ?lifespan= as setup-email). Nobody sets a password here. Only for an account that has
+ *                                    one (409: setup-email is for accounts still being set up); once per 15 min (429).
+ *                                    200 {"email": "sent"}; 502 when the mail could not be sent.
+ *   POST /users/{id}/unlock          clear the account's brute-force lockout (its login failures). 200 {"wasLocked": b}.
+ *                                    A DISABLED account (an administrator's disable, or a permanent lockout): 409 -
+ *                                    re-enabling is for realm administrators only.
+ *   POST /users/{id}/logout          end every session of the account (back-channel). 200 {"sessionsEnded": n}
+ *   POST /users/{id}/link-cac        none, {} or {"edipi": "<10 digits>"}: a LINK REQUEST, as idp-admin.py link-cac's default
+ *                                    and --edipi modes: the holder presents a card at their next sign-in (the present-card
+ *                                    step's own rules: never a card bound to or reserved for another account, an any-card
+ *                                    request never satisfied by an SSO-reused sign-in); with edipi only that card binds.
+ *                                    Never a direct bind, never over a card the account holds (409; replacing a card stays
+ *                                    with the IdP's operators). 200 {"requested": true, "card": "any" | "named", "days": 7}
+ *   GET  /users/{id}/status          {id, username, enabled, locked, passwordSet, otpEnrolled, cardBound, cardPending,
+ *                                     entraLinked, activeSessions}: booleans and a count only (no step-up: a read)
+ *   GET  /users/status?id=..&id=..   up to 50 at once: {"accounts": [status...], "refused": [ids not in scope]}
+ *   Every portal write records one admin event (ACTION users/{id}/<op>, {"stig": "portal <op>", ...}; a card masked to
+ *   its last four digits) and a STIG-ACCOUNTS <op> audit line.
  *   anything else                    403
  *
  * Authorisation is Keycloak's own: the admin API's token checks (audience, admin scope) and the realm's fine-grained
@@ -146,17 +175,25 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
         }
 
         /** The existing target, when the caller may manage it: in at least one group, every one of them a group whose
-         *  membership the caller manages, none carrying administrator rights, and not an administrator itself. */
+         *  membership the caller manages, none carrying administrator rights nor in the /roles tree, and not an
+         *  administrator itself (any effective realm-management role). */
         private UserModel target(String id, String op) {
-            UserModel u = id == null ? null : session.users().getUserById(realm, id);
-            if (u == null || u.getServiceAccountClientLink() != null) { refused(op, "no such account " + id); return null; }
+            UserModel u = id == null || !AdminApiStepUp.id(id) ? null : session.users().getUserById(realm, id);
+            if (u == null || u.getServiceAccountClientLink() != null) { refused(op, "no such account " + AccountsPolicy.maskDigitRuns(String.valueOf(id))); return null; }
             List<GroupModel> gs = u.getGroupsStream().collect(Collectors.toList());
             if (gs.isEmpty() || StigAdministrators.isAdministrator(realm, u)
-                    || gs.stream().anyMatch(g -> StigAdministrators.groupCarriesAdmin(realm, g) || !auth.groups().canManageMembership(g))) {
+                    || gs.stream().anyMatch(g -> StigAdministrators.groupCarriesAdmin(realm, g) || inRolesTree(g) || !auth.groups().canManageMembership(g))) {
                 refused(op, "account " + u.getUsername() + " is an administrator or outside the caller's groups");
                 return null;
             }
             return u;
+        }
+
+        /** A group in the /roles tree (the IdP's own role groups), at any depth. */
+        private static boolean inRolesTree(GroupModel g) {
+            java.util.LinkedList<String> path = new java.util.LinkedList<>();
+            for (GroupModel x = g; x != null; x = x.getParent()) path.addFirst(x.getName());
+            return AccountsPolicy.inRolesTree(path);
         }
 
         private boolean profileNameValid(String value, String field) {
@@ -191,12 +228,14 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
 
         private static String refSuffix(String ref) { return ref == null ? "" : " reference=" + ref; }
 
-        private boolean sendSetup(UserModel u, int lifespan, String ref) {
+        /** E-mail the account's address on record a link that runs `actions` (Keycloak's execute-actions mail, the
+         *  token valid `lifespan` seconds, landing on the account console). No event: the caller records its own. */
+        private boolean sendActions(UserModel u, List<String> actions, int lifespan) {
             ClientModel console = realm.getClientByClientId(Constants.ACCOUNT_CONSOLE_CLIENT_ID);
             String redirect = UriBuilder.fromUri(session.getContext().getUri().getBaseUri()).path("realms").path(realm.getName())
                     .path("account").path("/").build().toString();
             int expiration = Time.currentTime() + lifespan;
-            ExecuteActionsActionToken token = new ExecuteActionsActionToken(u.getId(), u.getEmail(), expiration, SETUP_ACTIONS,
+            ExecuteActionsActionToken token = new ExecuteActionsActionToken(u.getId(), u.getEmail(), expiration, actions,
                     console == null ? null : redirect, console == null ? null : console.getClientId());
             UriBuilder b = LoginActionsService.actionTokenProcessor(session.getContext().getUri());
             b.queryParam("key", token.serialize(session, realm, session.getContext().getUri()));
@@ -205,16 +244,21 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                         .setAttribute(Constants.TEMPLATE_ATTR_REQUIRED_ACTIONS, token.getRequiredActions())
                         .setAttribute(Constants.IGNORE_ACCEPT_LANGUAGE_HEADER, true)
                         .setRealm(realm).setUser(u).sendExecuteActions(b.build(realm.getName()).toString(), TimeUnit.SECONDS.toMinutes(lifespan));
-                session.singleUseObjects().put("stig-accounts-setup:" + u.getId(), AccountsPolicy.RESEND_INTERVAL, Map.of("t", "1"));
-                adminEvent.operation(OperationType.ACTION).resource(ResourceType.USER)
-                        .resourcePath("users", u.getId(), "execute-actions-email");
-                if (ref != null) adminEvent.representation(Map.of("reference", ref));
-                adminEvent.success();
                 return true;
             } catch (EmailException e) {
-                LOG.warnf("STIG-ACCOUNTS set-up e-mail to %s failed: %s", u.getUsername(), e.getMessage());
+                LOG.warnf("STIG-ACCOUNTS e-mail (%s) to %s failed: %s", String.join(",", actions), u.getUsername(), e.getMessage());
                 return false;
             }
+        }
+
+        private boolean sendSetup(UserModel u, int lifespan, String ref) {
+            if (!sendActions(u, SETUP_ACTIONS, lifespan)) return false;
+            session.singleUseObjects().put("stig-accounts-setup:" + u.getId(), AccountsPolicy.RESEND_INTERVAL, Map.of("t", "1"));
+            adminEvent.operation(OperationType.ACTION).resource(ResourceType.USER)
+                    .resourcePath("users", u.getId(), "execute-actions-email");
+            if (ref != null) adminEvent.representation(Map.of("reference", ref));
+            adminEvent.success();
+            return true;
         }
 
         @POST @Path("users") @Consumes(MediaType.APPLICATION_JSON)
@@ -404,6 +448,272 @@ public class StigAccountsResourceProviderFactory implements AdminRealmResourcePr
                     .representation(drep).success();
             LOG.infof("STIG-ACCOUNTS disabled realm=%s caller=%s user=%s%s", realm.getName(), caller(), u.getUsername(), refSuffix(ref));
             return Response.noContent().build();
+        }
+
+        // ---------------------------------------------------------------- the portal operations (see the class doc)
+
+        /** A checked portal request: a refusal to answer with, or the target account and the caller's reference. */
+        private record Pre(Response refused, UserModel user, String ref) { }
+
+        private ClientModel client() { return auth.adminAuth().getClient(); }
+
+        /** The 401 a write with a stale authentication gets (the same challenge AdminApiGuardFilter sends). */
+        private Response stepUp() {
+            ClientModel c = client();
+            int max = Math.max(AdminApiStepUp.maxAge(c == null ? null : c.getAttribute(AdminApiStepUp.MAX_AGE_ATTR)), AdminApiStepUp.MIN_MAX_AGE);
+            return Response.status(Response.Status.UNAUTHORIZED).header("WWW-Authenticate", AdminApiStepUp.challenge(max))
+                    .header("Access-Control-Expose-Headers", AdminApiStepUp.EXPOSE_HEADERS)
+                    .entity(Map.of("error", "insufficient_user_authentication")).type(MediaType.APPLICATION_JSON).build();
+        }
+
+        /** Every portal operation starts here: the caller's client is an onboarding client listing `op` (else 403), a
+         *  write's authentication is recent enough (else 401 - checked here as well as in AdminApiGuardFilter, so a path
+         *  the filter classified differently still cannot skip it), the reference is valid (else 400), and the target is
+         *  an account the caller manages that is no administrator (else 403, the same answer as for no such account). */
+        private Pre pre(String op, String id, String refQ, boolean write) {
+            ClientModel c = client();
+            String why = AccountsPolicy.portalRefusal(c == null ? null : c.getAttribute(AdminApiStepUp.PROFILE_ATTR),
+                    c == null ? null : c.getAttribute(AdminApiStepUp.OPS_ATTR), op);
+            if (why != null) { refused(op, why); return new Pre(err(Response.Status.FORBIDDEN, "not allowed"), null, null); }
+            if (write) {
+                Long at = auth.adminAuth().getToken() == null ? null : auth.adminAuth().getToken().getAuth_time();
+                if (!AdminApiStepUp.fresh(at, AdminApiStepUp.maxAge(c.getAttribute(AdminApiStepUp.MAX_AGE_ATTR)), Time.currentTime())) {
+                    refused(op, "the authentication behind the token is older than the client's max-auth-age");
+                    return new Pre(stepUp(), null, null);
+                }
+            }
+            String ref = AccountsPolicy.reference(refQ);
+            if ("".equals(ref)) return new Pre(err(Response.Status.BAD_REQUEST, "reference must be 1-64 of A-Z a-z 0-9 . _ : -"), null, null);
+            UserModel u = target(id, op);
+            if (u == null) return new Pre(err(Response.Status.FORBIDDEN, "not allowed"), null, null);
+            return new Pre(null, u, ref);
+        }
+
+        /** One portal write's rate slot (20 per caller and operation in any 60 minutes); false: refused (logged). */
+        private boolean portalRate(String op) {
+            if (underRate("portal-" + op, AccountsPolicy.PORTAL_OPS_PER_HOUR)) return true;
+            refused(op, "more than " + AccountsPolicy.PORTAL_OPS_PER_HOUR + " in an hour");
+            return false;
+        }
+
+        /** The admin event (ACTION users/{id}/<op>) and the audit line of a portal write; `details` never holds an
+         *  unmasked card number. */
+        private void audited(String op, UserModel u, Map<String, Object> details, String ref) {
+            Map<String, Object> rep = new LinkedHashMap<>();
+            rep.put("stig", "portal " + op);
+            rep.putAll(details);
+            if (ref != null) rep.put("reference", ref);
+            adminEvent.operation(OperationType.ACTION).resource(ResourceType.USER).resourcePath("users", u.getId(), op)
+                    .representation(rep).success();
+            StringBuilder d = new StringBuilder();
+            details.forEach((k, v) -> d.append(' ').append(k).append('=').append(v));
+            LOG.infof("STIG-ACCOUNTS %s realm=%s caller=%s user=%s%s%s", op, realm.getName(), caller(), u.getUsername(), d, refSuffix(ref));
+        }
+
+        private static Response ok(Map<String, Object> body) {
+            return Response.ok(body).type(MediaType.APPLICATION_JSON).build();
+        }
+
+        private static boolean hasCredential(UserModel u, String type) {
+            return u.credentialManager().getStoredCredentialsByTypeStream(type).findAny().isPresent();
+        }
+
+        @POST @Path("users/{id}/reset-otp")
+        public Response resetOtp(@PathParam("id") String id, @QueryParam("reference") String refQ) {
+            Pre p = pre("reset-otp", id, refQ, true);
+            if (p.refused() != null) return p.refused();
+            UserModel u = p.user();
+            if (!u.isEnabled()) return err(Response.Status.CONFLICT, "the account is disabled");
+            if (!hasCredential(u, PasswordCredentialModel.TYPE)) {
+                refused("reset-otp", "account " + u.getUsername() + " does not sign in with a password and an authenticator");
+                return err(Response.Status.CONFLICT, "the account does not sign in with a password and an authenticator");
+            }
+            if (!portalRate("reset-otp")) return err(Response.Status.TOO_MANY_REQUESTS, "too many authenticator resets this hour");
+            List<String> ids = u.credentialManager().getStoredCredentialsByTypeStream(OTPCredentialModel.TYPE)
+                    .map(org.keycloak.credential.CredentialModel::getId).collect(Collectors.toList());
+            ids.forEach(u.credentialManager()::removeStoredCredentialById);
+            u.addRequiredAction(UserModel.RequiredAction.CONFIGURE_TOTP);
+            audited("reset-otp", u, new LinkedHashMap<>(Map.of("removed", ids.size(), "requiredAction", "CONFIGURE_TOTP")), p.ref());
+            return ok(Map.of("removed", ids.size()));
+        }
+
+        @POST @Path("users/{id}/reset-password")
+        public Response resetPassword(@PathParam("id") String id, @QueryParam("lifespan") Integer lifespanQ,
+                                      @QueryParam("reference") String refQ) {
+            Pre p = pre("reset-password", id, refQ, true);
+            if (p.refused() != null) return p.refused();
+            UserModel u = p.user();
+            int lifespan = AccountsPolicy.lifespan(lifespanQ);
+            if (lifespan < 0) return err(Response.Status.BAD_REQUEST, "lifespan must be 300..86400 seconds");
+            if (!u.isEnabled()) return err(Response.Status.CONFLICT, "the account is disabled");
+            if (u.getEmail() == null || u.getEmail().isBlank()) return err(Response.Status.CONFLICT, "the account has no e-mail address");
+            if (!hasCredential(u, PasswordCredentialModel.TYPE)) {
+                refused("reset-password", "account " + u.getUsername() + " has no password");
+                return err(Response.Status.CONFLICT, "the account has no password (an account still being set up: setup-email)");
+            }
+            String once = "stig-accounts-reset-password:" + u.getId();
+            if (session.singleUseObjects().contains(once)) {
+                return err(Response.Status.TOO_MANY_REQUESTS, "a password reset e-mail went to this account less than 15 minutes ago");
+            }
+            if (!portalRate("reset-password")) return err(Response.Status.TOO_MANY_REQUESTS, "too many password resets this hour");
+            if (!sendActions(u, List.of(UserModel.RequiredAction.UPDATE_PASSWORD.name()), lifespan)) {
+                return err(Response.Status.BAD_GATEWAY, "the e-mail could not be sent");
+            }
+            session.singleUseObjects().put(once, AccountsPolicy.RESEND_INTERVAL, Map.of("t", "1"));
+            audited("reset-password", u, new LinkedHashMap<>(Map.of("actions", List.of("UPDATE_PASSWORD"), "email", "sent")), p.ref());
+            return ok(Map.of("email", "sent"));
+        }
+
+        @POST @Path("users/{id}/unlock")
+        public Response unlock(@PathParam("id") String id, @QueryParam("reference") String refQ) {
+            Pre p = pre("unlock", id, refQ, true);
+            if (p.refused() != null) return p.refused();
+            UserModel u = p.user();
+            if (!u.isEnabled()) {
+                refused("unlock", "account " + u.getUsername() + " is disabled");
+                return err(Response.Status.CONFLICT, "the account is disabled (by an administrator, or a permanent lockout): re-enabling is for IdP administrators");
+            }
+            if (!portalRate("unlock")) return err(Response.Status.TOO_MANY_REQUESTS, "too many unlocks this hour");
+            BruteForceProtector bp = session.getProvider(BruteForceProtector.class);
+            boolean locked = bp != null && bp.isTemporarilyDisabled(session, realm, u);
+            if (session.loginFailures().getUserLoginFailure(realm, u.getId()) != null) {
+                session.loginFailures().removeUserLoginFailure(realm, u.getId());
+            }
+            audited("unlock", u, new LinkedHashMap<>(Map.of("wasLocked", locked)), p.ref());
+            return ok(Map.of("wasLocked", locked));
+        }
+
+        @POST @Path("users/{id}/logout")
+        public Response logout(@PathParam("id") String id, @QueryParam("reference") String refQ) {
+            Pre p = pre("logout", id, refQ, true);
+            if (p.refused() != null) return p.refused();
+            UserModel u = p.user();
+            if (!portalRate("logout")) return err(Response.Status.TOO_MANY_REQUESTS, "too many sign-outs this hour");
+            // as Keycloak's own POST users/{id}/logout: tokens issued before now are refused, and every session ends
+            session.users().setNotBeforeForUser(realm, u, Time.currentTime());
+            List<org.keycloak.models.UserSessionModel> ss = session.sessions().getUserSessionsStream(realm, u).collect(Collectors.toList());
+            ss.forEach(s -> AuthenticationManager.backchannelLogout(session, realm, s, session.getContext().getUri(),
+                    session.getContext().getConnection(), session.getContext().getRequestHeaders(), true));
+            audited("logout", u, new LinkedHashMap<>(Map.of("sessionsEnded", ss.size())), p.ref());
+            return ok(Map.of("sessionsEnded", ss.size()));
+        }
+
+        /** The attribute the realm's X.509 step maps cards by (what the present-card step binds), or null. */
+        private String x509CardAttribute() {
+            org.keycloak.models.AuthenticatorConfigModel cfg = PresentCardRequiredAction.x509Config(realm);
+            return cfg == null || cfg.getConfig() == null ? null
+                    : AccountsPolicy.cardAttribute(cfg.getConfig().get(PresentCardRequiredAction.USER_ATTR_KEY));
+        }
+
+        /** A link-cac body: none or blank (= {}), else a JSON object; null when it is anything else. */
+        @SuppressWarnings("unchecked")
+        static Map<String, Object> linkBody(String raw) {
+            if (raw == null || raw.isBlank()) return Map.of();
+            try {
+                Object o = org.keycloak.util.JsonSerialization.readValue(raw, Object.class);
+                return o instanceof Map ? (Map<String, Object>) o : null;
+            } catch (java.io.IOException | RuntimeException e) {
+                return null;
+            }
+        }
+
+        @POST @Path("users/{id}/link-cac") @Consumes(MediaType.WILDCARD)
+        public Response linkCac(@PathParam("id") String id, @QueryParam("reference") String refQ, String rawBody) {
+            Pre p = pre("link-cac", id, refQ, true);
+            if (p.refused() != null) return p.refused();
+            UserModel u = p.user();
+            Map<String, Object> body = linkBody(rawBody);
+            if (body == null) return err(Response.Status.BAD_REQUEST, "the body is {} or {\"edipi\": \"<10 digits>\"}");
+            if (body != null && !java.util.Set.of("edipi").containsAll(body.keySet())) {
+                return err(Response.Status.BAD_REQUEST, "the only field is edipi");
+            }
+            Object eb = body == null ? null : body.get("edipi");
+            if (eb != null && !(eb instanceof String)) return err(Response.Status.BAD_REQUEST, "edipi must be exactly 10 digits");
+            String edipi = eb == null ? null : ((String) eb).trim();
+            if (edipi != null && !AccountsPolicy.validEdipi(edipi)) return err(Response.Status.BAD_REQUEST, "edipi must be exactly 10 digits");
+            String ca = x509CardAttribute();
+            org.keycloak.models.RequiredActionProviderModel ra = realm.getRequiredActionProviderByAlias(PresentCardRequiredAction.ID);
+            if (ca == null || !PresentCardRequiredAction.linkGuarded(session) || ra == null || !ra.isEnabled()) {
+                refused("link-cac", "the realm is not set up for link requests (X.509 step's card attribute "
+                        + ca + ", link attribute guarded " + PresentCardRequiredAction.linkGuarded(session) + ", present-card step "
+                        + (ra == null ? "absent" : ra.isEnabled() ? "enabled" : "disabled") + ")");
+                return err(Response.Status.FORBIDDEN, "this realm does not take card link requests");
+            }
+            String pendingAttr = ca + AccountsPolicy.PENDING_SUFFIX;
+            String link = u.getFirstAttribute(AccountsPolicy.LINK_ATTRIBUTE);
+            boolean canSignIn = hasCredential(u, PasswordCredentialModel.TYPE) || u.getFirstAttribute(StigBindingsResourceProviderFactory.ENTRA) != null
+                    || session.users().getFederatedIdentitiesStream(realm, u).findAny().isPresent();
+            String why = AccountsPolicy.portalLinkRefusal(u.isEnabled(), u.getFirstAttribute(ca), u.getFirstAttribute(pendingAttr),
+                    link != null && !link.isBlank(), canSignIn);
+            if (why != null) {
+                refused("link-cac", "account " + u.getUsername() + ": " + why);
+                return err(Response.Status.CONFLICT, why);
+            }
+            if (!portalRate("link-cac")) return err(Response.Status.TOO_MANY_REQUESTS, "too many card link requests this hour");
+            if (edipi != null) {
+                // the same claim stig-accounts' card creates, stig-bindings and the present-card step take: one card, one account
+                String key = "stig-accounts-card:" + realm.getId() + ":" + edipi;
+                if (!session.singleUseObjects().putIfAbsent(key, 60)) {
+                    refused("link-cac", "card " + AccountsPolicy.maskEdipi(edipi) + " is being bound elsewhere right now: " + u.getUsername());
+                    return err(Response.Status.CONFLICT, "that card is already bound to or reserved for another account");
+                }
+                AccountsPolicy.releaseAfterCompletion(session, key);
+                for (String a : List.of(ca, pendingAttr)) {
+                    if (session.users().searchForUserByUserAttributeStream(realm, a, edipi).anyMatch(x -> !x.getId().equals(u.getId()))) {
+                        refused("link-cac", "card " + AccountsPolicy.maskEdipi(edipi) + " is bound to or reserved for another account: " + u.getUsername());
+                        return err(Response.Status.CONFLICT, "that card is already bound to or reserved for another account");
+                    }
+                }
+            }
+            // a link request as the operator's tool writes it ("<epoch-ms>"; the account is never an administrator here,
+            // so never "<epoch-ms> admin"), replacing an earlier request of the account; the present-card step does the rest
+            u.setSingleAttribute(AccountsPolicy.LINK_ATTRIBUTE, String.valueOf(Time.currentTimeMillis()));
+            if (edipi != null) u.setSingleAttribute(pendingAttr, edipi); else u.removeAttribute(pendingAttr);
+            u.addRequiredAction(PresentCardRequiredAction.ID);
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("card", edipi == null ? "any" : AccountsPolicy.maskEdipi(edipi));
+            d.put("replacesRequest", link != null && !link.isBlank());
+            audited("link-cac", u, d, p.ref());
+            return ok(Map.of("requested", true, "card", edipi == null ? "any" : "named", "days", AccountsPolicy.LINK_DAYS));
+        }
+
+        /** One account's status (AccountsPolicy.statusView): booleans and a count, nothing else. */
+        private Map<String, Object> status(UserModel u) {
+            BruteForceProtector bp = session.getProvider(BruteForceProtector.class);
+            boolean locked = bp != null && (bp.isTemporarilyDisabled(session, realm, u) || bp.isPermanentlyLockedOut(session, realm, u));
+            String ca = x509CardAttribute();
+            if (ca == null) ca = AccountsPolicy.cardAttribute(realm.getAttribute(AccountsPolicy.CARD_ATTRIBUTE));
+            String card = ca == null ? null : u.getFirstAttribute(ca);
+            return AccountsPolicy.statusView(u.getId(), u.getUsername(), u.isEnabled(), locked,
+                    hasCredential(u, PasswordCredentialModel.TYPE), hasCredential(u, OTPCredentialModel.TYPE),
+                    card != null && !card.isBlank(), PresentCardRequiredAction.request(session, realm, u, Time.currentTimeMillis()) != null,
+                    session.users().getFederatedIdentitiesStream(realm, u).findAny().isPresent(),
+                    session.sessions().getUserSessionsStream(realm, u).count());
+        }
+
+        @GET @Path("users/{id}/status")
+        public Response statusOne(@PathParam("id") String id) {
+            Pre p = pre("status", id, null, false);
+            if (p.refused() != null) return p.refused();
+            LOG.infof("STIG-ACCOUNTS status realm=%s caller=%s user=%s", realm.getName(), caller(), p.user().getUsername());
+            return ok(status(p.user()));
+        }
+
+        @GET @Path("users/status")
+        public Response statusMany(@QueryParam("id") List<String> ids) {
+            ClientModel c = client();
+            String why = AccountsPolicy.portalRefusal(c == null ? null : c.getAttribute(AdminApiStepUp.PROFILE_ATTR),
+                    c == null ? null : c.getAttribute(AdminApiStepUp.OPS_ATTR), "status");
+            if (why != null) { refused("status", why); return err(Response.Status.FORBIDDEN, "not allowed"); }
+            List<String> want = AccountsPolicy.statusIds(ids);
+            if (want == null) return err(Response.Status.BAD_REQUEST, "id: 1.." + AccountsPolicy.STATUS_MAX + " account ids");
+            List<Map<String, Object>> out = new ArrayList<>(); List<String> no = new ArrayList<>();
+            for (String i : want) {
+                UserModel u = target(i, "status");
+                if (u == null) no.add(i); else out.add(status(u));
+            }
+            LOG.infof("STIG-ACCOUNTS status realm=%s caller=%s accounts=%d refused=%d", realm.getName(), caller(), out.size(), no.size());
+            return ok(Map.of("accounts", out, "refused", no));
         }
 
         // Nothing else: every other method or path is refused, not merely absent.

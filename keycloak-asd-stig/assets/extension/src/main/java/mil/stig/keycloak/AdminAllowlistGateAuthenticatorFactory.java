@@ -37,10 +37,11 @@ public class AdminAllowlistGateAuthenticatorFactory implements Authenticator, Au
 
     /** Capability marker for the admin-API client profile (AdminApiStepUp, enforced by AdminApiGuardFilter): 1 = a
      *  client with stig.admin-api.profile=account-onboarding reaches only that profile's calls, and its writes need an
-     *  authentication no older than stig.admin-api.max-auth-age; 2 = also stig.admin-api.operations. Tooling that creates such a client reads it first:
-     *  on an older extension the attribute would be ignored. */
+     *  authentication no older than stig.admin-api.max-auth-age; 2 = also stig.admin-api.operations; 3 = also the portal
+     *  operations (stig-accounts reset-otp, reset-password, unlock, logout, link-cac, status: off unless listed). Tooling
+     *  that creates such a client reads it first: on an older extension the attribute would be ignored. */
     public static final String ADMIN_API_PROFILE_KEY = "admin-api-profile";
-    public static final String ADMIN_API_PROFILE_VERSION = "2";      // 2: stig.admin-api.operations is enforced too
+    public static final String ADMIN_API_PROFILE_VERSION = "3";      // 3: the portal operations, each allow-listed
 
     /** Runtime state of the sanitised Referer audit (V-222447, StigRefererAuditFilter): "sanitised" or "off". The
      *  operator's verify and guard read it - a deployment variable can switch the audit off, so config alone is not proof. */

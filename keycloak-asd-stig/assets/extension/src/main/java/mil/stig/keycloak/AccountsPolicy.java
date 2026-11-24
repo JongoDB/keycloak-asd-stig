@@ -149,6 +149,64 @@ final class AccountsPolicy {
     static final int RATE_WINDOW = 3600;
     /** At most this many accounts disabled per caller in any 60 minutes (a stolen session cannot empty a tree at once). */
     static final int DISABLE_PER_HOUR = 20;
+    /** At most this many of EACH portal write (reset-otp, reset-password, unlock, logout, link-cac) per caller in any
+     *  60 minutes: a stolen page session cannot sweep a tree at once. */
+    static final int PORTAL_OPS_PER_HOUR = 20;
+    /** At most this many accounts in one status request (GET stig-accounts/users/status?id=...). */
+    static final int STATUS_MAX = 50;
+    /** The top-level group whose tree holds the IdP's own role groups (/roles/idp-admin, /roles/<app>-user-manager, ...):
+     *  an account in it, or anywhere beneath it, is an IdP administrator for the portal operations. */
+    static final String ROLES_TREE = "roles";
+    /** The names of a group's path from the top (["roles", "idp-admin"]) lies in the /roles tree. */
+    static boolean inRolesTree(java.util.List<String> pathFromTop) {
+        return pathFromTop != null && !pathFromTop.isEmpty() && ROLES_TREE.equals(pathFromTop.get(0));
+    }
+    /** The ids of a status request: 1..STATUS_MAX ids, each an id segment, duplicates dropped (order kept); null when
+     *  there are none, too many, or any is malformed. */
+    static java.util.List<String> statusIds(java.util.List<String> ids) {
+        if (ids == null || ids.isEmpty()) return null;
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        for (String i : ids) {
+            String x = i == null ? "" : i.trim();
+            if (!AdminApiStepUp.id(x)) return null;
+            out.add(x);
+        }
+        return out.size() <= STATUS_MAX ? new java.util.ArrayList<>(out) : null;
+    }
+    /** One account's status as the portal sees it: the id and username it already shows, booleans, and a session
+     *  count - never an identifier (no card number, no e-mail address, no provider id), never a secret. */
+    static java.util.Map<String, Object> statusView(String id, String username, boolean enabled, boolean locked, boolean passwordSet,
+                                                    boolean otpEnrolled, boolean cardBound, boolean cardPending,
+                                                    boolean entraLinked, long activeSessions) {
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("id", id); m.put("username", username);
+        m.put("enabled", enabled); m.put("locked", locked); m.put("passwordSet", passwordSet); m.put("otpEnrolled", otpEnrolled);
+        m.put("cardBound", cardBound); m.put("cardPending", cardPending); m.put("entraLinked", entraLinked);
+        m.put("activeSessions", activeSessions);
+        return m;
+    }
+    /** Why a portal operation must not run for this caller's client (null: it may). The portal operations are for an
+     *  application page's onboarding client only (the admin-API profile, its operations list naming `op`): never a
+     *  token of the admin console or of any other client, whatever its holder's roles. */
+    static String portalRefusal(String profile, String opsAttr, String op) {
+        if (profile == null || !AdminApiStepUp.ACCOUNT_ONBOARDING.equals(profile.trim()))
+            return "not a token of an onboarding client (" + AdminApiStepUp.PROFILE_ATTR + "=" + AdminApiStepUp.ACCOUNT_ONBOARDING + ")";
+        java.util.Set<String> ops = AdminApiStepUp.operations(opsAttr);
+        if (ops == null) return "the client's " + AdminApiStepUp.OPS_ATTR + " is malformed";
+        if (!ops.contains(op)) return "the client's " + AdminApiStepUp.OPS_ATTR + " does not list " + op;
+        return null;
+    }
+    /** Why a link request from the portal must not be written (null: it may). The portal never binds a card directly
+     *  and never replaces one: those stay with the IdP's operators (idp-admin.py link-cac --replace / --bind-edipi). */
+    static String portalLinkRefusal(boolean enabled, String currentCard, String pendingCard, boolean hasLinkRequest,
+                                    boolean canSignIn) {
+        if (!enabled) return "the account is disabled";
+        if (currentCard != null && !currentCard.isBlank()) return "the account already has a card: replacing one is for the IdP's operators";
+        if (pendingCard != null && !pendingCard.isBlank() && !hasLinkRequest)
+            return "the account's invitation names a card not presented yet";
+        if (!canSignIn) return "the account has no password and no identity-provider link, so it cannot sign in to present a card";
+        return null;
+    }
     /** An optional caller reference (e.g. the request it fulfils), recorded in the admin event and the audit log. */
     static final Pattern REFERENCE = Pattern.compile("^[A-Za-z0-9._:-]{1,64}$");
     /** null when absent; "" when present but invalid; else the reference. */

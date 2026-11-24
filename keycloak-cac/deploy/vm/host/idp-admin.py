@@ -48,6 +48,8 @@ idp-admin.example.json beside this script for every key). Commands that talk to 
         only, stig-extensions admin-API profile `account-onboarding` (only those calls; writes need a fresh sign-in).
         Its shape is recorded and guarded (drift -> disabled). Refused unless the deployed extension enforces the profile.
         One client per page: idp-onboarding, or C from the config's onboarding.clientIds for another application's page.
+        [--operations L]: what it may use (default: the config's onboarding.operations for C, else create,setup-email,
+        membership); the portal operations reset-otp, reset-password, unlock, logout, link-cac, status are off unless listed.
   idp-admin.py delegate-client-setup <delegate> --jwks-url U [--alg ES256|RS256] | --client-secret
         a delegate (any configured delegation) to client-jwt with the app's JWKS (https, public
         name, resolved now), or back. Records it (guard / check-clients report a difference), regenerates the client
@@ -111,10 +113,18 @@ ADMIN_CONFIG_FILE = os.environ.get("IDP_ADMIN_CONFIG") or "/srv/idp/config/idp-a
 CONFIG_KEYS = {"applications", "entra", "smtp", "operatorSshHost", "repoClientsDir", "onboarding", "handoffIntake"}
 APP_KEYS = {"userManagerRole", "adoptable", "delegations", "preSplitDelegates"}
 DELEGATION_KEYS = {"groups", "name", "membershipOnly"}
-ENTRA_KEYS, SMTP_KEYS, ONBOARDING_KEYS = {"memberDomain", "displayName"}, {"host", "port", "from", "displayName"}, {"defaultApps", "clientIds"}
+ENTRA_KEYS, SMTP_KEYS = {"memberDomain", "displayName"}, {"host", "port", "from", "displayName"}
+ONBOARDING_KEYS = {"defaultApps", "clientIds", "operations"}
 # The onboarding client every deployment has; onboarding.clientIds names more, one per application page (each its own
 # redirect and origin - a client has exactly one), all built, recorded and guarded the same way.
 DEFAULT_ONBOARDING_CLIENT = "idp-onboarding"
+# What an onboarding client may do (stig-extensions' admin-API profile, stig.admin-api.operations): the four the profile
+# always knew, and the portal operations (stig-extensions capability admin-api-profile=3), each off unless listed.
+ONBOARDING_LEGACY_OPS = ("create", "setup-email", "disable", "membership")
+ONBOARDING_PORTAL_OPS = ("reset-otp", "reset-password", "unlock", "logout", "link-cac", "status")
+ONBOARDING_OPERATIONS = ONBOARDING_LEGACY_OPS + ONBOARDING_PORTAL_OPS
+# by default the portal never disables (offboarding = removing the app's roles); a whole-account disable is a hand-off
+ONBOARDING_DEFAULT_OPS = ("create", "setup-email", "membership")
 HANDOFF_KEYS = {"url", "clientId", "audience", "scope", "app", "name"}
 # client scopes Keycloak ships (or this tooling relies on): never the name of the hand-off scope
 BUILTIN_SCOPES = {"openid", "profile", "email", "address", "phone", "offline_access", "roles", "web-origins", "acr",
@@ -211,6 +221,18 @@ def load_admin_config(path):
             # nor a role group's name (RESERVED_CLIENTS holds them: /roles/<app>-user-manager for every application)
             if x in {"%s-user-manager" % app for app in apps}:
                 no("onboarding.clientIds %r is reserved (the name of an application's user-manager role group)" % x)
+        # operations: {client id: [operation, ...]} - the reviewed allow-list onboarding-client-setup applies by default
+        # (an operation not listed stays off: the client's stig.admin-api.operations names exactly these)
+        ops_cfg = obj("onboarding.operations", o["operations"], {DEFAULT_ONBOARDING_CLIENT} | set(extra)) if "operations" in o else {}
+        for cid_, ops_ in ops_cfg.items():
+            if cid_ == "$comment":
+                continue
+            strs("onboarding.operations.%s" % cid_, ops_)
+            bad_ = sorted(set(ops_) - set(ONBOARDING_OPERATIONS))
+            if bad_:
+                no("onboarding.operations.%s names %s: the operations are %s" % (cid_, ", ".join(bad_), ", ".join(ONBOARDING_OPERATIONS)))
+            if len(set(ops_)) != len(ops_):
+                no("onboarding.operations.%s names an operation twice" % cid_)
     if "handoffIntake" in c:
         h = obj("handoffIntake", c["handoffIntake"], HANDOFF_KEYS)
         for k in sorted(HANDOFF_KEYS - {"name"}):
@@ -1588,14 +1610,38 @@ ONBOARDING_SCOPE_ROLES = ("query-groups", "query-users")
 # which is what makes the admin API answer CORS for this one origin; basic: auth_time, which the step-up reads)
 ONBOARDING_DEFAULT_SCOPES = ("acr", "basic", "email", "kc-admin-api", "profile", "roles", "web-origins")
 
-ONBOARDING_OPS_ATTR = "stig.admin-api.operations"          # capability 2: the writes the client may make
-ONBOARDING_OPERATIONS = ("create", "setup-email", "disable", "membership")
-# by default the portal never disables (offboarding = removing the app's roles); a whole-account disable is a hand-off
-ONBOARDING_DEFAULT_OPS = ("create", "setup-email", "membership")
+ONBOARDING_OPS_ATTR = "stig.admin-api.operations"          # capability 2: the operations the client may use (3: portal ones)
 
 def onboarding_needed_cap(want):
-    """The capability marker a recorded client needs: 2 when it records an operations list, else 1."""
-    return 2 if want and want.get("operations") else 1
+    """The capability marker a recorded client needs: 3 when its operations list names a portal operation (reset-otp,
+    ..., status: an older extension would ignore them - refusing them, but also not knowing them), 2 when it records an
+    operations list, else 1."""
+    ops = (want or {}).get("operations")
+    if ops and any(o in ONBOARDING_PORTAL_OPS for o in ops):
+        return 3
+    return 2 if ops else 1
+
+def configured_operations(cid):
+    """The operations the config's onboarding.operations lists for this client (canonical order), or None."""
+    v = ((_AC.get("onboarding") or {}).get("operations") or {}).get(cid)
+    return [x for x in ONBOARDING_OPERATIONS if x in v] if v else None
+
+def canonical_operations(ops):
+    """(ops in canonical order, the list to RECORD - None when it is exactly the four an unset attribute means)."""
+    ops = [x for x in ONBOARDING_OPERATIONS if x in ops]
+    return ops, (None if set(ops) == set(ONBOARDING_LEGACY_OPS) else ops)
+
+def recorded_operations(want):
+    """The operations an onboarding record grants (an unset list: the four legacy ones)."""
+    return list((want or {}).get("operations") or ONBOARDING_LEGACY_OPS)
+
+def operations_config_note(cid, want):
+    """An info line when a recorded client's operations differ from the config's reviewed list for it, else None."""
+    conf = configured_operations(cid)
+    if conf is None or set(conf) == set(recorded_operations(want)):
+        return None
+    return ("info  %s: records operations %s, the config's onboarding.operations lists %s: re-run onboarding-client-setup "
+            "--client-id %s (without --operations) to apply the config" % (cid, ",".join(recorded_operations(want)), ",".join(conf), cid))
 
 def onboarding_attrs(max_age, dpop=False, ops=None):
     """dpop: access tokens bound to a key the page holds (DPoP, RFC 9449): the admin API then refuses the token without a
@@ -1766,6 +1812,9 @@ def onboarding_guard(kc, fix, marker):
         if c.get("enabled") and profile_cap is not None and profile_cap < need:
             why.append("the deployed stig-extensions does not enforce what this client relies on (capability %s=%s, needs %d)"
                        % (GATE_ADMIN_API_PROFILE_KEY, profile_cap, need))
+        note = operations_config_note(cid, recorded[cid]) if cid in recorded else None
+        if note:
+            print(note)
         if not why:
             if not c.get("enabled"):
                 print("info  onboarding client %s matches its record and is DISABLED (re-enable with onboarding-client-setup)" % cid)
@@ -1819,17 +1868,26 @@ def cmd_onboarding_client_setup(a):
         sys.exit("REFUSED: --origin %s is not the redirect URI's origin %s" % (a.origin, origin))
     if not 30 <= a.max_auth_age <= 900:
         sys.exit("REFUSED: --max-auth-age must be 30..900 seconds")
-    ops = [x.strip() for x in a.operations.split(",") if x.strip()] if a.operations else []
+    conf = configured_operations(a.client_id)
+    given = getattr(a, "operations", None)
+    if given is None:              # the reviewed allow-list (config onboarding.operations), else the default
+        ops = list(conf or ONBOARDING_DEFAULT_OPS)
+    else:
+        ops = [x.strip() for x in given.split(",") if x.strip()]
     if not ops or any(x not in ONBOARDING_OPERATIONS for x in ops):
         sys.exit("REFUSED: --operations is a comma list of %s" % ", ".join(ONBOARDING_OPERATIONS))
-    ops = [x for x in ONBOARDING_OPERATIONS if x in ops]          # canonical order, no duplicates
-    need = 2 if ops != list(ONBOARDING_OPERATIONS) else 1
+    ops, rec_ops = canonical_operations(ops)                      # canonical order, no duplicates
+    if given is not None and conf is not None and set(ops) != set(conf):
+        print("NOTE: --operations %s differs from the config's onboarding.operations.%s (%s); guard and check-clients will "
+              "say so until the two agree" % (",".join(ops), a.client_id, ",".join(conf)))
+    need = onboarding_needed_cap({"operations": rec_ops})
     kc = KC()
     cap = gate_capability(kc, GATE_ADMIN_API_PROFILE_KEY)
     if not cap or cap < need:
         sys.exit("REFUSED: the deployed stig-extensions does not enforce %s (capability %s=%s, needs %d): upgrade the image "
                  "first; the client would otherwise reach more than it should" % (
-                     "the admin-API profile" if need == 1 else "an operations list", GATE_ADMIN_API_PROFILE_KEY, cap, need))
+                     {1: "the admin-API profile", 2: "an operations list"}.get(need, "the portal operations (%s)" % ", ".join(
+                         x for x in ops if x in ONBOARDING_PORTAL_OPS)), GATE_ADMIN_API_PROFILE_KEY, cap, need))
     rm = find_client(kc, "realm-management") or sys.exit("no realm-management client")
     # the application trees the page serves (recorded; reach itself is per person: each caller writes only the trees
     # their own manager roles cover - FGAP, sync_delegations - so listing a tree here grants nobody anything)
@@ -1844,7 +1902,7 @@ def cmd_onboarding_client_setup(a):
         sys.exit("REFUSED: %s %s: onboarding-client-setup never reshapes a client something else manages (nothing "
                  "recorded or changed)" % (a.client_id, why))
     want = {"redirect": redirect, "origin": origin, "max_age": a.max_auth_age, "dpop": bool(a.require_dpop), "apps": apps,
-            **({"operations": ops} if need == 2 else {}),
+            **({"operations": rec_ops} if rec_ops else {}),
             "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "operator": operator()}
     rec = load_onboarding(); rec[a.client_id] = want; _write_json(ONBOARDING_STATE, rec)
     rep = onboarding_rep(a.client_id, redirect, origin, a.max_auth_age, bool(a.require_dpop), want.get("operations"))
@@ -5295,7 +5353,11 @@ def check_clients(kc, repo_dir=None, out=None, resolved=None):
         for pr_ in probs:
             bad("%s: %s" % (cid, pr_))
         if not probs:
-            print("ok    %s: onboarding client matches its record (%s)" % (cid, want.get("redirect")), file=out)
+            print("ok    %s: onboarding client matches its record (%s; operations %s)" % (cid, want.get("redirect"),
+                                                                                       ",".join(recorded_operations(want))), file=out)
+        note = operations_config_note(cid, want)
+        if note:
+            print(note, file=out)
         for x in onboarding_apps(want):
             if x in APP_USER_MANAGERS:
                 print("ok    %s: serves /%s (writers: /roles/idp-user-manager, /roles/%s)" % (cid, x, app_manager_role(x)), file=out)
@@ -5411,9 +5473,11 @@ def build_parser():
                     help="an application tree the page serves (repeat for several; default the config's onboarding.defaultApps). Recorded; "
                          "each caller still reaches only the trees their own manager roles cover")
     ob.add_argument("--max-auth-age", type=int, default=300, help="seconds since sign-in a write may be made (30..900)")
-    ob.add_argument("--operations", default=",".join(ONBOARDING_DEFAULT_OPS),
-                    help="the writes it may make: a comma list of %s (default %s: no disable - a whole-account disable is a hand-off to the IdP's operators)"
-                    % ("|".join(ONBOARDING_OPERATIONS), ",".join(ONBOARDING_DEFAULT_OPS)))
+    ob.add_argument("--operations", default=None,
+                    help="the operations it may use: a comma list of %s (default: the config's onboarding.operations for the client, "
+                         "else %s - no disable, a whole-account disable is a hand-off to the IdP's operators; the portal operations "
+                         "%s are off unless listed and need stig-extensions capability admin-api-profile=3)"
+                    % ("|".join(ONBOARDING_OPERATIONS), ",".join(ONBOARDING_DEFAULT_OPS), ",".join(ONBOARDING_PORTAL_OPS)))
     ob.add_argument("--require-dpop", action="store_true", help="bind its tokens to a key the page holds (DPoP): the page must send DPoP proofs")
     ob.set_defaults(fn=cmd_onboarding_client_setup)
     hw = sp.add_parser("handoff-worker-setup", help="create or converge the hand-off intake worker client (config handoffIntake): "
