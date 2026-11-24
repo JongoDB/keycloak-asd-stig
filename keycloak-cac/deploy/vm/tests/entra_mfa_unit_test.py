@@ -227,11 +227,21 @@ check("drift: absent accept-amr / accept-acr read as the extension's defaults (m
 for name, mut in cases:
     kc = current(); mut(kc)
     done = M.fix_idp_mfa(kc, "entra", [T1])
+    if "REQUIRED instead of CONDITIONAL" in name:
+        continue            # stricter than intended: never restored (checked below)
     if "alias" in name:     # trust from another provider's name: narrowed to NOTHING (never re-trusted by the fix)
         check("fix: %s -> trust switched off (alias entra, no tenant); drift left for entra-mfa" % name,
               M.live_idp_mfa(kc) == ("entra", []) and M.idp_mfa_drift(kc, "entra", []) == [], (done, M.live_idp_mfa(kc)))
         continue
     check("fix: %s -> back to intended" % name, M.idp_mfa_drift(kc, "entra", [T1]) == [] and done, (done, M.idp_mfa_drift(kc, "entra", [T1])))
+for name, mut, want in (("the tenant-MFA condition DISABLED (an emergency stop)", lambda k: cond(k).update(requirement="DISABLED"),
+                         lambda k: cond(k)["requirement"] == "DISABLED"),
+                        ("the sub-flow REQUIRED (the second factor always)", lambda k: k.flows[M.POST_BROKER][0].update(requirement="REQUIRED"),
+                         lambda k: k.flows[M.POST_BROKER][0]["requirement"] == "REQUIRED")):
+    kc = current(); mut(kc)
+    done = M.fix_idp_mfa(kc, "entra", [T1])
+    check("fix: %s -> LEFT as it is (raising it would widen), still reported as drift" % name,
+          want(kc) and M.idp_mfa_drift(kc, "entra", [T1]) != [] and not done, (done, M.idp_mfa_drift(kc, "entra", [T1])[:1]))
 kc = current(tenants=(T1, T2))
 done = M.fix_idp_mfa(kc, "entra", [T1, T3])
 check("fix: live trusts T1+T2, config T1+T3 -> narrowed to T1 (T2 dropped, T3 NOT added)", M.live_idp_mfa(kc) == ("entra", [T1]), (done, M.live_idp_mfa(kc)))

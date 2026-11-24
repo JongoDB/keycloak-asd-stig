@@ -519,14 +519,22 @@ def idp_mfa_drift(kc, alias, tenants):
     return out
 
 def fix_idp_mfa(kc, alias, tenants):
-    """guard --fix: only ever NARROWS. Restores each existing execution's requirement (the sub-flow CONDITIONAL, the
-    four REQUIRED) and resets the condition's configuration to idp_mfa_cfg(alias, the live tenants the config also
+    """guard --fix: only ever NARROWS. Restores the requirements whose drift is weaker than intended (a DISABLED sub-flow
+    -> CONDITIONAL; the gate, the OTP form and the administrator condition -> REQUIRED) - never a REQUIRED sub-flow back
+    to CONDITIONAL, never the tenant-MFA condition up from DISABLED (both stricter; reported, left) - and resets the condition's configuration to idp_mfa_cfg(alias, the live tenants the config also
     trusts). Never adds a tenant, an execution or a condition (an absent condition is the stricter shape already).
     Returns what it changed."""
     done = []
     for e in kc.api("GET", "/authentication/flows/%s/executions" % q(POST_BROKER), ok404=True) or []:
         want = ("CONDITIONAL" if e.get("level") == 0 and e.get("displayName") == POST_BROKER_SUB and e.get("authenticationFlow")
                 else "REQUIRED" if e.get("level") == 1 and e.get("providerId") in POST_BROKER_SUB_SHAPE else None)
+        # never WIDEN, though both read as drift: a sub-flow made REQUIRED (the second factor always, no skipping) stays
+        # REQUIRED; the tenant-MFA condition DISABLED (an operator's emergency stop: every administrator needs a factor)
+        # stays DISABLED - raising either would re-enable accepting the tenant's MFA
+        if want == "CONDITIONAL" and e.get("requirement") == "REQUIRED":
+            continue
+        if e.get("providerId") == IDP_MFA_COND and e.get("requirement") == "DISABLED":
+            continue
         if want and e.get("requirement") != want:
             kc.api("PUT", "/authentication/flows/%s/executions" % q(POST_BROKER), dict(e, requirement=want))
             done.append("%s %s -> %s" % (e.get("providerId") or e.get("displayName"), e.get("requirement"), want))
