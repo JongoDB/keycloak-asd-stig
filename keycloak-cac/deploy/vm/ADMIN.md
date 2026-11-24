@@ -15,7 +15,7 @@ certificate verified for the public host name), as the `stig-automation` service
 | Delegated administration (FGAP v2) | `roles-setup [--retire-app]`, `delegate-setup`, `delegate-client-setup`, `delegate-test-twin`, `delegation-rollback`, `onboarding-client-setup` |
 | Clients | `add-client`, `check-clients`, `client-secret`, `client-delete`, `role-delete`, `inheritance-statement` |
 | Hand-off intake | `handoff-worker-setup [--rotate-secret]`, `handoffs [list]`, `handoffs done\|refused <id> [--note ...]` |
-| Realm | `entra`, `smtp`, `cert-check` |
+| Realm | `entra [--endpoint v1\|v2]`, `entra-mfa [--show]`, `smtp`, `cert-check` |
 
 ## Per-deployment configuration
 
@@ -37,6 +37,7 @@ refuse to run without it, and unknown keys are refused like a typo. Start from
 | `onboarding.operations` | `{"<onboarding client>": [operation, ...]}`: the reviewed allow-list `onboarding-client-setup` applies when `--operations` is not given (`create`, `setup-email`, `disable`, `membership`, and the portal operations `reset-otp`, `reset-password`, `unlock`, `logout`, `link-cac`, `status`, each off unless listed; a portal operation needs stig-extensions capability `admin-api-profile=3`). `guard` and `check-clients` print an `info` line while a client's record differs from it |
 | `onboarding.clientIds` | onboarding clients besides `idp-onboarding`, one per application page (a client has exactly one redirect and origin): `onboarding-client-setup --client-id <id> --redirect-uri <that page's callback> --app <its tree>`. Each is built, recorded and guarded exactly like `idp-onboarding` (drift disables that client alone); `tests/onboarding_live_check.py --client-id <id>` checks one. Never a built-in, an application, a delegate, the hand-off worker or an application's `<app>-user-manager` name; and `onboarding-client-setup` refuses an existing client add-client manages (`stig.created-by=add-client`) or a host client file declares |
 | `entra.memberDomain`, `entra.displayName` | the one UPN domain whose tenant members may sign in through Entra (required by `entra`, or `--member-domain`), and the button label |
+| `entra.mfaTrustedTenants` | tenant ids (GUIDs) whose own MFA counts as an administrator's second factor after an Entra sign-in; `entra-mfa` applies it, `guard` reports drift (`STIG-IDP-MFA-DRIFT`). Absent or `[]`: never (every administrator needs an enrolled second factor or the card) |
 | `smtp.host`, `smtp.port`, `smtp.from`, `smtp.displayName` | defaults for `smtp` (each is otherwise a required option) |
 | `handoffIntake.url` | an application's hand-off intake API (optional section): `GET <url>/handoffs?status=open`, `POST <url>/handoffs/<id>/outcome`. One plain https URL on a DNS name |
 | `handoffIntake.clientId` | the confidential client whose client-credentials token the intake accepts (`azp`); `handoff-worker-setup` creates it |
@@ -50,6 +51,33 @@ refuse to run without it, and unknown keys are refused like a typo. Start from
 After changing `applications`, run `idp-admin.py roles-setup`. To retire an application, delete it from the config,
 then `roles-setup --retire-app <client>`: a plain `roles-setup` refuses while the removed application's delegation is
 still live, because its former managers would keep their write power.
+
+## entra-mfa: a tenant's MFA as an administrator's second factor
+
+After an Entra sign-in, an administrator (any realm-management role) must give an enrolled TOTP, and one with none is
+refused on the second-factor page - unless `entra-mfa` trusts the tenant and **that sign-in's** validated ID token says
+Entra performed MFA (`amr` contains `mfa`). Off until configured.
+
+- `idp-admin.py entra-mfa` applies `entra.mfaTrustedTenants` from the config; `--show` prints the live setting and any
+  drift and changes nothing; `--off` trusts no tenant; `--trust-tenant <tid>` (repeatable) is for a lab.
+- It moves an earlier post-broker shape (a condition on a stored `entra_amr`, or older) to the current one in place,
+  in an order that is never weaker and never leaves the sub-flow absent; removes the retired `amr evidence` mapper and
+  clears any stored `entra_amr`; and verifies the WHOLE result by re-reading (shape, every requirement, the condition's
+  whole configuration). `entra` re-runs keep the trusted tenants as they are.
+- `guard` reports any difference as `STIG-IDP-MFA-DRIFT` (exit 2): a sub-flow or execution not CONDITIONAL / REQUIRED,
+  `accept-amr` other than `mfa`, any `accept-acr`, another alias, tenants other than the config's, the old mapper, a
+  stored `entra_amr`. `guard --fix` only narrows: requirements restored, the configuration reset to the live tenants
+  the config also trusts (never one added), the mapper removed, `entra_amr` cleared.
+- Fails closed: another tenant or provider, a guest, no `amr` or a malformed one, an `acr` alone, no config - the
+  second factor is still required. Non-administrators, password users and card users are not affected.
+- Evidence per sign-in, never stored on the user: the audit line `STIG-ADMIN-SECOND-FACTOR-IDP-MFA accepted|refused
+  ... reason=... amr=[...]` and the event details `stig_idp_mfa*`, which `idp-admin.py entra-amr <user>` lists.
+- Entra's v2.0 ID token carries `amr` only when the app registration requests it as an optional claim. When that
+  cannot be changed, `entra --endpoint v1` brokers Entra's v1.0 endpoints, whose ID tokens always carry `amr` (and the
+  UPN as `upn`; the mappers and the member filter follow). A re-run keeps the live endpoint; `--endpoint v2` goes back.
+
+`invite --entra-oid` (not an administrator) creates the account with the terms only - no password, no TOTP, no
+set-up e-mail - as stig-accounts' Entra invites: the person signs in with Microsoft Entra.
 
 ## link-cac: a card for an existing account
 
@@ -198,6 +226,8 @@ python3 tests/guard_contain_unit_test.py
 python3 tests/rename_unit_test.py
 python3 tests/app_admin_enroll_unit_test.py
 python3 tests/config_unit_test.py
+python3 tests/invite_entra_unit_test.py
+python3 tests/entra_mfa_unit_test.py        # tenant-MFA flow: migration never weaker, drift, guard --fix narrows
 python3 tests/handoff_unit_test.py          # hand-off intake against a mock intake (needs openssl)
 ```
 

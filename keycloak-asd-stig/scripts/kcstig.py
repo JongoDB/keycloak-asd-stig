@@ -296,6 +296,8 @@ def x509_config(p, attr, admin_realm=False):
     return cfg
 
 ADMIN_GATE = "stig-admin-second-factor-required"     # stig-extensions.jar (post-broker; older browser flows)
+IDP_MFA_COND = "conditional-stig-idp-mfa-unproven"  # stig-extensions.jar: a trusted tenant's MFA counts (post-broker)
+GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 # stig-extensions' drop-in replacements: the password form refuses an administrator without an enrolled second factor
 # exactly as a wrong password (no oracle, no set-up after a password); the X.509 form is not refused by PASSWORD lockout
 PW_FORMS = {"auth-username-password-form", "stig-username-password-form"}
@@ -1384,6 +1386,7 @@ class Checker:
                         bad.append("%s/%s -> %s" % (idp["alias"], mp["name"], mp["config"][k]))
         self.res("idp.no_mapper_writes_identity_binding", not bad,
                  "identity-binding attributes %s; identity-provider mappers writing one: %s" % (sorted(binds), bad or "none"))
+        self.check_idp_mfa_trust()
         self.check_flows()
         self.check_policies()
         self.check_clients()
@@ -1392,6 +1395,56 @@ class Checker:
         self.check_server()
         self.check_live()
         return self.results
+
+    def check_idp_mfa_trust(self):
+        """Where a post-broker flow lets an identity provider's own MFA stand for an administrator's second factor
+        (conditional-stig-idp-mfa-unproven): it must sit in a CONDITIONAL sub-flow AFTER the administrator condition,
+        which still requires stig-admin-second-factor-required and the OTP form, and name only its own provider and
+        well-formed tenant ids accepting amr "mfa". Not used anywhere: na."""
+        found, bad = [], []
+        for idp in self.kc.api("GET", "/realms/%s/identity-provider/instances" % q(self.realm)) or []:
+            f = idp.get("postBrokerLoginFlowAlias")
+            ex = self.flow_execs(self.realm, f) if f else []
+            for i, e in enumerate(ex):
+                if e.get("providerId") != IDP_MFA_COND:
+                    continue
+                c = self.exec_config(self.realm, e)
+                tenants = [t for t in re.split(r"##|[,\s]+", c.get("stig.idp-mfa.trusted-tenants") or "") if t]
+                amr = [t for t in re.split(r"##|[,\s]+", c.get("stig.idp-mfa.accept-amr", "mfa") or "") if t]
+                acr = [t for t in re.split(r"##|[,\s]+", c.get("stig.idp-mfa.accept-acr") or "") if t]
+                # the sibling executions of this condition (same parent sub-flow: same level, contiguous)
+                lvl, sib, j = e.get("level"), [], i
+                while j > 0 and ex[j - 1].get("level", 0) >= lvl:
+                    j -= 1
+                while j < len(ex) and ex[j].get("level", 0) >= lvl:
+                    if ex[j].get("level") == lvl:
+                        sib.append((ex[j].get("providerId"), ex[j].get("requirement")))
+                    j += 1
+                parent = next((x for x in reversed(ex[:i]) if x.get("level", 0) == lvl - 1), None)
+                provs = [p_ for p_, _ in sib]
+                why = []
+                if not parent or parent.get("requirement") != "CONDITIONAL":
+                    why.append("not inside a CONDITIONAL sub-flow")
+                if "conditional-stig-administrator" not in provs or provs.index("conditional-stig-administrator") > provs.index(IDP_MFA_COND) \
+                        or ("conditional-stig-administrator", "REQUIRED") not in sib:
+                    why.append("not after a REQUIRED conditional-stig-administrator")
+                if (ADMIN_GATE, "REQUIRED") not in sib or ("auth-otp-form", "REQUIRED") not in sib:
+                    why.append("the sub-flow no longer requires %s and auth-otp-form" % ADMIN_GATE)
+                if e.get("requirement") != "REQUIRED":
+                    why.append("the condition is %s" % e.get("requirement"))
+                if (c.get("stig.idp-mfa.idp-alias") or "entra") != idp["alias"]:
+                    why.append("names provider %s" % c.get("stig.idp-mfa.idp-alias"))
+                if not all(GUID.fullmatch(t) for t in tenants):
+                    why.append("a trusted tenant is not a tenant id")
+                if [x.lower() for x in amr] != ["mfa"] or acr:
+                    why.append("accepts amr %s / acr %s (expected amr mfa only)" % (amr, acr))
+                found.append("%s: %d trusted tenant(s), amr %s" % (idp["alias"], len(tenants), amr))
+                bad += ["%s: %s" % (idp["alias"], w) for w in why]
+        if not found:
+            self.res("idp.admin_mfa_trust", "na", "no identity provider's MFA stands for an administrator's second factor")
+        else:
+            self.res("idp.admin_mfa_trust", not bad, "a trusted tenant's MFA (that sign-in's validated ID token, amr) is an "
+                     "administrator's second factor after a brokered sign-in: %s%s" % (found, ("; problems: %s" % bad) if bad else ""))
 
     def check_flows(self):
         R, realm = self.R, self.realm

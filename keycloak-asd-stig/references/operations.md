@@ -459,3 +459,41 @@ where the CAC is offered). It is a challenge, not a failure: a policy refusal af
 sign-in is not a wrong credential and never counts toward brute-force lockout. (In the password flow the refusal still
 looks like a wrong password, so it never confirms that the password was right.)
 
+### An identity provider's own MFA as an administrator's second factor (optional, off by default)
+
+A post-broker sub-flow may let a trusted tenant's MFA stand for an administrator's enrolled second factor. The
+condition `conditional-stig-idp-mfa-unproven` sits after `conditional-stig-administrator` in the CONDITIONAL
+"administrators prove MFA" sub-flow, before `stig-admin-second-factor-required` and `auth-otp-form`; when it does NOT
+match, the whole sub-flow is skipped for that sign-in. It reads the **validated ID token of that sign-in** from the
+brokered context (never a user attribute, which an earlier sign-in, an administrator or a mapper could have written)
+and accepts only when every one of these holds:
+
+- the configuration names at least one tenant id (`stig.idp-mfa.trusted-tenants`, GUIDs) and the sign-in came through
+  its provider alias (`stig.idp-mfa.idp-alias`, default `entra`);
+- `tid` is a trusted tenant; the user is the tenant's member (no `idp` naming anything but the tenant, no `acct` but 0);
+- `amr` is an array of method names containing an accepted one (`stig.idp-mfa.accept-amr`, default `mfa`), or an
+  optional `acr` / `acrs` allow-list matches (`stig.idp-mfa.accept-acr`, default empty: acr never counts).
+
+Anything else - no or a malformed configuration, another provider or tenant, a guest, a missing or malformed claim,
+no token, an error - matches, and the administrator needs the enrolled second factor (or is refused) exactly as
+before. Every decision is one audit line, `STIG-ADMIN-SECOND-FACTOR-IDP-MFA accepted|refused realm=... user=... idp=...
+reason=... amr=[method names]`, and event details `stig_idp_mfa`, `stig_idp_mfa_reason`, `stig_idp_mfa_amr` on the
+sign-in's LOGIN / LOGIN_ERROR event; the evidence is kept in the authentication session's notes (`stig.idp-mfa*`),
+never on the user. `kcstig.py verify` reports the placement and configuration as `idp.admin_mfa_trust` (V-222523).
+
+**Microsoft Entra and `amr`.** A v2.0 ID token carries `amr` only when the app registration requests it as an optional
+claim; Microsoft lists `amr` among the claims "always included in v1.0 tokens, but not included in v2.0 tokens unless
+requested", and only the v1.0 discovery document lists `amr` in `claims_supported`. Where the registration cannot be
+changed, broker Entra through its v1.0 endpoints (issuer `https://sts.windows.net/<tenant>/`, `/oauth2/authorize`,
+`/oauth2/token`, `/discovery/keys`); a v1.0 ID token names the user in `upn`, not `preferred_username`, so the
+username, member-filter and vouched-UPN mappers read `upn`. Without `amr`, every decision is `refused reason=no amr
+claim`: it fails closed. Relying on the tenant's MFA is a risk decision for the ISSO: the tenant's Conditional Access
+policies, not this IdP, decide what "mfa" means there.
+
+**How fresh the MFA is.** `amr` says how the person authenticated to the provider's session, not that they did so just
+now: a sign-in that Entra satisfies from its own SSO session carries the `amr` of that earlier authentication. The
+broker sends no `prompt=login`, and Entra's v1.0 endpoint is not documented to honour `max_age` (treat the broker's "pass max_age" as having
+no effect there), so how recent the MFA is depends only on the tenant's Conditional Access **sign-in frequency** for
+this app. Record that setting with the risk decision; to bound it from this side, an administrator client can demand
+re-authentication itself (for example Keycloak's own step-up), which this condition does not do.
+

@@ -12,7 +12,7 @@ HIGH 2 - an administrator's second factor is never enrolled after one factor
   - a non-administrator with a password and no OTP still enrols TOTP at first sign-in (unchanged)
   - an administrator who holds OTP gets the OTP prompt (never set-up) and signs in
   - identity provider (Entra stand-in): an administrator whose amr lacks "mfa" and who holds no OTP is refused;
-    with amr "mfa" signs in; with OTP held gets the OTP prompt; a non-administrator signs in without OTP
+    with amr "mfa" from the trusted tenant signs in (read from that sign-in's ID token, never a stored attribute); with OTP held gets the OTP prompt; a non-administrator signs in without OTP
 HIGH 1 - promotion never keeps what a delegate planted
   - the user manager plants a password (reset), a TOTP (signing in with it) and an identity-provider link on a member:
     grant idp-admin is REFUSED and changes nothing; grant --reset-credentials removes every planted factor and link,
@@ -197,7 +197,7 @@ try:
                    "otpPolicyLookAheadWindow": 1, "loginTheme": "dod-stig"}); kc.api("PUT", "", r0)
         up = kc.api("GET", "/users/profile"); up["unmanagedAttributePolicy"] = "ENABLED"; kc.api("PUT", "/users/profile", up)
         M.first_broker_flow(kc, IDP, TENANT)
-        M.post_broker_flow(kc, IDP, TENANT)
+        M.post_broker_flow(kc, IDP, TENANT, [TENANT])     # this stand-in tenant's MFA counts (as entra-mfa sets live)
         check("throwaway realm's post-broker flow = production's (same code)", shape(M.POST_BROKER) == live, "%s" % live)
         kc.api("POST", "/clients", {"clientId": "t-app", "publicClient": True, "standardFlowEnabled": True,
                                     "redirectUris": ["https://t.invalid/cb"], "attributes": {"pkce.code.challenge.method": "S256"}})
@@ -212,8 +212,7 @@ try:
             for m in ({"name": "username", "identityProviderMapper": "oidc-username-idp-mapper",
                        "config": {"template": "${CLAIM.preferred_username | localpart | lowercase}", "target": "LOCAL", "syncMode": "IMPORT"}},
                       {"name": "vouched oid", "identityProviderMapper": "oidc-user-attribute-idp-mapper", "config": {"claim": "oid", "user.attribute": "entra_vouched_oid", "syncMode": "IMPORT"}},
-                      {"name": "vouched tid", "identityProviderMapper": "oidc-user-attribute-idp-mapper", "config": {"claim": "tid", "user.attribute": "entra_vouched_tid", "syncMode": "IMPORT"}},
-                      {"name": "amr", "identityProviderMapper": "oidc-user-attribute-idp-mapper", "config": {"claim": "amr", "user.attribute": "entra_amr", "syncMode": "FORCE"}}):
+                      {"name": "vouched tid", "identityProviderMapper": "oidc-user-attribute-idp-mapper", "config": {"claim": "tid", "user.attribute": "entra_vouched_tid", "syncMode": "IMPORT"}}):
                 kc.api("POST", "/identity-provider/instances/%s/mappers" % alias, dict(m, identityProviderAlias=alias))
         mk_idp(IDP); mk_idp("t-entra2")
         rmc_t = M.client_uuid(kc, "realm-management")
