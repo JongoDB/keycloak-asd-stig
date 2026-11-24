@@ -74,6 +74,15 @@ refused = [
     ("onboarding.clientIds naming a client twice",
      lambda c: c["onboarding"].update({"clientIds": ["app-b-onboarding", "app-b-onboarding"]}), "twice"),
     ("onboarding.clientIds as a string", lambda c: c["onboarding"].update({"clientIds": "app-b-onboarding"}), "list of names"),
+    ("onboarding.operations naming an unknown operation",
+     lambda c: c["onboarding"].update({"operations": {"idp-onboarding": ["create", "impersonate"]}}), "impersonate"),
+    ("onboarding.operations for a client that is no onboarding client",
+     lambda c: c["onboarding"].update({"operations": {"app-a": ["create"]}}), "unknown key"),
+    ("onboarding.operations naming an operation twice",
+     lambda c: c["onboarding"].update({"operations": {"idp-onboarding": ["status", "status"]}}), "twice"),
+    ("onboarding.operations as a string", lambda c: c["onboarding"].update({"operations": {"idp-onboarding": "status"}}), "list of names"),
+    ("onboarding.operations empty for a client", lambda c: c["onboarding"].update({"operations": {"idp-onboarding": []}}), "list of names"),
+    ("onboarding.operations not an object", lambda c: c["onboarding"].update({"operations": ["status"]}), "not an object"),
     ("preSplitDelegates naming no delegation", lambda c: c["applications"]["app-a"].update({"preSplitDelegates": ["x"]}), "not a delegation"),
     ("an unknown top-level key", lambda c: c.update({"application": {}}), "unknown key"),
     ("applications not an object", lambda c: c.update({"applications": ["app-a"]}), "not an object"),
@@ -108,6 +117,14 @@ with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
 r = subprocess.run([sys.executable, ADM, "onboarding-client-setup", "--help"], env=dict(os.environ, IDP_ADMIN_CONFIG=p2),
                    capture_output=True, text=True, timeout=60); os.unlink(p2)
 check("onboarding-client-setup --client-id offers the named client", "app-b-onboarding" in r.stdout, r.stdout[-160:].replace("\n", " "))
+
+ops_ok = variant(lambda c: c["onboarding"].update({"clientIds": ["app-b-onboarding"], "operations": {
+    "$comment": "the reviewed allow-list", "idp-onboarding": ["create", "setup-email", "membership", "reset-otp", "reset-password",
+                                                             "unlock", "logout", "link-cac", "status"],
+    "app-b-onboarding": ["create", "setup-email", "membership"]}}))
+rc, out = load(ops_ok)
+check("onboarding.operations listing every portal operation for the default client and another for a named one: loads",
+      rc == 0, out[-200:] if rc else "")
 
 print("\n%d/%d passed" % (sum(res), len(res)))
 raise SystemExit(0 if all(res) else 1)

@@ -93,7 +93,8 @@ public final class AdminApiStepUpTest {
 
         // stig.admin-api.operations
         String OPS = "create,setup-email,membership";
-        t("operations unset: all four", AdminApiStepUp.operations(null), AdminApiStepUp.OPERATIONS);
+        t("operations unset: the four legacy ones only", AdminApiStepUp.operations(null), AdminApiStepUp.LEGACY_OPERATIONS);
+        t("... and no portal operation", AdminApiStepUp.operations(null).stream().noneMatch(AdminApiStepUp.PORTAL_OPERATIONS::contains), true);
         t("operations create,setup-email,membership: disable REFUSED, even fresh",
                 AdminApiStepUp.decide(P, null, OPS, "POST", s("stig-accounts", "users", U, "disable"), NOW, NOW), Verdict.REFUSE);
         t("... create allowed", AdminApiStepUp.decide(P, null, OPS, "POST", s("stig-accounts", "users"), NOW, NOW), Verdict.ALLOW);
@@ -112,6 +113,44 @@ public final class AdminApiStepUpTest {
         t("... and a write too", AdminApiStepUp.decide(null, null, OPS, "POST", s("stig-accounts", "users"), NOW, NOW), Verdict.REFUSE);
         t("neither attribute: not restricted", AdminApiStepUp.decide(null, null, null, "DELETE", s("users", U), NOW, NOW), Verdict.NOT_RESTRICTED);
         t("operations tolerate spaces", AdminApiStepUp.operations(" create , membership "), java.util.Set.of("create", "membership"));
+
+        // the portal operations: off unless listed, each its own entry, writes stepped up, status a read
+        String[] PW = {"reset-otp", "reset-password", "unlock", "logout", "link-cac"};
+        for (String op : PW) {
+            t("POST stig-accounts/users/{id}/" + op + ": the operation is " + op, AdminApiStepUp.writeOperation("POST", s("stig-accounts", "users", U, op)), op);
+            t("... refused with the operations list unset (off unless listed), even fresh", d("POST", s("stig-accounts", "users", U, op), NOW), Verdict.REFUSE);
+            t("... refused when the list names everything else", AdminApiStepUp.decide(P, null,
+                    "create,setup-email,disable,membership,status," + String.join(",", java.util.Arrays.stream(PW).filter(x -> !x.equals(op)).toList()),
+                    "POST", s("stig-accounts", "users", U, op), NOW, NOW), Verdict.REFUSE);
+            t("... allowed when listed, fresh", AdminApiStepUp.decide(P, null, op, "POST", s("stig-accounts", "users", U, op), NOW - 10, NOW), Verdict.ALLOW);
+            t("... step-up when listed and stale", AdminApiStepUp.decide(P, null, op, "POST", s("stig-accounts", "users", U, op), NOW - 301, NOW), Verdict.STEP_UP);
+            t("... step-up when listed and no auth_time", AdminApiStepUp.decide(P, null, op, "POST", s("stig-accounts", "users", U, op), null, NOW), Verdict.STEP_UP);
+            t("... GET of it refused", AdminApiStepUp.decide(P, null, op, "GET", s("stig-accounts", "users", U, op), NOW, NOW), Verdict.REFUSE);
+            t("... PUT of it refused", AdminApiStepUp.decide(P, null, op, "PUT", s("stig-accounts", "users", U, op), NOW, NOW), Verdict.REFUSE);
+            t("... with a bad id refused", AdminApiStepUp.decide(P, null, op, "POST", s("stig-accounts", "users", "a b", op), NOW, NOW), Verdict.REFUSE);
+            t("... one segment deeper refused", AdminApiStepUp.decide(P, null, op, "POST", s("stig-accounts", "users", U, op, "x"), NOW, NOW), Verdict.REFUSE);
+        }
+        t("Keycloak's own POST users/{id}/logout stays refused, even with logout listed",
+                AdminApiStepUp.decide(P, null, "logout", "POST", s("users", U, "logout"), NOW, NOW), Verdict.REFUSE);
+        t("Keycloak's own DELETE attack-detection stays refused, even with unlock listed",
+                AdminApiStepUp.decide(P, null, "unlock", "DELETE", s("attack-detection", "brute-force", "users", U), NOW, NOW), Verdict.REFUSE);
+        t("Keycloak's own credentials DELETE stays refused, even with reset-otp listed",
+                AdminApiStepUp.decide(P, null, "reset-otp", "DELETE", s("users", U, "credentials", G), NOW, NOW), Verdict.REFUSE);
+        t("GET stig-accounts/users/{id}/status: refused unless listed", d("GET", s("stig-accounts", "users", U, "status"), null), Verdict.REFUSE);
+        t("GET stig-accounts/users/status: refused unless listed", d("GET", s("stig-accounts", "users", "status"), null), Verdict.REFUSE);
+        t("status listed: GET users/{id}/status allowed with NO step-up (a read; stale token)",
+                AdminApiStepUp.decide(P, null, "status", "GET", s("stig-accounts", "users", U, "status"), NOW - 9999, NOW), Verdict.ALLOW);
+        t("status listed: GET users/status allowed", AdminApiStepUp.decide(P, null, "status", "GET", s("stig-accounts", "users", "status"), null, NOW), Verdict.ALLOW);
+        t("status listed: POST users/{id}/status refused", AdminApiStepUp.decide(P, null, "status", "POST", s("stig-accounts", "users", U, "status"), NOW, NOW), Verdict.REFUSE);
+        t("status listed: GET stig-accounts/users (a list) still refused", AdminApiStepUp.decide(P, null, "status", "GET", s("stig-accounts", "users"), NOW, NOW), Verdict.REFUSE);
+        t("status listed: GET users/{bad id}/status refused", AdminApiStepUp.decide(P, null, "status", "GET", s("stig-accounts", "users", "a;b", "status"), NOW, NOW), Verdict.REFUSE);
+        t("status listed: other reads unaffected", AdminApiStepUp.decide(P, null, "status", "GET", s("users", U, "groups"), null, NOW), Verdict.ALLOW);
+        t("a list naming every operation parses", AdminApiStepUp.operations(String.join(",", AdminApiStepUp.OPERATIONS)), AdminApiStepUp.OPERATIONS);
+        t("ten operations in all", AdminApiStepUp.OPERATIONS.size(), 10);
+        t("fresh: at the max age", AdminApiStepUp.fresh(NOW - 300, 300, NOW), true);
+        t("fresh: one second past", AdminApiStepUp.fresh(NOW - 301, 300, NOW), false);
+        t("fresh: a malformed max age is never fresh", AdminApiStepUp.fresh(NOW, -1, NOW), false);
+        t("capability marker is 3 (the portal operations)", AdminAllowlistGateAuthenticatorFactory.ADMIN_API_PROFILE_VERSION, "3");
 
         // path parsing
         t("afterRealm: a realm's sub-path", AdminApiStepUp.afterRealm(s("admin", "realms", "r1", "users", U)), s("users", U));
